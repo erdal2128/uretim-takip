@@ -357,7 +357,7 @@ function hasatTartiGetir(oda, tur){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v155";
+var APP_VER = "v163";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -593,7 +593,12 @@ function kisaGorevAdi(txt){
 /* --- Toplu görev seçimi: birden fazla görevi işaretleyip TEK WhatsApp mesajında gönder ---
    Anahtar: protokol görevi için "cid|idx", kompost indirme görevi için "plan|planId". */
 var _gorevSecili={};
-function gorevSecAnahtar(i){ return i.plan ? ("plan|"+i.planId) : (i.cid+"|"+i.idx); }
+function gorevSecAnahtar(i){
+  if(i.plan) return "plan|"+i.planId;
+  if(i.odaGorev) return "og|"+i.ogId;
+  if(i.gg) return "gg|"+i.ggId;
+  return i.cid+"|"+i.idx;
+}
 function gorevSecili(i){ return !!_gorevSecili[gorevSecAnahtar(i)]; }
 function gorevSecToggle(anahtar){
   if(_gorevSecili[anahtar]) delete _gorevSecili[anahtar]; else _gorevSecili[anahtar]=true;
@@ -609,15 +614,27 @@ function gorevSecBarHTML(){
     +'<span style="display:flex; gap:6px;"><button class="btn small" onclick="gorevTopluGonder()">WhatsApp\'a Gönder</button> <button class="btn ghost small" onclick="gorevSecTemizle()">Temizle</button></span>'
     +'</div>';
 }
-/* Seçili görevlerin tamamını, oda + iş + atanan kişilerle tek mesajda birleştirir. */
+/* Seçili görevlerin tamamını, oda + iş + atanan kişilerle tek mesajda birleştirir.
+   Protokol görevleri + oda işlemleri (odaGorev) + genel/serbest görevler hepsi dahil. */
 function gorevTopluMesajOlustur(){
   var items=nextTasks();
   var lines=[];
   items.forEach(function(i){
-    if(i.odaGorev) return; /* manuel oda işlemleri toplu gönderime dahil değil */
     if(!gorevSecili(i)) return;
+    if(i.odaGorev){
+      lines.push("📅 "+fmtDate(i.date)+" · 🏠 "+(i.oda||"")+": "+kisaGorevAdi(i.txt||""));
+      return;
+    }
     var isimler=atamaIsimListesi(i.atama||"");
     var satir="📅 "+fmtDate(i.date)+" · 🏠 "+(i.oda||"")+": "+kisaGorevAdi(i.txt||"");
+    if(isimler.length) satir+="\n   👤 "+isimler.join(", ");
+    lines.push(satir);
+  });
+  var today=todayISO();
+  getGorevler().filter(function(g){return !g.done && g.tarih && g.tarih<=today;}).forEach(function(g){
+    if(!_gorevSecili["gg|"+g.id]) return;
+    var isimler=atamaIsimListesi(g.atama||"");
+    var satir="📅 "+fmtDate(g.tarih)+" · 🧹 "+kisaGorevAdi(g.baslik||"");
     if(isimler.length) satir+="\n   👤 "+isimler.join(", ");
     lines.push(satir);
   });
@@ -658,32 +675,32 @@ function partiFromDate(iso){
    ref: "gelis" (kompost gelişi=0) veya "toprak" (toprak serimi=0) */
 var PROTOKOL = [
   {ref:"gelis", gun:3,  tip:"uyari", txt:"3. gün: misel patlarsa ve nem/sıcaklık/amonyak kötüyse poşet erken açılabilir"},
-  {ref:"gelis", gun:6,  tip:"olay", sahip:"ekip", txt:"Poşet açılır (yetişmezse ertesi gün devam)"},
-  {ref:"gelis", gun:7,  tip:"olay", sahip:"ekip", txt:"Tiftik yapılır"},
+  {ref:"gelis", gun:6,  tip:"olay", sahip:"ekip", rol:"poset", txt:"Poşet açılır (yetişmezse ertesi gün devam)"},
+  {ref:"gelis", gun:7,  tip:"olay", sahip:"ekip", rol:"tiftik", txt:"Tiftik yapılır"},
   {ref:"gelis", gun:6,  tip:"ilac", sahip:"ziraat", txt:"Neme göre 400 lt su + 250 ml Serenade"},
   {ref:"gelis", gun:7,  tip:"ilac", sahip:"ziraat", txt:"Neme göre 400 lt su + 250 ml Serenade"},
   {ref:"gelis", gun:8,  tip:"ilac", sahip:"ziraat", txt:"Neme göre 400 lt su + 250 ml Serenade"},
   {ref:"gelis", gun:9,  tip:"ilac", sahip:"ziraat", txt:"Neme göre 400 lt su + 250 ml Serenade"},
   {ref:"gelis", gun:10, tip:"ilac", sahip:"ziraat", txt:"Neme göre 400 lt su + 250 ml Serenade"},
-  {ref:"gelis", gun:7,  tip:"uyari", txt:"7.–8. gün: kompostta ateşlenme — kompost 28-30°ye fırlayabilir, ziraat mühendisi kontrol etsin"},
+  {ref:"gelis", gun:7,  tip:"uyari", sure:2, sonucSecenekleri:["Ateşlenmedi","Ateşlendi, müdahale edildi"], txt:"7.–8. gün: kompostta ateşlenme — kompost 28-30°ye fırlayabilir, ziraat mühendisi kontrol etsin"},
   {ref:"toprak", gun:-2, tip:"ilac", sahip:"ziraat", txt:"Toprak −2: sulama + Vivando (1 gün boşluk — sarım yukarı vursun)"},
-  {ref:"toprak", gun:0,  tip:"olay", sahip:"ekip", txt:"Toprak serilir"},
+  {ref:"toprak", gun:0,  tip:"olay", sahip:"ekip", rol:"toprak", txt:"Toprak serilir"},
   {ref:"toprak", gun:0,  tip:"olay", sahip:"ekip", txt:"Oda yıkanır (toprak sonrası)"},
   {ref:"toprak", gun:0,  tip:"su",   sahip:"ziraat", txt:"1000 lt su (ilaçsız, neme göre artabilir)"},
   {ref:"toprak", gun:1,  tip:"ilac", sahip:"ziraat", txt:"1000 lt su + 500 ml insektisit"},
   {ref:"toprak", gun:3,  tip:"ilac", sahip:"ziraat", txt:"1000 lt su + 2 lt formaldehit (KRİTİK: sarım toprağa geçmediyse 1 gün ertelenebilir; ertelenirse Asena ve tırmık da kayar)"},
   {ref:"toprak", gun:5,  tip:"ilac", sahip:"ziraat", txt:"1000 lt su + 400 ml Asena"},
   {ref:"toprak", gun:6,  tip:"olay", sahip:"ziraat", txt:"Tırmık −1: oda + kompost biraz ısıtılır (sarım hızlansın)"},
-  {ref:"toprak", gun:7,  tip:"olay", sahip:"ekip", txt:"Tırmık (4 kişi ~yarım gün)"},
+  {ref:"toprak", gun:7,  tip:"olay", sahip:"ekip", rol:"tirmik", txt:"Tırmık (4 kişi ~yarım gün)"},
   {ref:"toprak", gun:7,  tip:"olay", sahip:"ekip", txt:"Oda yıkanır (tırmık sonrası)"},
   {ref:"toprak", gun:7,  tip:"uyari", txt:"Mühendis sarım notu al (ince/kalın, yoğun/az)"},
-  {ref:"toprak", gun:10, tip:"olay", sahip:"ziraat", txt:"Havaya başlanır (tırmık+3; +5'e kayabilir) — ilk suda son 300 lt'ye Vivando · oda 4-5 günde 21-22→18°, CO₂ 2100-2400'e iner (oda sıcaklığı kritik)"},
+  {ref:"toprak", gun:10, tip:"olay", sahip:"ziraat", rol:"hava", txt:"Havaya başlanır (tırmık+3; +5'e kayabilir) — ilk suda son 300 lt'ye Vivando · oda 4-5 günde 21-22→18°, CO₂ 2100-2400'e iner (oda sıcaklığı kritik)"},
   {ref:"toprak", gun:11, tip:"ilac", sahip:"ziraat", txt:"Hava+1: nem zayıfsa Tezguard (nem iyiyse atla); 7-8. güne kadar neme göre sisleme"},
   {ref:"toprak", gun:16, tip:"olay", sahip:"ziraat", txt:"~Pimler nokta nokta görünür · kompost 19-20° tutulur (tahmini)"},
   {ref:"toprak", gun:17, tip:"ilac", sahip:"ziraat", txt:"Mantar kendini belli edince klor (2-3 günde bir)"},
   {ref:"toprak", gun:19, tip:"ilac", sahip:"ziraat", txt:"Bezelye boyutu: oda 18°, kompost 20-21° · 1000 lt su + kalsiyum"},
   {ref:"toprak", gun:20, tip:"ilac", sahip:"ziraat", txt:"Ceviz boyutu: son su · 1000 lt su + sodyum"},
-  {ref:"toprak", gun:20, tip:"olay", sahip:"ziraat", sure:5, txt:"Hasat başlar — 1.g sodyum → 2-3 seyreltme → 4-5 pik → 6 sıfırlama+kök temizliği+2000 lt su (2. 1000 lt'ye hidrojen peroksit). Hasat günü oda 17° (personel girer). Sıfırlama günü kompost 23°'ye çıkar, sonra her gün −1°; +2 gün 1000+1000 lt su (2.1000 lt gübre). CO₂: 1.flaş 2100-2400, 2.flaş 3000-3300. Ağırlıklı 2 flaş; kompost iyiyse 3. Boşaltım son flaşın sıfırlamasından sonra."}
+  {ref:"toprak", gun:20, tip:"olay", sahip:"ziraat", sure:5, rol:"hasat", txt:"Hasat başlar — 1.g sodyum → 2-3 seyreltme → 4-5 pik → 6 sıfırlama+kök temizliği+2000 lt su (2. 1000 lt'ye hidrojen peroksit). Hasat günü oda 17° (personel girer). Sıfırlama günü kompost 23°'ye çıkar, sonra her gün −1°; +2 gün 1000+1000 lt su (2.1000 lt gübre). CO₂: 1.flaş 2100-2400, 2.flaş 3000-3300. Ağırlıklı 2 flaş; kompost iyiyse 3. Boşaltım son flaşın sıfırlamasından sonra."}
 ];
 var PROTOKOL_SURUM = 3; /* Toprak/Tırmık sonrası "oda yıkanır" ayrı adım oldu, mühendis notu Kontrol'e taşındı */
 function getProtokol(){
@@ -694,7 +711,7 @@ function getProtokol(){
        Aksi halde her yazılım güncellemesinde kullanıcının sildiği/eklediği satırlar
        sessizce geri gelirdi — bu gerçekten yaşanmış bir hataydı. */
     if(!d.settings.protokolOzellestirildi && d.settings.protokolSurum !== PROTOKOL_SURUM){
-      d.settings.protokol = PROTOKOL.map(function(x){ return {ref:x.ref, gun:x.gun, tip:x.tip, sahip:x.sahip, txt:x.txt, sure:x.sure, tekrar:x.tekrar}; });
+      d.settings.protokol = PROTOKOL.map(function(x){ return {ref:x.ref, gun:x.gun, tip:x.tip, sahip:x.sahip, txt:x.txt, sure:x.sure, tekrar:x.tekrar, rol:x.rol, sonucSecenekleri:x.sonucSecenekleri}; });
       d.settings.protokolSurum = PROTOKOL_SURUM;
       saveData();
     }
@@ -705,10 +722,10 @@ function getProtokol(){
 function ensureProtokol(){
   var d=loadData(); if(!d.settings) d.settings={};
   if(!Array.isArray(d.settings.protokol) || !d.settings.protokol.length){
-    d.settings.protokol = PROTOKOL.map(function(x){ return {ref:x.ref, gun:x.gun, tip:x.tip, sahip:x.sahip, txt:x.txt, sure:x.sure, tekrar:x.tekrar}; });
+    d.settings.protokol = PROTOKOL.map(function(x){ return {ref:x.ref, gun:x.gun, tip:x.tip, sahip:x.sahip, txt:x.txt, sure:x.sure, tekrar:x.tekrar, rol:x.rol, sonucSecenekleri:x.sonucSecenekleri}; });
     d.settings.protokolSurum = PROTOKOL_SURUM;
   } else if(!d.settings.protokolOzellestirildi && d.settings.protokolSurum !== PROTOKOL_SURUM){
-    d.settings.protokol = PROTOKOL.map(function(x){ return {ref:x.ref, gun:x.gun, tip:x.tip, sahip:x.sahip, txt:x.txt, sure:x.sure, tekrar:x.tekrar}; });
+    d.settings.protokol = PROTOKOL.map(function(x){ return {ref:x.ref, gun:x.gun, tip:x.tip, sahip:x.sahip, txt:x.txt, sure:x.sure, tekrar:x.tekrar, rol:x.rol, sonucSecenekleri:x.sonucSecenekleri}; });
     d.settings.protokolSurum = PROTOKOL_SURUM;
   }
   return d.settings.protokol;
@@ -906,7 +923,7 @@ function nextTasks(){
       var t = ert ? addDays(base,ert) : base;
       var off=daysBetween(today,t); if(off===null) return;
       if((off>=0 && off<=1) || (off<0 && off>=-7)){
-        items.push({cid:c.id, ogId:og.id, off:off, date:t, oda:c.oda, txt:og.is, tip:"olay", sahip:og.atama?"":"", odaGorev:true, done:false, overdue:off<0, ertelendi:!!ert});
+        items.push({cid:c.id, ogId:og.id, off:off, date:t, oda:c.oda, txt:og.is, tip:"olay", sahip:"", atama:og.atama||"", odaGorev:true, done:false, overdue:off<0, ertelendi:!!ert});
       }
     });
   });
@@ -939,6 +956,19 @@ function protokolAdimAlanKey(txt){
   if(/toprak/i.test(txt)) return "toprak";
   if(/hava/i.test(txt)) return "hava";
   return null;
+}
+/* MERKEZİ ROL BULUCU — kullanıcı bir satırı istediği gibi yeniden adlandırabilir
+   (örn. "Poşet açılır" → "Poşet kesimi"); sistem artık metne değil, satıra açıkça
+   atanmış "rol" etiketine bakıyor. Böylece yeniden adlandırma hiçbir hesaplamayı bozmaz.
+   Eski (henüz rol atanmamış) kayıtlar için metin eşleşmesine geriye dönük düşer. */
+var PROTOKOL_ROL_REGEX = {poset:/po\u015fet/i, tiftik:/tiftik/i, toprak:/toprak/i, tirmik:/t\u0131rm\u0131k/i, hasat:/hasat/i, hava:/hava/i};
+function protokolRolIdx(rol){
+  var P=getProtokol();
+  for(var i=0;i<P.length;i++){ if(!P[i].silindi && P[i].tip==="olay" && P[i].rol===rol) return i; }
+  var re=PROTOKOL_ROL_REGEX[rol]; if(!re) return -1;
+  var sahipGerekli = (rol==="tiftik"||rol==="toprak"||rol==="tirmik") ? "ekip" : null;
+  for(var j=0;j<P.length;j++){ if(!P[j].silindi && P[j].tip==="olay" && re.test(P[j].txt) && (!sahipGerekli || P[j].sahip===sahipGerekli)) return j; }
+  return -1;
 }
 /* Bir odanın SIRADAKİ (henüz yapılmamış, en yakın tarihli) protokol adımını bulur.
    Günlük Tur ekranında ziraat mühendisinin gözlemine göre "yarın yapalım" diyebilmesi için. */
@@ -1128,6 +1158,45 @@ function protokolSartErtele(cid, idx, aciklama){
   if(P[idx]) gunlukGorevNotEkle(c, P[idx].txt+" ertelendi (+1 gün) — "+(aciklama||"koşul")+" (puan kırılmaz)");
   touchCycle(c); saveData(); toast("Ertelendi (+1 gün)"); render();
 }
+/* Kontrol Protokolü gözlem kartı: "sonucSecenekleri" tanımlı bir kontrol notu (örn. ateşlenme),
+   gün + (süre-1) gün boyunca KALICI bir hatırlatma olarak kalır (yapıldı/yapılmadı diye
+   işaretlenip kaybolmaz), süre dolunca "sonuç neydi?" diye karar sorar. Karar bir kez
+   verilince kart kaybolur. */
+function kontrolGozlemKartlariHTML(c){
+  if(!c || c.bosaltimTarihi) return "";
+  var h=""; var today=todayISO();
+  getProtokol().forEach(function(s,idx){
+    if(s.silindi || s.tip!=="uyari" || !s.sonucSecenekleri || !s.sonucSecenekleri.length) return;
+    var karar=(c.kontrolKarar && c.kontrolKarar["k"+idx]);
+    if(karar) return; /* zaten karar verilmiş, kart kaybolur */
+    var base=protokolTarih(c,s); if(!base) return;
+    var sureG=parseInt(s.sure,10)||1;
+    var kararGunu=addDays(base,sureG);
+    if(today<base) return; /* henüz sırası gelmedi */
+    if(today<kararGunu){
+      /* Gözlem penceresi içinde (örn. 7-8. gün) — kalıcı uyarı, işaretlenip kaybolmaz */
+      h+='<div style="margin-top:8px; padding:8px; background:#fff6e5; border:1px solid #e8c874; border-radius:8px;">'
+        +'<div style="font-size:13px; font-weight:600; color:#8a5a1f;">🔥 '+esc(s.txt)+'</div>'
+        +'</div>';
+    } else {
+      /* Süre doldu (örn. 9. gün) — karar sorulur */
+      h+='<div style="margin-top:8px; padding:8px; background:#fff0f0; border:1px solid #e8a8a8; border-radius:8px;">'
+        +'<div style="font-size:13px; font-weight:600; color:#a13a3a;">'+esc(s.txt.split(" — ")[0])+' — sonuç ne oldu?</div>'
+        +'<div style="display:flex; gap:6px; flex-wrap:wrap; margin-top:6px;">'
+        +s.sonucSecenekleri.map(function(sec){ return '<button class="btn small" onclick="kontrolKararSec(\''+c.id+'\','+idx+',\''+esc(sec).replace(/'/g,"\\'")+'\')">'+esc(sec)+'</button>'; }).join('')
+        +'</div></div>';
+    }
+  });
+  return h;
+}
+function kontrolKararSec(cid, idx, secim){
+  if(!can("edit")) return noPerm();
+  var c=loadData().cycles.find(function(x){return x.id===cid;}); if(!c) return;
+  if(!c.kontrolKarar) c.kontrolKarar={};
+  c.kontrolKarar["k"+idx]={secim:secim, tarih:todayISO()};
+  gunlukGorevNotEkle(c, "Kontrol sonucu: "+secim);
+  touchCycle(c); saveData(); toast("Kaydedildi: "+secim); render();
+}
 function turSiradakiAdimHTML(c){
   var sd=siradakiProtokolAdimi(c);
   var h="";
@@ -1165,7 +1234,19 @@ function turSiradakiAdimHTML(c){
       + '<button class="btn small" style="margin-top:6px;" onclick="'+fonk+'(\''+c.id+'\','+sr.hedefIdx+',\''+esc(k.aciklama).replace(/'/g,"\\'")+'\')">'+butonTxt+'</button>'
       + '</div>';
   });
+  h += kontrolGozlemKartlariHTML(c);
   return h;
+}
+/* Üretim sırası kontrolü: Tiftik → Toprak → Tırmık → Hasat.
+   Sert engel değil — önceki adım eksikse uyarır, mühendis "yine de devam" diyebilir
+   (gerçek istisnalar için yol kapanmasın). key: "toprak"|"tirmik"|"hasat" */
+function oncekiAdimTamamMi(c, key){
+  var eksik=null;
+  if(key==="toprak" && !c.tiftikTarihi) eksik="Tiftik";
+  else if(key==="tirmik" && !c.toprakTarihi) eksik="Toprak";
+  else if(key==="hasat" && !c.tirmikTarihi) eksik="Tırmık";
+  if(!eksik) return true;
+  return confirm("⚠️ "+eksik+" henüz yapılmamış görünüyor.\n\nYine de devam edilsin mi?");
 }
 function toggleTask(cid, idx){
   var c=loadData().cycles.find(function(x){return x.id===cid;});
@@ -1183,15 +1264,22 @@ function toggleTask(cid, idx){
   }
   if(!c.done) c.done={};
   var yeniDurum=!c.done["p"+idx];
+  if(yeniDurum && st){
+    var alanKeyOn=st.rol||protokolAdimAlanKey(st.txt);
+    if(alanKeyOn==="toprak" && !oncekiAdimTamamMi(c,"toprak")) return;
+    if(alanKeyOn==="tirmik" && !oncekiAdimTamamMi(c,"tirmik")) return;
+    if((alanKeyOn==="hasat" || (!alanKeyOn && /hasat/i.test(st.txt))) && !oncekiAdimTamamMi(c,"hasat")) return;
+  }
   c.done["p"+idx]=yeniDurum;
   if(yeniDurum){
     if(st) gunlukGorevNotEkle(c, st.txt+" yap\u0131ld\u0131");
     /* KRİTİK: Tiftik/Toprak/Tırmık/Hava gibi adımlar için ilgili tarih alanını da
        otomatik doldur. Aksi halde sulama/ilaçlama engeli ("poşet açılmadı") kalkmaz —
-       o kontrol bu işaret kutusuna değil, gerçek tiftikTarihi vb. alanına bakıyor. */
+       o kontrol bu işaret kutusuna değil, gerçek tiftikTarihi vb. alanına bakıyor.
+       Rol açıkça atanmışsa ona, yoksa (eski kayıtlar için) metne bakılır. */
     if(st){
-      var alanKey=protokolAdimAlanKey(st.txt);
-      if(alanKey && !c[alanKey+"Tarihi"] && alanKey!=="hava"){
+      var alanKey=st.rol||protokolAdimAlanKey(st.txt);
+      if(alanKey && !c[alanKey+"Tarihi"] && alanKey!=="hava" && alanKey!=="poset" && alanKey!=="hasat"){
         c[alanKey+"Tarihi"]=todayISO();
         touchCycle(c);
       } else if(alanKey==="hava" && !c.havaBaslangic){
@@ -1226,11 +1314,19 @@ function ustPano(showTasks){
   if(d.cycles.filter(function(c){return !c.bosaltimTarihi;}).length===0) return "";
   var h="";
   var alerts=tempAlerts();
+  /* KRİTİK: "Gördüm" tıklanınca alarm süresiz kapanmasın — tehlike hâlâ sürüyorsa
+     (yeni ölçüm girilmediyse ya da aynı kritik değer tekrar girildiyse) belirli bir
+     süre sonra kendini tekrar hatırlatsın ("sonra bakarız" riskine karşı). TEHLİKELİ
+     (lvl 2) daha kısa, KRİTİK (lvl 1) biraz daha uzun snooze süresine sahip. */
+  function snoozeSaat(lvl){ return lvl>=2 ? 1 : 3; }
   var kritikGorunur = alerts.filter(function(a){
     if(a.lvl>=1){
       var c=d.cycles.find(function(x){return x.id===a.cid;});
       var ack=tempAckGet(c,a.key);
-      if(ack && ack.sig===a.txt) return false;
+      if(ack && ack.sig===a.txt){
+        var gecenSaat=(Date.now()-new Date(ack.at).getTime())/3600000;
+        if(gecenSaat < snoozeSaat(a.lvl)) return false; /* hâlâ snooze süresi içinde */
+      }
     }
     return true;
   });
@@ -1241,8 +1337,10 @@ function ustPano(showTasks){
       h+='<div style="padding:5px 0; font-size:15px; border-bottom:1px solid #f3d9d6;"><b>'+esc(a.oda)+'</b> \u2014 '+esc(a.txt);
       if(a.lvl>=1){
         var c=d.cycles.find(function(x){return x.id===a.cid;});
+        var ackYeniden=tempAckGet(c,a.key);
         var others=tempAckOthers(c,a.key,a.txt);
-        h+='<br><button class="btn ghost small" style="margin-top:4px;" onclick="tempAckSet(\''+a.cid+'\',\''+a.key+'\')">✓ Gördüm, kapat</button>';
+        if(ackYeniden && ackYeniden.sig===a.txt) h+='<br><span class="muted" style="font-size:12px; color:#a13a3a;">⏰ Daha önce "gördüm" denmişti, sıcaklık hâlâ kritik — tekrar hatırlatılıyor</span>';
+        h+='<br><button class="btn ghost small" style="margin-top:4px;" onclick="tempAckSet(\''+a.cid+'\',\''+a.key+'\')">✓ Gördüm, kapat ('+snoozeSaat(a.lvl)+' sa)</button>';
         if(others.length) h+=' <span class="muted" style="font-size:12px;">('+others.join(", ")+' zaten gördü)</span>';
       }
       h+='</div>';
@@ -1323,6 +1421,10 @@ function ustPano(showTasks){
           + ' <span style="display:inline-block; font-size:11px; background:#f3e8fe; color:#6a1ab8; padding:1px 7px; border-radius:10px; margin-left:6px;">📌 oda işlemi</span></div>'
           + '<div style="font-size:15px;">'+esc(i.txt)+'</div>'
           + '<div style="margin-top:4px;"><button class="btn ghost small" onclick="odaGorevErtele(\''+i.cid+'\',\''+i.ogId+'\')">\u2192 Ertele</button> <button class="del-x" onclick="odaGorevSil(\''+i.cid+'\',\''+i.ogId+'\')">Sil \u00d7</button></div>'
+          + (can("edit")?('<div style="margin-top:6px; display:flex; align-items:center; gap:10px; flex-wrap:wrap;">'
+              +'<label style="display:inline-flex; align-items:center; gap:4px; font-size:13px; font-weight:normal;"><input type="checkbox" '+(gorevSecili(i)?"checked":"")+' onchange="gorevSecToggle(\''+gorevSecAnahtar(i)+'\')" style="width:20px;height:20px;">Toplu seç</label>'
+              +'<button class="btn small" onclick="gorevPlanlaGonder(\''+esc(i.oda)+'\',\''+esc(i.txt).replace(/'/g,"\\'")+'\',\''+esc(i.atama)+'\',\''+esc(i.date)+'\')">📋 Planla — WhatsApp\'a gönder</button>'
+              +'</div>'):'')
           + '</div></div>';
         return;
       }
@@ -1753,8 +1855,13 @@ function gunlukKontrolMesaji(c, tarih, sulamaVarMi){
   if(c.gelisTarihi && tarih && tarih<c.gelisTarihi){
     msgs.push({tip:"blockAll", metin:esc(c.oda||"")+": "+fmtDate(tarih)+" tarihi kompost geliş tarihinden ("+fmtDate(c.gelisTarihi)+") önce — bu odaya henüz kompost gelmedi."});
   }
-  if(sulamaVarMi && (!c.tiftikTarihi || (tarih && tarih<c.tiftikTarihi))){
-    msgs.push({tip:"blockSulama", metin:esc(c.oda||"")+": poşet (tiftik) henüz açılmadı"+(c.tiftikTarihi?(" ("+fmtDate(c.tiftikTarihi)+")"):"")+" — sulama/su bu tarihte girilemez."});
+  /* KRİTİK FIX: Eskiden burada yanlışlıkla c.tiftikTarihi kontrol ediliyordu — "poşet açıldı mı"
+     ile "tiftik yapıldı mı" birbirine karışmıştı. Artık gerçek poşet durumuna (posetAcildiMi)
+     bakıyor — bu da protokoldeki metne göre değil, işaretlenen "done" durumuna göre çalışıyor,
+     kullanıcı satırı "Poşet kesimi" gibi yeniden adlandırsa bile doğru sonuç verir. */
+  if(sulamaVarMi && !posetAcildiMi(c)){
+    var pg=posetGun(c);
+    msgs.push({tip:"blockSulama", metin:esc(c.oda||"")+": poşet henüz açılmadı"+(pg?(" (beklenen: "+fmtDate(pg)+")"):"")+" — sulama/su bu tarihte girilemez."});
   }
   return msgs;
 }
@@ -1781,21 +1888,23 @@ function renderPanoEdit(id){
   var ge=(c.gunluk||[]).find(function(g){return g.tarih===today && (g.vakit||"")===vk;})||{};
   var showCo2 = airStarted(c) || !!(ge.co2alt||ge.co2ust);
   var showSu = suGoster(c, ge);
+  var oi=' enterkeyhint="next" onkeydown="if(event.key===\'Enter\'){event.preventDefault();odakIlerlet(this);}"';
   var h='<div class="card"><div class="sec-title" style="margin-top:0;">'+esc(c.oda||"Oda")+' · '+fmtDate(today)+' '+gunAdi(today)+'</div>'
     +'<div class="muted" style="margin-bottom:8px;">Bugünkü pano bilgilerini hızlı gir — Günlük Tur\'da girilen de burada çıkar, burada girilen de Tur\'da çıkar (aynı kayıt). Ayrıntı için aşağıdan "Ayrıntı".</div>'
     +'<label>Vakit</label><select id="pe_vakit" onchange="panoEditVakitDegis(this)"><option value="Sabah"'+(vk==="Sabah"?" selected":"")+'>Sabah</option><option value="Akşam"'+(vk==="Akşam"?" selected":"")+'>Akşam</option></select>'
-    +'<div class="field-row"><div><label>Oda °C</label><input type="number" step="0.1" inputmode="decimal" id="pe_oda" value="'+esc(ge.odaC||"")+'"></div>'
-    +'<div><label>Klima °C</label><input type="number" step="0.1" inputmode="decimal" id="pe_klima" value="'+esc(ge.klimaC||"")+'"></div></div>'
-    +'<div class="field-row"><div><label>Komp °C alt</label><input type="number" step="0.1" inputmode="decimal" id="pe_komp" value="'+esc(ge.kompostC||"")+'"></div>'
-    +'<div><label>Komp °C üst</label><input type="number" step="0.1" inputmode="decimal" id="pe_kompust" value="'+esc(ge.kompostUst||"")+'"></div></div>'
-    +(showCo2?('<div class="field-row"><div><label>CO₂ alt</label><input type="number" inputmode="numeric" id="pe_co2a" value="'+esc(ge.co2alt||"")+'" placeholder="3000"></div>'
-    +'<div><label>CO₂ üst</label><input type="number" inputmode="numeric" id="pe_co2u" value="'+esc(ge.co2ust||"")+'" placeholder="3300"></div></div>'):'')
+    +'<div class="field-row"><div><label>Oda °C</label><input type="number" step="0.1" inputmode="decimal" id="pe_oda" value="'+esc(ge.odaC||"")+'"'+oi+'></div>'
+    +'<div><label>Klima °C</label><input type="number" step="0.1" inputmode="decimal" id="pe_klima" value="'+esc(ge.klimaC||"")+'"'+oi+'></div></div>'
+    +'<div class="field-row"><div><label>Komp °C alt</label><input type="number" step="0.1" inputmode="decimal" id="pe_komp" value="'+esc(ge.kompostC||"")+'"'+oi+'></div>'
+    +'<div><label>Komp °C üst</label><input type="number" step="0.1" inputmode="decimal" id="pe_kompust" value="'+esc(ge.kompostUst||"")+'"'+oi+'></div></div>'
+    +(showCo2?('<div class="field-row"><div><label>CO₂ alt</label><input type="number" inputmode="numeric" id="pe_co2a" value="'+esc(ge.co2alt||"")+'" placeholder="3000"'+oi+'></div>'
+    +'<div><label>CO₂ üst</label><input type="number" inputmode="numeric" id="pe_co2u" value="'+esc(ge.co2ust||"")+'" placeholder="3300"'+oi+'></div></div>'):'')
     +(showSu?(suSliderHTML("pe_su", ge.su||"")
         +'<button class="btn ghost small" style="margin:4px 0;" onclick="peKopyalaDun(\''+c.id+'\')">◷ Dün ne yaptıysan aynısı</button>'
         +ilacDozPickerHTML("pe_ilac_sec","pe_ilac_doz","pe_islem")
         +'<label>Bugün işlem (sulama / ilaç — yukarıdan seçince otomatik dolar)</label><input type="text" id="pe_islem" value="'+esc(ge.sulama||"")+'" placeholder="ör. tırmık, poşet açma vb.">')
       : '<div class="muted" style="padding:8px 0; font-style:italic;">🚫 Poşet henüz açılmadı — sulama/ilaçlama girişi kapalı.</div>'
         +'<input type="hidden" id="pe_islem" value="'+esc(ge.sulama||"")+'">')
+    +turNotAlaniHTML(c)
     +'<div class="row" style="margin-top:12px;"><button class="btn" onclick="panoEditSave(\''+c.id+'\')">Kaydet</button>'
     +'<button class="btn ghost" onclick="go(\'list\')">‹ Geri</button>'
     +'<button class="btn ghost" onclick="openDetail(\''+c.id+'\')">Ayrıntı ›</button></div>'
@@ -1865,16 +1974,12 @@ function gunlukGorevNotEkle(c, not){
   }
 }
 function kompStr(g){ if(!g) return "—"; var a=(g.kompostC==null?"":(""+g.kompostC)).trim(), b=(g.kompostUst==null?"":(""+g.kompostUst)).trim(); if(a&&b) return a+"-"+b; return a||b||"—"; }
-function posetGun(c){ var P=getProtokol(); for(var i=0;i<P.length;i++){ if(P[i].tip!=="uyari" && /po\u015fet.*a\u00e7/i.test(P[i].txt)){ var t=protokolTarih(c,P[i]); if(t) return t; } } return (c&&c.gelisTarihi)?addDays(c.gelisTarihi,6):null; }
+function posetGun(c){ var i=protokolRolIdx("poset"); if(i>=0){ var t=protokolTarih(c,getProtokol()[i]); if(t) return t; } return (c&&c.gelisTarihi)?addDays(c.gelisTarihi,6):null; }
 /* Poşet gerçekten "tamamlandı" işaretlendi mi (sadece takvim günü değil, ekibin fiilen yaptığı) */
 function posetAcildiMi(c){
   if(!c) return false;
-  var P=getProtokol();
-  for(var i=0;i<P.length;i++){
-    if(P[i].tip!=="uyari" && /po\u015fet.*a\u00e7/i.test(P[i].txt)){
-      return !!(c.done && c.done["p"+i]); /* protokol adımı varsa SADECE işaretlenmiş olması sayılır */
-    }
-  }
+  var i=protokolRolIdx("poset");
+  if(i>=0) return !!(c.done && c.done["p"+i]); /* protokol adımı varsa SADECE işaretlenmiş olması sayılır */
   /* Protokolde poşet açma adımı hiç yoksa (özelleştirilmiş protokol), eski takvim mantığına geri dön */
   var pg=posetGun(c);
   return !!(pg && daysBetween(pg, todayISO())>=0);
@@ -2445,6 +2550,10 @@ function bugunGenelGorevHTML(){
         +'<button class="btn small" style="flex:1;" onclick="gorevToggle(\''+g.id+'\')">✓ Tamamlandı</button>'
         +'<button class="btn ghost small" style="flex:1;" onclick="gorevErtele(\''+g.id+'\')">→ Tamamlanmadı (yarına)</button>'
         +'</div>';
+      h+='<div style="margin-top:6px; display:flex; align-items:center; gap:10px; flex-wrap:wrap;">'
+        +'<label style="display:inline-flex; align-items:center; gap:4px; font-size:13px; font-weight:normal;"><input type="checkbox" '+(_gorevSecili["gg|"+g.id]?"checked":"")+' onchange="gorevSecToggle(\'gg|'+g.id+'\')" style="width:20px;height:20px;">Toplu seç</label>'
+        +'<button class="btn small" onclick="gorevPlanlaGonder(\'\',\''+esc(g.baslik).replace(/'/g,"\\'")+'\',\''+esc(g.atama)+'\',\''+esc(g.tarih)+'\')">📋 Planla — WhatsApp\'a gönder</button>'
+        +'</div>';
     } else if(g.atama){
       h+='<div class="muted" style="font-size:13px;margin-top:2px;">'+atamaLabel(g.atama)+'</div>';
     }
@@ -2755,6 +2864,10 @@ function ustPanoIleri(){
         + '<div style="font-size:13px; font-weight:700; color:var(--muted);">'+when+' · <span style="color:var(--teal);">'+esc(i.oda)+'</span>'+rozet+'</div>'
         + '<div style="font-size:15px;">◆ '+esc(i.txt)+'</div>'
         + (can("edit")?('<div style="margin-top:4px;"><button class="btn ghost small" onclick="odaGorevErtele(\''+i.cid+'\',\''+i.ogId+'\')">→ Ertele</button></div>'):'')
+        + (can("edit")?('<div style="margin-top:6px; display:flex; align-items:center; gap:10px; flex-wrap:wrap;">'
+            +'<label style="display:inline-flex; align-items:center; gap:4px; font-size:13px; font-weight:normal;"><input type="checkbox" '+(gorevSecili(i)?"checked":"")+' onchange="gorevSecToggle(\''+gorevSecAnahtar(i)+'\')" style="width:20px;height:20px;">Toplu seç</label>'
+            +'<button class="btn small" onclick="gorevPlanlaGonder(\''+esc(i.oda)+'\',\''+esc(i.txt).replace(/'/g,"\\'")+'\',\''+esc(i.atama)+'\',\''+esc(i.date)+'\')">📋 Planla — WhatsApp\'a gönder</button>'
+            +'</div>'):'')
         + '</div></div>';
       return;
     }
@@ -4118,31 +4231,20 @@ function openForm(id,prefillOda){ _formPrefillOda=prefillOda||null; go("form",id
    bu TEK fonksiyonu ortak kullanır — iki yerde ayrı ayrı yazılıp birbirinden
    kopmasınlar diye (daha önce tam bu yüzden bir hata olmuştu). */
 function protokolGoreviTamamla(c, key, tarih){
-  var reMap={tiftik:/tiftik/i, toprak:/toprak/i, tirmik:/tırmık/i, hava:/hava/i};
-  var re=reMap[key]; if(!re) return;
-  var sahipGerekli = (key!=="hava") ? "ekip" : null;
+  var pi=protokolRolIdx(key); if(pi<0) return;
   var P=getProtokol();
-  for(var pi=0; pi<P.length; pi++){
-    if(!P[pi].silindi && P[pi].tip==="olay" && re.test(P[pi].txt) && (!sahipGerekli || P[pi].sahip===sahipGerekli)){
-      if(!c.done) c.done={};
-      c.done["p"+pi]=true;
-      if(tarih===todayISO()) gunlukGorevNotEkle(c, P[pi].txt+" yapıldı");
-      break;
-    }
-  }
+  if(!c.done) c.done={};
+  c.done["p"+pi]=true;
+  if(tarih===todayISO()) gunlukGorevNotEkle(c, P[pi].txt+" yapıldı");
 }
 /* Tiftik/Toprak/Tırmık/Hava'nın "Bilgileri düzenle" formunda ZATEN özel alanları var
    (c.tiftikTarihi vb.) — bunların protokoldeki karşılık geldiği satır index'lerini bulur,
    böylece "Diğer Üretim İşlemleri" listesi bu 4'ünü TEKRAR göstermez. */
 function dedicatedAdimIdx(){
   var out={};
-  var reMap={tiftik:/tiftik/i, toprak:/toprak/i, tirmik:/tırmık/i, hava:/hava/i};
-  var P=getProtokol();
   ["tiftik","toprak","tirmik","hava"].forEach(function(key){
-    var re=reMap[key]; var sahipGerekli=(key!=="hava")?"ekip":null;
-    for(var pi=0; pi<P.length; pi++){
-      if(!P[pi].silindi && P[pi].tip==="olay" && re.test(P[pi].txt) && (!sahipGerekli || P[pi].sahip===sahipGerekli)){ out[pi]=key; break; }
-    }
+    var pi=protokolRolIdx(key);
+    if(pi>=0) out[pi]=key;
   });
   return out;
 }
@@ -4196,6 +4298,10 @@ function saveForm(id){
   ["tiftik","toprak","tirmik"].forEach(function(k){
     var eskiTarih = c[k+"Tarihi"];
     var yeniTarih = el("f_"+k+"_t").value;
+    /* Yeni bir tarih giriliyorsa (önceden boştu) ve sıra atlanıyorsa uyar — sert engel değil */
+    if(!eskiTarih && yeniTarih && k!=="tiftik" && !oncekiAdimTamamMi(c,k)){
+      yeniTarih = ""; /* onaylanmadıysa bu alanı boş bırak, diğer alanlar yine de kaydedilsin */
+    }
     c[k+"Tarihi"]=yeniTarih;
     c[k+"Personel"]=el("f_"+k+"_p").value.trim();
     c[k+"Dogru"]=el("f_"+k+"_d").checked;
@@ -4210,6 +4316,9 @@ function saveForm(id){
     if(s.silindi || s.tip!=="olay" || dedIdxSave[idx]) return;
     var dEl=el("f_adim_"+idx+"_d"); if(!dEl) return;
     var eskiDone=!!(c.done["p"+idx]);
+    if(!eskiDone && dEl.checked && (s.rol==="hasat" || (!s.rol && /hasat/i.test(s.txt))) && !oncekiAdimTamamMi(c,"hasat")){
+      dEl.checked=false; /* onaylanmadı, işareti geri al */
+    }
     c.done["p"+idx]=dEl.checked;
     var tEl=el("f_adim_"+idx+"_t"), nEl=el("f_adim_"+idx+"_n");
     var yeniTarih=(tEl?tEl.value:"");
@@ -4498,17 +4607,45 @@ function exportCycleCSV(id){
 }
 
 /* ---------- Günlük tur (toplu giriş) ---------- */
+/* Turu gezerken hızlı gözlem notu ekleme — oda detayındaki "Mühendis Notları" ile AYNI
+   veriye (c.notlar) yazar, o sekmede de görünür. Tam render() yapmıyoruz — kart üzerindeki
+   henüz kaydedilmemiş diğer alanlar (sıcaklık, sulama vb.) kaybolmasın diye sadece bu
+   alanın kendisini DOM üzerinden güncelliyoruz. */
+function turNotEkle(cid){
+  if(!can("edit")) return noPerm();
+  var c=loadData().cycles.find(function(x){return x.id===cid;}); if(!c) return;
+  var inp=el("tnot_"+cid);
+  var txt=(inp?inp.value:"").trim();
+  if(!txt){ toast("Not yaz"); return; }
+  getMuhendisNotlari(c).push({tarih:todayISO(), metin:txt, by:deviceName()});
+  saveData();
+  if(inp) inp.value="";
+  var sonDiv=el("tnotson_"+cid);
+  if(sonDiv) sonDiv.textContent="Son not ("+fmtDate(todayISO())+"): "+txt;
+  toast("✓ Not eklendi");
+}
+function turNotAlaniHTML(c){
+  var notlar=getMuhendisNotlari(c).slice().sort(function(a,b){ return cmpDate(b.tarih,a.tarih); });
+  var son=notlar[0];
+  return '<div style="margin-top:8px; padding-top:8px; border-top:1px dashed #ddd;">'
+    +'<label>📝 Gözlem notu ekle</label>'
+    +'<div style="display:flex; gap:6px;"><input type="text" id="tnot_'+c.id+'" placeholder="örn. sarım güçlü, kompost kokusu iyi..." style="flex:1;">'
+    +'<button class="btn small" style="white-space:nowrap;" onclick="turNotEkle(\''+c.id+'\')">Ekle</button></div>'
+    +'<div class="muted" id="tnotson_'+c.id+'" style="font-size:12px;margin-top:4px;">'+(son?('Son not ('+fmtDate(son.tarih)+'): '+esc(son.metin)):'Henüz not yok')+'</div>'
+    +'</div>';
+}
 function turOdaKartIcHTML(c, ge){
   ge = ge || {};
   var last=lastOlcum(c);
   var showSu = suGoster(c, ge);
+  var oi=' enterkeyhint="next" onkeydown="if(event.key===\'Enter\'){event.preventDefault();odakIlerlet(this);}"';
   return '<div class="muted" style="margin-bottom:6px;">Önceki: '+esc(last)+'</div>'
-    +'<div class="field-row"><div><label>Oda °C</label><input type="number" step="0.1" inputmode="decimal" class="tur_oda" value="'+esc(ge.odaC||"")+'"></div>'
-    +'<div><label>Klima °C</label><input type="number" step="0.1" inputmode="decimal" class="tur_klima" value="'+esc(ge.klimaC||"")+'"></div></div>'
-    +'<div class="field-row"><div><label>Komp °C alt</label><input type="number" step="0.1" inputmode="decimal" class="tur_komp" value="'+esc(ge.kompostC||"")+'"></div>'
-    +'<div><label>Komp °C üst</label><input type="number" step="0.1" inputmode="decimal" class="tur_kompust" value="'+esc(ge.kompostUst||"")+'"></div></div>'
-    +((airStarted(c)||!!(ge.co2alt||ge.co2ust))?('<div class="field-row"><div><label>CO₂ alt</label><input type="number" inputmode="numeric" class="tur_co2a" value="'+esc(ge.co2alt||"")+'"></div>'
-    +'<div><label>CO₂ üst</label><input type="number" inputmode="numeric" class="tur_co2u" value="'+esc(ge.co2ust||"")+'"></div></div>'):'')
+    +'<div class="field-row"><div><label>Oda °C</label><input type="number" step="0.1" inputmode="decimal" class="tur_oda" value="'+esc(ge.odaC||"")+'"'+oi+'></div>'
+    +'<div><label>Klima °C</label><input type="number" step="0.1" inputmode="decimal" class="tur_klima" value="'+esc(ge.klimaC||"")+'"'+oi+'></div></div>'
+    +'<div class="field-row"><div><label>Komp °C alt</label><input type="number" step="0.1" inputmode="decimal" class="tur_komp" value="'+esc(ge.kompostC||"")+'"'+oi+'></div>'
+    +'<div><label>Komp °C üst</label><input type="number" step="0.1" inputmode="decimal" class="tur_kompust" value="'+esc(ge.kompostUst||"")+'"'+oi+'></div></div>'
+    +((airStarted(c)||!!(ge.co2alt||ge.co2ust))?('<div class="field-row"><div><label>CO₂ alt</label><input type="number" inputmode="numeric" class="tur_co2a" value="'+esc(ge.co2alt||"")+'"'+oi+'></div>'
+    +'<div><label>CO₂ üst</label><input type="number" inputmode="numeric" class="tur_co2u" value="'+esc(ge.co2ust||"")+'"'+oi+'></div></div>'):'')
     +(showSu?(suSliderHTML('tsu_'+c.id, ge.su||"", 'tur_su')
         +'<button class="btn ghost small" style="margin:4px 0;" onclick="turKopyalaDun(\''+c.id+'\')">◷ Dün ne yaptıysan aynısı</button>'
         +ilacDozPickerHTML('tilac_'+c.id, 'tdoz_'+c.id, 'tsulama_'+c.id)
@@ -4517,7 +4654,8 @@ function turOdaKartIcHTML(c, ge){
         +'<button class="btn ghost small" style="white-space:nowrap;" onclick="turProtokol(\''+c.id+'\')">Protokol</button></div>')
       : '<div class="muted" style="padding:8px 0; font-style:italic;">🚫 Poşet henüz açılmadı — sulama/ilaçlama girişi kapalı.</div>'
         +'<input type="hidden" class="tur_su" value=""><input type="hidden" id="tsulama_'+c.id+'" class="tur_sulama" value="'+esc(ge.sulama||"")+'">')
-    +turSiradakiAdimHTML(c);
+    +turSiradakiAdimHTML(c)
+    +turNotAlaniHTML(c);
 }
 function renderTur(){
   el("hdrTitle").textContent = "Günlük tur";
@@ -4583,12 +4721,40 @@ function turModDegistir(){
 /* Ortak günlük kayıt mantığı: hem Günlük Tur hem Ana Ekran (panoEdit) bunu kullanır —
    böylece hangi ekrandan girilirse girilsin AYNI kurallarla AYNI kayda (tarih+vakit) yazılır.
    patch: {odaC, kompostC, kompostUst, klimaC, co2alt, co2ust, su, sulama} */
+/* Olağandışı sıcaklık değeri (45°C kompost, eksi değer gibi) sessizce kabul edilmesin —
+   çoğunlukla fazladan rakam (450→45) veya yanlış eksi işareti hatasıdır. Gerçek acil
+   durumlar da olabileceği için (ateşlenme 28-30°ye çıkabilir) TAM ENGELLEMİYORUZ,
+   sadece "emin misin?" diye soruyoruz. */
+function sicaklikSupheliMi(alanlar){
+  var supheliler=alanlar.filter(function(a){ return a.deger!==null && (a.deger<0 || a.deger>45); });
+  if(!supheliler.length) return null;
+  return supheliler.map(function(a){ return a.ad+": "+a.deger+"°"; }).join(", ");
+}
+/* Mobil klavyede "ileri" tuşuna basınca aynı kart içindeki sıradaki alana otomatik geçer.
+   Günde onlarca oda × birkaç alan = yüzlerce dokunuş — küçük ama birikimli bir hız kazancı. */
+function odakIlerlet(elm){
+  var card = elm.closest('.card'); if(!card) return;
+  var focusable = card.querySelectorAll('input:not([type=hidden]):not([type=checkbox]):not([type=range]), select');
+  var arr = Array.prototype.slice.call(focusable);
+  var idx = arr.indexOf(elm);
+  if(idx>=0 && idx<arr.length-1){
+    var next=arr[idx+1]; next.focus();
+    try{ if(next.select) next.select(); }catch(e){}
+  }
+}
 function gunlukKaydet(c, t, vk, patch, warnLines){
   if(!c) return 0;
   var oda=patch.odaC||"", komp=patch.kompostC||"", kompUst=patch.kompostUst||"",
       klima=patch.klimaC||"", a=patch.co2alt||"", u=patch.co2ust||"",
       sul=patch.sulama||"", suV=patch.su||"";
   if(!oda && !komp && !kompUst && !klima && !a && !u && !sul && !suV) return 0;
+  var supheMetni=sicaklikSupheliMi([
+    {ad:"Oda °C", deger:numParse(oda)}, {ad:"Komp °C alt", deger:numParse(komp)},
+    {ad:"Komp °C üst", deger:numParse(kompUst)}, {ad:"Klima °C", deger:numParse(klima)}
+  ]);
+  if(supheMetni && !confirm("⚠️ Olağandışı değer(ler):\n"+supheMetni+"\n\nFazladan rakam ya da yanlış eksi işareti girmiş olabilirsin.\n\nYine de kaydedilsin mi?")){
+    return 0;
+  }
   var problems=gunlukKontrolMesaji(c, t, !!(sul||suV));
   if(problems.some(function(p){return p.tip==="blockAll";})){
     problems.forEach(function(p){warnLines.push(p.metin);});
@@ -5288,7 +5454,7 @@ function resetRecete(){
   if(!can("manage")) return noPerm();
   if(!confirm("Reçete varsayılana dönsün mü? Eklediğin/değiştirdiğin adımlar gider.")) return;
   var d=loadData(); if(!d.settings) d.settings={};
-  d.settings.protokol = PROTOKOL.map(function(x){ return {ref:x.ref, gun:x.gun, tip:x.tip, txt:x.txt}; });
+  d.settings.protokol = PROTOKOL.map(function(x){ return {ref:x.ref, gun:x.gun, tip:x.tip, sahip:x.sahip, txt:x.txt, sure:x.sure, tekrar:x.tekrar, rol:x.rol, sonucSecenekleri:x.sonucSecenekleri}; });
   receteEdit=-1; saveData(); toast("Varsayılan reçete yüklendi"); render();
 }
 
@@ -5998,6 +6164,7 @@ function renderAyarlar(){
     h+='<div class="card"><div class="sec-title" style="margin-top:0;">🌱 1. Üretim Protokolü</div>'
       +'<div class="muted" style="margin-bottom:8px;">Üretimle ilgili fiziksel işler: tiftik, tırmık, toprak serimi, poşet açma gibi. Ekibin hangi gün ne iş yapacağını burada tanımlarsın. Gün, "Geliş" veya "Toprak serimi" tarihine göre sayılır (örn. Geliş +6 = kompost geldikten 6 gün sonra).</div>';
     var UP_sirali=PR.map(function(s,idx){return {s:s, idx:idx};}).filter(function(x){return !x.s.silindi && x.s.tip==="olay";}).sort(function(a,b){return protokolSiraAnahtari(a.s)-protokolSiraAnahtari(b.s);});
+    var ROL_ETIKET={"":"— rol yok —", poset:"🔓 Poşet", tiftik:"🌾 Tiftik", toprak:"🟫 Toprak", tirmik:"🔨 Tırmık", hasat:"🧺 Hasat"};
     UP_sirali.forEach(function(x){
       var s=x.s, idx=x.idx;
       var refLbl = s.ref==="gelis"?"Geliş":"Toprak";
@@ -6013,6 +6180,12 @@ function renderAyarlar(){
         +'</select>'
         +'<button class="btn small" style="flex:none;" onclick="protokolSatirKaydet('+idx+')">Kaydet</button>'
         +'<button class="del-x" style="flex:none;" onclick="protokolSatirSil('+idx+')">Sil ×</button>'
+        +'</div>'
+        +'<div style="display:flex; align-items:center; gap:6px; margin-top:4px;">'
+        +'<span style="font-size:11px;color:#888;" title="Bu satırı istediğin gibi adlandır — sistem yazıya değil bu role bakar, o yüzden yeniden adlandırma hiçbir hesabı bozmaz.">Rol (sistem içi, metinden bağımsız):</span>'
+        +'<select id="pr_rol_'+idx+'" style="width:auto;padding:3px;">'
+          +Object.keys(ROL_ETIKET).map(function(r){ return '<option value="'+r+'"'+((s.rol||"")===r?" selected":"")+'>'+ROL_ETIKET[r]+'</option>'; }).join('')
+        +'</select>'
         +'</div>'
         +'<div style="font-size:11px;color:#aaa;margin:2px 0 0 50px;">'+refLbl+' günü'
         +((parseInt(s.sure,10)||1)>1?(' · ⏳'+s.sure+'g sürer'):'')
@@ -6041,13 +6214,18 @@ function renderAyarlar(){
       var s=x.s, idx=x.idx;
       var refLbl = s.ref==="gelis"?"Geliş":"Toprak";
       h+='<div style="padding:8px 0;border-bottom:1px solid #eee;">'
-        +'<div style="font-size:12px;color:#888;">'+refLbl+' '+(s.gun>=0?"+":"")+s.gun+'. gün</div>'
+        +'<div style="font-size:12px;color:#888;">'+refLbl+' '+(s.gun>=0?"+":"")+s.gun+'. gün'
+        +((parseInt(s.sure,10)||1)>1?(' · ⏳'+s.sure+'g gözlem penceresi'):'')+'</div>'
         +'<input type="text" id="pr_txt_'+idx+'" value="'+esc(s.txt)+'" style="width:100%;margin:3px 0;font-size:13px;">'
-        +'<div style="display:flex;gap:6px;align-items:center;">'
+        +'<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">'
         +'<input type="number" id="pr_gun_'+idx+'" value="'+s.gun+'" style="width:60px;padding:3px;">'
+        +'<span style="font-size:11px;color:#888;" title="Kaç gün boyunca kalıcı gözlem uyarısı olarak kalsın (örn. 7-8. gün için 2 gir)">Gözlem süresi</span><input type="number" min="1" id="pr_sure_'+idx+'" value="'+(parseInt(s.sure,10)||1)+'" style="width:42px;padding:3px;">'
         +'<button class="btn small" onclick="protokolSatirKaydet('+idx+')">Kaydet</button>'
         +'<button class="del-x" onclick="protokolSatirSil('+idx+')">Sil ×</button>'
-        +'</div></div>';
+        +'</div>'
+        +'<div style="margin-top:4px;"><span style="font-size:11px;color:#888;" title="Boş bırak: sadece gözlem notu (kalıcı uyarı, karar yok). Doldur: gözlem süresi dolunca bu seçeneklerden biri seçilene kadar kart kalır.">Sonuç seçenekleri (virgülle ayır, opsiyonel):</span>'
+        +'<input type="text" id="pr_sonuc_'+idx+'" value="'+esc((s.sonucSecenekleri||[]).join(", "))+'" placeholder="örn. Ateşlenmedi, Ateşlendi müdahale edildi" style="width:100%;margin-top:2px;font-size:13px;"></div>'
+        +'</div>';
     });
     h+='<div style="margin-top:12px; padding-top:10px; border-top:2px solid #eee;">'
       +'<b>+ Yeni kontrol notu ekle</b>'
@@ -6056,6 +6234,10 @@ function renderAyarlar(){
       +'<input type="number" id="pk_gun" placeholder="gün (örn. 7 veya -2)" style="width:120px;">'
       +'</div>'
       +'<input type="text" id="pk_txt" placeholder="dikkat edilecek nokta (örn. ateşlenme riski, misel kontrolü)" style="width:100%; margin-top:6px;">'
+      +'<div style="display:flex; gap:6px; margin-top:6px; align-items:center;">'
+      +'<span style="font-size:11px;color:#888;" title="Kaç gün kalıcı gözlem uyarısı olarak kalsın (boş=1 gün)">Gözlem süresi</span><input type="number" min="1" id="pk_sure" placeholder="1" style="width:60px;">'
+      +'</div>'
+      +'<input type="text" id="pk_sonuc" placeholder="Sonuç seçenekleri (opsiyonel, virgülle: örn. Ateşlenmedi, Ateşlendi müdahale edildi)" style="width:100%; margin-top:6px;">'
       +'<button class="btn small" style="margin-top:6px;" onclick="protokolKontrolEkle()">+ Kontrol notu ekle</button>'
       +'</div></div>';
 
@@ -6213,6 +6395,9 @@ function protokolSatirKaydet(idx){
   var se=el("pr_sahip_"+idx); if(se) P[idx].sahip=se.value;
   var sre=el("pr_sure_"+idx); if(sre){ var sv=parseInt(sre.value,10); P[idx].sure=(isNaN(sv)||sv<1)?1:sv; }
   var tk=el("pr_tekrar_"+idx); if(tk){ var tv=parseInt(tk.value,10); P[idx].tekrar=(isNaN(tv)||tv<0)?0:tv; }
+  var rl=el("pr_rol_"+idx); if(rl) P[idx].rol=rl.value||"";
+  var scEl=el("pr_sonuc_"+idx);
+  if(scEl){ P[idx].sonucSecenekleri = scEl.value.split(",").map(function(x){return x.trim();}).filter(Boolean); }
   d.settings.protokolOzellestirildi=true;
   saveData(); toast("Kaydedildi"); render();
 }
@@ -6254,11 +6439,17 @@ function protokolKontrolEkle(){
   var ref=el("pk_ref").value, gun=parseInt(el("pk_gun").value,10), txt=(el("pk_txt").value||"").trim();
   if(isNaN(gun)){ toast("Gün sayısı gir"); return; }
   if(!txt){ toast("Açıklama gir"); return; }
+  var sureEl=el("pk_sure"), sonucEl=el("pk_sonuc");
+  var sureV=sureEl?parseInt(sureEl.value,10):NaN;
+  var sonucArr=sonucEl?sonucEl.value.split(",").map(function(x){return x.trim();}).filter(Boolean):[];
   var d=loadData(); ensureProtokol();
-  d.settings.protokol.push({ref:ref, gun:gun, tip:"uyari", txt:txt});
+  var yeniSatir={ref:ref, gun:gun, tip:"uyari", txt:txt};
+  if(!isNaN(sureV) && sureV>1) yeniSatir.sure=sureV;
+  if(sonucArr.length) yeniSatir.sonucSecenekleri=sonucArr;
+  d.settings.protokol.push(yeniSatir);
   d.settings.protokolOzellestirildi=true;
   saveData(); logAudit("kontrol notu eklendi", txt); toast("Kontrol notu eklendi");
-  el("pk_gun").value=""; el("pk_txt").value="";
+  el("pk_gun").value=""; el("pk_txt").value=""; if(sureEl) sureEl.value=""; if(sonucEl) sonucEl.value="";
   render();
 }
 function protokolIlacEkle(){
@@ -6277,7 +6468,7 @@ function protokolVarsayilan(){
   if(!can("manage")) return noPerm();
   if(!confirm("Tüm reçete (görev + ilaçlama) varsayılan haline dönsün mü? Yaptığın tüm değişiklikler ve eklemeler silinir.")) return;
   var d=loadData(); if(!d.settings) d.settings={};
-  d.settings.protokol=PROTOKOL.map(function(x){ return {ref:x.ref, gun:x.gun, tip:x.tip, sahip:x.sahip, txt:x.txt}; });
+  d.settings.protokol=PROTOKOL.map(function(x){ return {ref:x.ref, gun:x.gun, tip:x.tip, sahip:x.sahip, txt:x.txt, sure:x.sure, tekrar:x.tekrar, rol:x.rol, sonucSecenekleri:x.sonucSecenekleri}; });
   d.settings.protokolSurum=PROTOKOL_SURUM;
   saveData(); toast("Reçete varsayılana döndü"); render();
 }
