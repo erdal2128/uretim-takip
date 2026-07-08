@@ -363,7 +363,7 @@ function hasatTartiGetir(oda, tur){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v190";
+var APP_VER = "v191";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -5543,43 +5543,98 @@ function buildPrintHTML(c){
     var co2=(r.co2alt||r.co2ust)?((r.co2alt||"")+"-"+(r.co2ust||"")):"";
     hr+='<tr><td>'+fmtDate(r.tarih)+'</td><td>'+gunNo(c,r.tarih)+'</td><td>'+esc(r.hedefC)+'</td><td>'+esc(co2)+'</td></tr>';
   });
-  var ki=c.kompostIndirme;
-  var kiRow = ki ? ('<tr><td colspan="3"><b>Kompost İndirme:</b> '
-      +(ki.makine?('🔧 '+esc(ki.makine)+' '):'')
-      +(ki.halat?('· 🪢 '+esc(ki.halat)+' '):'')
-      +(ki.ekip1?('· 1️⃣ '+esc(ki.ekip1)+' '):'')
-      +(ki.ekip2?('· 2️⃣ '+esc(ki.ekip2)):'')
-      +(ki.tarih?(' ('+fmtDate(ki.tarih)+')'):'')
-      +'</td></tr>') : '';
+  /* Tonaj: "21160" -> "21.160" (binlik ayraç, sadece PDF görünümü için) */
+  function fmtTonaj(v){
+    if(!v) return "";
+    var s=(""+v).replace(/[^\d]/g,""); if(!s) return esc(v);
+    return s.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+  }
+  /* Poşetin ne zaman kesildiği özel bir alanda tutulmuyor — protokol adımının
+     kendi tamamlanma tarihinden (adimDetay) türetilir. */
+  var posetIdx=protokolRolIdx("poset");
+  var posetTarih = (posetIdx>=0 && posetAcildiMi(c)) ? adimYapilmaTarihi(c, posetIdx, getProtokol()[posetIdx]) : "";
+
   var sic=kgGuncelSicaklik(c);
-  var kgRow='';
+  var kgKutu='';
   if(sic.alt!==null || sic.ust!==null || c.kgNem || c.kgAmonyak){
     var S2=getSicaklik(); var idealMin=S2.idealMin, idealMax=S2.idealMax;
-    var kgParts=[];
-    if(sic.alt!==null) kgParts.push("Alt: "+sic.alt+"°");
-    if(sic.ust!==null) kgParts.push("Üst: "+sic.ust+"°");
-    if(sic.kaynak) kgParts.push("("+sic.kaynak+")");
-    if(c.kgNem) kgParts.push("Nem: "+c.kgNem);
-    if(c.kgAmonyak) kgParts.push("Amonyak: "+c.kgAmonyak);
     var idealMi = sic.alt!==null && sic.ust!==null && sic.alt>=idealMin && sic.ust<=idealMax;
-    kgRow='<tr><td colspan="3"><b>Kompost Geliş Kontrolü:</b> '+esc(kgParts.join(" · "))
-      +(sic.alt!==null&&sic.ust!==null?(' — '+(idealMi?"✓ İdeal aralıkta":"⚠️ İdeal aralık dışı ("+idealMin+"-"+idealMax+"°)")):'')
-      +'</td></tr>';
+    kgKutu = '<div class="kutu">'
+      + '<div class="kutu-baslik">Kompost Geliş Kontrolü</div>'
+      + (sic.alt!==null?('<div class="alan"><span class="k">Alt</span><span class="v">'+esc(sic.alt)+'°C</span></div>'):'')
+      + (sic.ust!==null?('<div class="alan"><span class="k">Üst</span><span class="v">'+esc(sic.ust)+'°C</span></div>'):'')
+      + (sic.kaynak?('<div class="alan"><span class="k">Ölçüm</span><span class="v">'+esc(sic.kaynak)+'</span></div>'):'')
+      + (c.kgNem?('<div class="alan"><span class="k">Nem</span><span class="v">'+esc(c.kgNem)+'</span></div>'):'')
+      + (c.kgAmonyak?('<div class="alan"><span class="k">Amonyak</span><span class="v">'+esc(c.kgAmonyak)+'</span></div>'):'')
+      + (sic.alt!==null&&sic.ust!==null?('<div class="durum '+(idealMi?"ideal":"disi")+'">'+(idealMi?"✓ İdeal aralıkta":"⚠️ İdeal aralık dışı ("+idealMin+"-"+idealMax+"°)")+'</div>'):'')
+      + '</div>';
   }
+  var ki=c.kompostIndirme;
+  var kiSatir = (ki && ki.tarih) ? ('<div class="alan"><span class="k">Kompost İndirme</span><span class="v">'
+      +(ki.makine?('🔧'+esc(ki.makine)+' '):'')
+      +(ki.halat?('🪢'+esc(ki.halat)+' '):'')
+      +(ki.ekip1?('1️⃣'+esc(ki.ekip1)+' '):'')
+      +(ki.ekip2?('2️⃣'+esc(ki.ekip2)):'')
+      +' ('+fmtDate(ki.tarih)+')</span></div>') : '';
+
+  var solSutun = '<div class="sutun sol">'
+    + '<div class="alan"><span class="k">Tur</span><span class="v">'+(c.tur||0)+'</span></div>'
+    + '<div class="alan"><span class="k">Kompost Firması</span><span class="v">'+esc(c.kompostFirma||"—")+'</span></div>'
+    + '<div class="alan"><span class="k">Tonaj</span><span class="v">'+(c.tonaj?(fmtTonaj(c.tonaj)+' kg'):'—')+'</span></div>'
+    + '<div class="alan"><span class="k">Geliş / Parti No</span><span class="v">'+fmtDate(c.gelisTarihi)+' ('+partiFromDate(c.gelisTarihi)+')</span></div>'
+    + '<div class="alan"><span class="k">Kestane</span><span class="v">'+esc((c.kestaneKat?c.kestaneKat+". kat ":"")+(c.kestaneTaraf||"")||"—")+'</span></div>'
+    + kiSatir
+    + kgKutu
+    + '</div>';
+
+  var sagSutun = '<div class="sutun sag">'
+    + '<div class="alan"><span class="k">Poşet Kesimi</span><span class="v">'+(posetTarih?fmtDate(posetTarih):'—')+'</span></div>'
+    + '<div class="alan"><span class="k">Tiftik</span><span class="v">'+fmtDate(c.tiftikTarihi)+(c.tiftikDogru?" ✓":"")+(c.tiftikPersonel?(' <span class="pers">'+esc(c.tiftikPersonel)+'</span>'):'')+'</span></div>'
+    + '<div class="alan"><span class="k">Toprak</span><span class="v">'+fmtDate(c.toprakTarihi)+(c.toprakDogru?" ✓":"")+(c.toprakPersonel?(' <span class="pers">'+esc(c.toprakPersonel)+'</span>'):'')+'</span></div>'
+    + '<div class="alan"><span class="k">Tırmık</span><span class="v">'+fmtDate(c.tirmikTarihi)+(c.tirmikDogru?" ✓":"")+(c.tirmikPersonel?(' <span class="pers">'+esc(c.tirmikPersonel)+'</span>'):'')+'</span></div>'
+    + '<div class="alan"><span class="k">Boşaltım</span><span class="v">'+(c.bosaltimTarihi?fmtDate(c.bosaltimTarihi):'—')+'</span></div>'
+    + '<div class="alan"><span class="k">Hava Başlangıç</span><span class="v">'+(c.havaBaslangic?fmtDate(c.havaBaslangic):'—')+'</span></div>'
+    + '<div class="alan"><span class="k">Toplam Su</span><span class="v">'+(tuketimOzet(c).su||0)+' lt</span></div>'
+    + '</div>';
+
+  /* Yapılan İşlemler: tam genişlik, gün numarasıyla zaman çizelgesi */
+  var islemRows=uretimIslemSatirlari(c);
+  (c.gunluk||[]).forEach(function(r){
+    var ayr=gunlukSatirAyristir(r);
+    if(ayr.uretim.length) islemRows.push({g:gunNo(c,r.tarih), tarih:r.tarih, t:ayr.uretim.join(" · ")});
+  });
+  islemRows.sort(function(a,b){ return a.g-b.g; });
+  var zamanCizelgesi = !islemRows.length ? '<div class="muted">İşlem kaydı yok.</div>'
+    : '<div class="tl">'+islemRows.map(function(r){
+        return '<div class="tl-item"><span class="tl-gun">'+r.g+'</span><span class="tl-dot">●</span><span class="tl-txt">'+esc(r.t)+'</span></div>';
+      }).join('')+'</div>';
+
   return '<html><head><meta charset="utf-8"><title>ODA TAK\u0130P FORMU - '+esc(c.oda)+'</title>'
-    +'<style>body{font-family:Arial,sans-serif;font-size:12px;color:#000;padding:14px;}h1{font-size:18px;margin:0 0 8px;}h3{margin:14px 0 4px;font-size:14px;}'
+    +'<style>'
+    +'body{font-family:Arial,sans-serif;font-size:12px;color:#000;padding:14px;}'
+    +'h1{font-size:19px;margin:0 0 14px;border-bottom:2px solid #14583a;padding-bottom:8px;}'
+    +'h3{margin:16px 0 6px;font-size:14px;color:#14583a;}'
     +'table{width:100%;border-collapse:collapse;margin-top:4px;}th,td{border:1px solid #555;padding:3px 5px;text-align:center;}'
-    +'.info td{border:none;text-align:left;padding:2px 8px;}.info b{display:inline-block;min-width:140px;}</style></head><body>'
+    +'.iki-sutun{display:flex;gap:36px;}'
+    +'.sutun{flex:1;min-width:0;}'
+    +'.alan{display:flex;justify-content:space-between;align-items:baseline;padding:4px 0;font-size:12px;gap:10px;}'
+    +'.alan .k{color:#555;font-weight:600;white-space:nowrap;}'
+    +'.alan .v{font-weight:700;text-align:right;}'
+    +'.alan .pers{font-weight:400;color:#555;font-size:11px;}'
+    +'.kutu{border:1px solid #999;border-radius:7px;padding:9px 12px;margin-top:12px;background:#fafaf8;}'
+    +'.kutu .kutu-baslik{font-weight:700;font-size:12px;margin-bottom:5px;border-bottom:1px solid #ccc;padding-bottom:4px;color:#14583a;}'
+    +'.kutu .alan{padding:2px 0;}'
+    +'.durum{margin-top:5px;font-weight:700;font-size:11.5px;}'
+    +'.durum.ideal{color:#1f7a4d;}.durum.disi{color:#a32d2d;}'
+    +'.tl{margin-top:4px;}'
+    +'.tl-item{display:flex;align-items:baseline;gap:8px;font-size:11.5px;padding:2.5px 0;}'
+    +'.tl-gun{display:inline-block;min-width:28px;font-weight:700;color:#14583a;text-align:right;}'
+    +'.tl-dot{color:#1f9e75;}'
+    +'.muted{color:#777;font-size:11px;}'
+    +'</style></head><body>'
     +'<h1>ODA TAK\u0130P FORMU \u2014 '+esc(c.oda)+'</h1>'
-    +'<table class="info">'
-    +'<tr><td><b>Kompost firmas\u0131:</b>'+esc(c.kompostFirma)+'</td><td><b>Tonaj:</b>'+esc(c.tonaj)+' kg</td><td><b>Tur:</b>'+(c.tur||0)+'</td></tr>'
-    +'<tr><td><b>Geli\u015f / Parti no:</b>'+fmtDate(c.gelisTarihi)+' ('+partiFromDate(c.gelisTarihi)+')</td><td><b>Bo\u015falt\u0131m:</b>'+fmtDate(c.bosaltimTarihi)+'</td><td><b>Kestane:</b>'+esc((c.kestaneKat?c.kestaneKat+". kat ":"")+(c.kestaneTaraf||""))+'</td></tr>'
-    +'<tr><td><b>Tiftik:</b>'+fmtDate(c.tiftikTarihi)+(c.tiftikDogru?" \u2713":"")+' '+esc(c.tiftikPersonel||"")+'</td><td><b>Toprak:</b>'+fmtDate(c.toprakTarihi)+(c.toprakDogru?" \u2713":"")+' '+esc(c.toprakPersonel||"")+'</td><td><b>T\u0131rm\u0131k:</b>'+fmtDate(c.tirmikTarihi)+(c.tirmikDogru?" \u2713":"")+' '+esc(c.tirmikPersonel||"")+'</td></tr>'
-    +'<tr><td><b>Hava ba\u015flang\u0131\u00e7:</b>'+fmtDate(c.havaBaslangic)+'</td><td><b>Toplam su:</b>'+(tuketimOzet(c).su||0)+' lt</td><td></td></tr>'
-    +kiRow
-    +kgRow
-    +'</table>'
-    +'<h3>Yap\u0131lan \u0130\u015flemler (g\u00fcn s\u0131ras\u0131yla)</h3>'+islemlerHTML(c)
+    +'<div class="iki-sutun">'+solSutun+sagSutun+'</div>'
+    +'<h3>Yap\u0131lan \u0130\u015flemler (g\u00fcn s\u0131ras\u0131yla)</h3>'+zamanCizelgesi
     +'<h3>S\u0131cakl\u0131k & CO\u2082 Grafi\u011fi</h3>'+kompostChartSVG(c)
     +hasatTartiPrintHTML(c)
     +'<h3>G\u00fcnl\u00fck Kay\u0131t</h3><table><thead><tr><th>Tarih</th><th>G\u00fcn<br>(geli\u015f)</th><th>G\u00fcn<br>(toprak)</th><th>Oda \u00b0C</th><th>Komp \u00b0C</th><th>CO\u2082</th><th>\u00dcretim \u0130\u015flemi</th><th>Sulama</th><th>\u0130la\u00e7lama</th></tr></thead><tbody>'+rows+'</tbody></table>'
