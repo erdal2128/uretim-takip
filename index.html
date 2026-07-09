@@ -366,7 +366,7 @@ function hasatTartiGetir(oda, tur){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v211";
+var APP_VER = "v212";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -2974,9 +2974,16 @@ function getCriticalAlerts(){
   try{
   var d=loadData(), alerts=[];
   
-  /* Sıcaklık kritik (>28 veya <16) */
+  /* Sıcaklık kritik (>28 veya <16) — EN GÜNCEL TARİHLİ günlük kaydına bak.
+     (Dizinin son elemanı her zaman en güncel tarih olmayabilir; kayıt sırası bozuk olabilir.) */
   d.cycles.filter(function(c){return !c.bosaltimTarihi;}).forEach(function(c){
-    var gun=c.gunluk?c.gunluk[c.gunluk.length-1]:null;
+    var gunluk=(c.gunluk||[]);
+    if(!gunluk.length) return;
+    /* En güncel tarihli kaydı bul */
+    var gun=gunluk[0];
+    for(var i=1;i<gunluk.length;i++){
+      if((gunluk[i].tarih||"")>(gun.tarih||"")) gun=gunluk[i];
+    }
     if(gun){
       var t=numParse(gun.kompostC);
       if(t!==null && (t>28 || t<16)){
@@ -3286,14 +3293,17 @@ function renderBugun(){
   /* 6. SON YAPILAN İŞLEMLER (AUDIT TRAIL) */
   if(recent.length>0){
     h+='<div class="sec-title" style="margin-top:18px;">📜 Son İşlemler</div>'
-      +'<div class="card" style="font-size:12px;font-family:monospace;">';
+      +'<div class="card" style="font-size:13px;">';
     recent.forEach(function(r){
       var zaman=r.at?fmtDateTime(r.at).substring(12,17):"--:--";
-      var actor=r.by?esc(r.by.substring(0,10)):"Sistem";
-      var action=r.action?esc(r.action.substring(0,30)):"...";
-      h+='<div style="padding:6px 0;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;">'
-        +'<div>'+zaman+' | <strong>'+actor+'</strong></div>'
-        +'<div style="text-align:right;color:var(--muted);">'+action+'</div>'
+      /* Asıl iş "detail" alanında: "A-4 · sulama" gibi. Cihaz/kişi (by) gösterilmez. */
+      var detay=r.detail?esc(""+r.detail):"";
+      var action=r.action?esc(""+r.action):"";
+      /* Ekranda: saat  |  yapılan iş (detail). Detay yoksa action'a düş. */
+      var metin=detay||action;
+      h+='<div style="padding:8px 0;border-bottom:1px solid var(--line);display:flex;gap:10px;align-items:center;">'
+        +'<span style="color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap;">'+zaman+'</span>'
+        +'<span style="flex:1;font-weight:500;">'+metin+'</span>'
         +'</div>';
     });
     h+='</div>';
