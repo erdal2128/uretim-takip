@@ -363,7 +363,7 @@ function hasatTartiGetir(oda, tur){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v191";
+var APP_VER = "v192";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -848,22 +848,57 @@ function ensureProtokol(){
   protokolRolleriTamamla(d.settings.protokol);
   return d.settings.protokol;
 }
-function protokolTarih(c, step){
-  if(step.ref==="gelis") return c.gelisTarihi?addDays(c.gelisTarihi,step.gun):null;
-  /* toprak referansı */
-  if(c.toprakTarihi) return addDays(c.toprakTarihi,step.gun);
-  if(!c.gelisTarihi) return null;
-  var base=addDays(c.gelisTarihi,getSet(c).offToprak);
-  /* Toprak henüz serilmediyse: toprak OLAY adımı ertelenmişse, ona bağlı TÜM
-     toprak-referanslı işler de birlikte kayar (örn. toprak yarına ertelendi →
-     "1000 lt su" da yarına kayar; eskiden eski tahminde kalıp kayboluyordu).
-     Adımın kendisi toprak olayıysa ekleme — çağıran kendi ertelesini zaten ekliyor. */
-  var ti=protokolRolIdx("toprak");
-  if(ti>=0 && step.rol!=="toprak" && getProtokol()[ti]!==step){
-    var te=(c.ertele&&c.ertele["p"+ti])||0;
-    if(te) base=addDays(base,te);
+/* Bir referans noktasının (gelis/poset/tiftik/toprak/tirmik/hava) TARİHİNİ bulur.
+   Gerçek tarih girilmişse onu, girilmemişse protokoldeki kendi tanımından tahmin
+   eder — tahmine o adımın kendi ertelemesi de eklenir. Böylece "tiftikten 2 gün
+   sonra" gibi yeni bir madde, tiftik ertelenirse otomatik kayar (toprak/su'da
+   yaptığımız düzeltmenin genel hâli).
+   Not: "toprak" özel durumdur — protokoldeki kendi satırı kendine referans verir
+   (ref:"toprak"), bu yüzden döngüye girmemesi için ayrı ele alınır; tahmini
+   ayarlardaki offToprak'tan gelir. poset/tiftik/tırmık/hava satırları gelis veya
+   toprak'a referans verdiği için özyinelemeli çözüm güvenlidir (döngü olmaz). */
+function protokolReferansTarihi(c, ref, callerRol){
+  if(!c || !ref) return null;
+  if(ref==="gelis") return c.gelisTarihi||null;
+  if(ref==="toprak"){
+    if(c.toprakTarihi) return c.toprakTarihi;
+    if(!c.gelisTarihi) return null;
+    var base=addDays(c.gelisTarihi,getSet(c).offToprak);
+    /* Adımın kendisi TOPRAK ise kendi ertelemesini burada eklemeyiz — çağıran
+       (_adimiYarinaTasi, protokolGorevErtele vb.) bunu ayrıca ekliyor. Eklersek
+       erteleme çift sayılır. Sadece BAŞKA bir adım (örn. "1000 lt su") toprağa
+       referans veriyorsa, toprağın ertelemesini bu adıma da yansıtırız. */
+    if(callerRol!=="toprak"){
+      var ti=protokolRolIdx("toprak");
+      if(ti>=0){
+        var te=(c.ertele&&c.ertele["p"+ti])||0;
+        if(te) base=addDays(base,te);
+      }
+    }
+    return base;
   }
-  return addDays(base,step.gun);
+  /* poset / tiftik / tırmık / hava: gerçek tarih varsa onu, yoksa protokoldeki
+     kendi tanımından (ref:gelis veya ref:toprak — döngü olmaz) tahmin ediyoruz,
+     tahmine o adımın kendi ertelemesi de eklenir. Böylece "tiftikten 2 gün
+     sonra" gibi yeni bir madde, tiftik ertelenirse otomatik kayar. */
+  var idx=protokolRolIdx(ref);
+  if(idx<0) return null;
+  var st=getProtokol()[idx];
+  if(!st) return null;
+  if(adimGercektenYapildiMi(c, idx, st)){
+    var real=adimYapilmaTarihi(c, idx, st);
+    if(real) return real;
+  }
+  var est=protokolTarih(c, st);
+  if(!est) return null;
+  var ert=(c.ertele && c.ertele["p"+idx]) || 0;
+  return ert ? addDays(est, ert) : est;
+}
+function protokolTarih(c, step){
+  if(!step) return null;
+  var refDate=protokolReferansTarihi(c, step.ref, step.rol);
+  if(!refDate) return null;
+  return addDays(refDate, step.gun);
 }
 
 /* ---- Sıcaklık üst sınırları (havadan önceki dönem) ---- */
@@ -6952,8 +6987,18 @@ function renderAyarlar(){
     h+='<div style="margin-top:12px; padding-top:10px; border-top:2px solid #eee;">'
       +'<b>+ Yeni ilaçlama ekle</b>'
       +'<div style="display:flex; gap:6px; margin-top:6px;">'
-      +'<select id="pi_ref" style="flex:1;"><option value="gelis">Geliş gününe göre</option><option value="toprak">Toprak serimine göre</option></select>'
+      +'<select id="pi_ref" style="flex:1;">'
+      +'<option value="gelis">Geliş gününe göre</option>'
+      +'<option value="poset">Poşet kesimine göre</option>'
+      +'<option value="tiftik">Tiftiğe göre</option>'
+      +'<option value="toprak">Toprak serimine göre</option>'
+      +'<option value="tirmik">Tırmığa göre</option>'
+      +'<option value="hava">Hava başlangıcına göre</option>'
+      +'</select>'
       +'<input type="number" id="pi_gun" placeholder="gün (örn. 3 veya -2)" style="width:120px;">'
+      +'</div>'
+      +'<div class="muted" style="font-size:11.5px; margin-top:4px;">'
+      +'Örn. "Tiftiğe göre" + gün: 2 → tiftik ne zaman yapılırsa/ertelenirse bu madde de onunla birlikte kayar.'
       +'</div>'
       +suSliderHTML("pi_su","")
       +ilacDozPickerHTML("pi_ilac_sec","pi_ilac_doz","pi_txt")
