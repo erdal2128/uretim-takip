@@ -112,6 +112,7 @@
 </style>
 </head>
 <body>
+<noscript><div style="padding:20px;background:#fceaea;color:#c0291f;font-weight:700;">⚠️ JavaScript devre dışı veya yüklenmedi</div></noscript>
 <header>
   <button id="hdrBack" onclick="hdrGeri()" style="display:none; background:rgba(255,255,255,.18); color:#fff; border:none; border-radius:10px; padding:8px 14px; font-size:18px; font-weight:600; cursor:pointer; flex:none;">‹</button>
   <span class="title" id="hdrTitle" onclick="goHome()" style="cursor:pointer;">Üretim Takip</span>
@@ -365,7 +366,7 @@ function hasatTartiGetir(oda, tur){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v203";
+var APP_VER = "v205";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -2074,7 +2075,7 @@ function lastOlcum(c){
 }
 
 /* ================= GÖRÜNÜMLER ================= */
-var view = {name:"list", id:null};
+var view = {name:"bugun", id:null};
 var _formPrefillOda=null;
 var _formEditId=null;
 var editGun = -1;
@@ -2095,45 +2096,59 @@ var PHASES = ["Kuluçka dönemi","Toprak dönemi","1. Misel gelişim","2. Misel 
 
 function render(){
   try{
-    refreshSicaklik();
-    if(view.name==="setup"){ renderSetup(); return; }
-    if(!currentRole){ renderLogin(); renderBottomNav(); return; }
+    try{
+      refreshSicaklik();
+    }catch(e){
+      console.warn("refreshSicaklik error:", e);
+    }
+    if(view.name==="setup"){ try{ renderSetup(); }catch(e){ console.error("renderSetup error:", e); } return; }
+    if(!currentRole){
+      try{ renderLogin(); }catch(e){ console.error("renderLogin error:", e); el("app").innerHTML='<div class="card" style="border:1.5px solid #c0291f;background:#fceaea;"><div style="font-weight:700;color:#c0291f;">❌ Login ekranı yükleme hatası</div></div>'; }
+      try{ renderBottomNav(); }catch(e){ console.error("renderBottomNav error:", e); }
+      return;
+    }
     /* Teknisyen rolü SADECE Arızalar ekranını görebilir — farm verisine erişimi yok. */
     if(currentRole==="teknisyen" && view.name!=="arizalar" && view.name!=="faults"){ view.name="faults"; view.id=null; }
-    /* Yeni tab key'ler */
-    if(view.name==="bugun") renderBugun();
-    else if(view.name==="home") renderHome();
-    else if(view.name==="list") renderList();
-    else if(view.name==="rooms"||view.name==="odalar") renderOdalar();
-    else if(view.name==="planning"||view.name==="plan") renderPlan();
-    else if(view.name==="faults"||view.name==="arizalar") renderArizalar();
-    else if(view.name==="reports"||view.name==="raporlar") renderRaporlar();
-    else if(view.name==="settings"||view.name==="ayarlar") renderAyarlar();
-    /* Nested views — detail, form, compare, vb. */
-    else if(view.name==="detail") renderDetail(view.id);
-    else if(view.name==="panoedit") renderPanoEdit(view.id);
-    else if(view.name==="form") renderForm(view.id);
-    else if(view.name==="tur") renderTur();
-    else if(view.name==="gunsonu") renderGunSonu();
-    else if(view.name==="gorevler") renderGorevlerSekme();
-    else if(view.name==="compare") renderCompare(view.id);
-    else if(view.name==="recete") renderRecete();
-    else if(view.name==="audit") renderAudit();
-    else if(view.name==="arsiv") renderArsiv();
-    else if(view.name==="yedekleme") renderYedekleme();
-    else if(view.name==="toplu") renderToplu(view.id);
-    renderBottomNav();
-    updateHdrBack();
+    /* Tüm render çağrılarını güvenli hale getir */
+    var safeCalled = false;
+    try{
+      if(view.name==="bugun"){ renderBugun(); safeCalled=true; }
+      else if(view.name==="home"){ renderHome(); safeCalled=true; }
+      else if(view.name==="list"){ renderList(); safeCalled=true; }
+      else if(view.name==="rooms"||view.name==="odalar"){ renderOdalar(); safeCalled=true; }
+      else if(view.name==="planning"||view.name==="plan"){ renderPlan(); safeCalled=true; }
+      else if(view.name==="faults"||view.name==="arizalar"){ renderArizalar(); safeCalled=true; }
+      else if(view.name==="reports"||view.name==="raporlar"){ renderRaporlar(); safeCalled=true; }
+      else if(view.name==="settings"||view.name==="ayarlar"){ renderAyarlar(); safeCalled=true; }
+      else if(view.name==="detail"){ renderDetail(view.id); safeCalled=true; }
+      else if(view.name==="panoedit"){ renderPanoEdit(view.id); safeCalled=true; }
+      else if(view.name==="form"){ renderForm(view.id); safeCalled=true; }
+      else if(view.name==="tur"){ renderTur(); safeCalled=true; }
+      else if(view.name==="gunsonu"){ renderGunSonu(); safeCalled=true; }
+      else if(view.name==="gorevler"){ renderGorevlerSekme(); safeCalled=true; }
+      else if(view.name==="compare"){ renderCompare(view.id); safeCalled=true; }
+      else if(view.name==="recete"){ renderRecete(); safeCalled=true; }
+      else if(view.name==="audit"){ renderAudit(); safeCalled=true; }
+      else if(view.name==="arsiv"){ renderArsiv(); safeCalled=true; }
+      else if(view.name==="yedekleme"){ renderYedekleme(); safeCalled=true; }
+      else if(view.name==="toplu"){ renderToplu(view.id); safeCalled=true; }
+      if(!safeCalled){ el("app").innerHTML='<div class="card"><div class="muted">View "'+esc(view.name)+'" tanımlanmamış</div></div>'; }
+    }catch(e){
+      console.error("Render view error:", e);
+      el("app").innerHTML='<div class="card" style="border:1.5px solid #c0291f;background:#fceaea;"><div style="font-weight:700;color:#c0291f;">❌ Ekran yükleme hatası</div><div style="font-size:11px;color:#666;margin:4px 0;font-family:monospace;word-break:break-all;">'+esc(""+e.message)+'</div></div>';
+    }
+    try{ renderBottomNav(); }catch(e){ console.error("renderBottomNav:", e); }
+    try{ updateHdrBack(); }catch(e){ console.error("updateHdrBack:", e); }
   }catch(e){
     if(window.console) console.error(e);
     var app=el("app");
     if(app) app.innerHTML='<div class="card" style="border:1.5px solid #c0291f;background:#fceaea;">'
       +'<div style="font-weight:700;color:#c0291f;">Bir hata oluştu</div>'
       +'<div style="font-size:14px;margin:6px 0;">Ekran çizilemedi ama verilerin güvende. Listeye dönmeyi ya da yenilemeyi dene.</div>'
-      +'<button class="btn small" onclick="go(\'list\')">Listeye dön</button> '
+      +'<button class="btn small" onclick="go(\'bugun\')">Bugüne dön</button> '
       +'<button class="btn ghost small" onclick="location.reload()">Yenile</button>'
       +'<div class="muted" style="margin-top:8px;font-size:11px;">'+esc(""+((e&&e.message)||e))+'</div></div>';
-    renderBottomNav();
+    try{ renderBottomNav(); }catch(e2){ console.error("renderBottomNav in error:", e2); }
   }
 }
 var TABS=[
@@ -2438,7 +2453,7 @@ function panoHTML(active){
   return h;
 }
 /* ---------- Genel görevler (protokole bağlı olmayan işler: oda boşaltma/yıkama, temizlik, branda yıkama, kompost indirme vb.) ---------- */
-function getGorevler(){ return loadData().gorevler; }
+function getGorevler(){ try{ return loadData().gorevler||[]; }catch(e){ return []; } }
 function arizaFotoKey(id){ return "utp_arizafoto_"+id; }
 function loadArizaFoto(id){ try{ return JSON.parse(localStorage.getItem(arizaFotoKey(id))||"null"); }catch(e){ return null; } }
 function saveArizaFoto(id,data){ try{ localStorage.setItem(arizaFotoKey(id), JSON.stringify(data)); return true; }catch(e){ toast("Hafıza dolu — fotoğraf kaydedilemedi"); return false; } }
@@ -2956,6 +2971,7 @@ function yarinDegistirKaydet(cid, key){
 
 /* Helper: Kritik uyarıları topla */
 function getCriticalAlerts(){
+  try{
   var d=loadData(), alerts=[];
   
   /* Sıcaklık kritik (>28 veya <16) */
@@ -3018,6 +3034,10 @@ function getCriticalAlerts(){
   
   alerts.sort(function(a,b){return b.severity-a.severity;});
   return alerts;
+  }catch(e){
+    console.warn("getCriticalAlerts error:", e);
+    return [];
+  }
 }
 
 /* Helper: Bugün yapılacak görevleri al ve koridor sırasına göre sort */
@@ -3092,7 +3112,7 @@ function getTourPendingRooms(){
 /* Helper: Son yapılan işlemler (audit log) */
 function getRecentActions(){
   var d=loadData();
-  var actions=(d.auditLog||[]).slice().reverse().slice(0, 5);
+  var actions=(d.settings&&d.settings.audit)?d.settings.audit.slice().reverse().slice(0, 5):[];
   return actions;
 }
 
@@ -3115,14 +3135,16 @@ function getDayProgress(){
 
 /* renderBugun() — Saha personelinin ana çalışma ekranı */
 function renderBugun(){
+  try{
   el("hdrTitle").textContent="Bugün";
   var d=loadData();
+  if(!d||!d.cycles){ el("app").innerHTML='<div class="card"><div class="muted">Veri yüklenmedi. Sayfayı yenile.</div></div>'; return; }
   var bugun=todayISO();
-  var alerts=getCriticalAlerts();
-  var tasks=getTodaysTasks();
-  var tourPending=getTourPendingRooms();
-  var recent=getRecentActions();
-  var progress=getDayProgress();
+  var alerts=getCriticalAlerts()||[];
+  var tasks=getTodaysTasks()||[];
+  var tourPending=getTourPendingRooms()||[];
+  var recent=getRecentActions()||[];
+  var progress=getDayProgress()||{toplam:0, tamamlanan:0, kalan:0, yuzde:0};
   
   var h='';
   
@@ -3132,7 +3154,7 @@ function renderBugun(){
     h+='<div style="position:sticky;top:0;z-index:35;background:#a32d2d;color:#fff;padding:12px 14px 12px 16px;border-bottom:3px solid #7a2020;display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">'
       +'<div style="font-size:14px;font-weight:600;">'
       +'🚨 '+esc(mainAlert.msg)
-      +(alerts.length>1?(' (+'+(alerts.length-1)+' daha)':'')
+      +(alerts.length>1?(' (+'+(alerts.length-1)+' daha)'):'')
       +'</div>'
       +'<button class="del-x" style="margin:0;padding:8px 10px;" onclick="this.parentElement.style.display=\'none\';">×</button>'
       +'</div>';
@@ -3143,7 +3165,7 @@ function renderBugun(){
     +'<div class="card" style="background:var(--green-soft);border:1.5px solid var(--green);">'
     +'<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px;">'
     +'<div>'
-    +'<div style="font-size:14px;color:var(--muted);font-weight:600;">'+fmtDate(new Date(bugun).toISOString())+' — '+todayName()+'</div>'
+    +'<div style="font-size:14px;color:var(--muted);font-weight:600;">'+fmtDate(bugun)+' — '+todayName()+'</div>'
     +'<div style="font-size:24px;font-weight:700;color:var(--green);margin-top:4px;">'+progress.tamamlanan+'/'+progress.toplam+'</div>'
     +'</div>'
     +'<div style="text-align:right;font-size:12px;color:var(--muted);">'+new Date().toLocaleTimeString('tr-TR',{hour:'2-digit',minute:'2-digit'})+'</div>'
@@ -3215,9 +3237,9 @@ function renderBugun(){
     h+='<div class="sec-title" style="margin-top:18px;">📜 Son İşlemler</div>'
       +'<div class="card" style="font-size:12px;font-family:monospace;">';
     recent.forEach(function(r){
-      var zaman=r.zaman?fmtDate(r.zaman).substring(11,16):"--:--";
-      var actor=r.actor?esc(r.actor.substring(0,10)):"Sistem";
-      var action=r.islem?esc(r.islem.substring(0,30)):"...";
+      var zaman=r.at?fmtDateTime(r.at).substring(12,17):"--:--";
+      var actor=r.by?esc(r.by.substring(0,10)):"Sistem";
+      var action=r.action?esc(r.action.substring(0,30)):"...";
       h+='<div style="padding:6px 0;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;">'
         +'<div>'+zaman+' | <strong>'+actor+'</strong></div>'
         +'<div style="text-align:right;color:var(--muted);">'+action+'</div>'
@@ -3234,6 +3256,14 @@ function renderBugun(){
     +'<button class="fab" style="padding:14px 18px;font-size:16px;min-width:50px;background:var(--teal);" onclick="go(\'arizalar\')" title="Arıza ekle">🔧</button>'
     +'</div>'
     +'<div class="muted" style="text-align:center;padding:2px 0 6px;">Üretim Takip '+APP_VER+'</div>';
+  }catch(e){
+    console.error("renderBugun error:", e);
+    el("app").innerHTML='<div class="card" style="border:1.5px solid #c0291f;background:#fceaea;">'
+      +'<div style="font-weight:700;color:#c0291f;">⚠️ Ekran yükleme hatası</div>'
+      +'<div style="font-size:12px;color:#c0291f;margin-top:4px;">'+esc(""+e.message)+'</div>'
+      +'<button class="btn ghost small" style="width:100%;margin-top:8px;" onclick="location.reload()">Sayfayı yenile</button>'
+      +'</div>';
+  }
 }
 
 /* Helper: Görev tamamla (oda veya genel) */
@@ -3321,6 +3351,7 @@ function renderHome(){
 }
 
 /* ============ ESKI LİSTE (detay sayfaları için) ============ */
+function renderList(){
   el("hdrTitle").textContent = "Üretim Takip";
   var d = loadData();
   var active = d.cycles.filter(function(c){return !c.bosaltimTarihi;});
@@ -8049,15 +8080,30 @@ function havaHedef(c){
 }
 
 /* ---------- Olaylar ---------- */
-el("fileRestore").onchange = function(e){ if(e.target.files[0]) restoreJSON(e.target.files[0]); e.target.value=""; };
-
-el("hdrVer").textContent = APP_VER;
-updateCloudBakBadge();
-fbInit();
-document.addEventListener("visibilitychange", function(){ if(document.visibilityState==="hidden"){ saveData(); autoSnapshot(); } });
-window.addEventListener("pagehide", function(){ saveData(); autoSnapshot(); });
-loadRole();
-render();
+try{
+  el("fileRestore").onchange = function(e){ if(e.target.files[0]) restoreJSON(e.target.files[0]); e.target.value=""; };
+  el("hdrVer").textContent = APP_VER;
+  updateCloudBakBadge();
+  fbInit();  // Firebase devre dışı
+  document.addEventListener("visibilitychange", function(){ if(document.visibilityState==="hidden"){ saveData(); autoSnapshot(); } });
+  window.addEventListener("pagehide", function(){ saveData(); autoSnapshot(); });
+  try{
+    loadRole();
+  }catch(e){
+    console.error("loadRole error:", e);
+    currentRole = null;
+  }
+  render();
+}catch(e){
+  console.error("Init fatal error:", e);
+  if(el("app")){
+    el("app").innerHTML='<div class="card" style="border:1.5px solid #c0291f;background:#fceaea;padding:20px;">'
+      +'<div style="font-weight:700;color:#c0291f;font-size:16px;">⚠️ Başlatma hatası</div>'
+      +'<div style="font-size:11px;color:#666;margin:8px 0;font-family:monospace;word-break:break-all;">'+esc(""+e.message)+'</div>'
+      +'<button class="btn small" style="width:100%;margin-top:12px;" onclick="location.reload()">Yenile</button>'
+      +'</div>';
+  }
+}
 /* Açılışta kayıtlı veri bozuksa kullanıcıyı sessizce değil, açıkça uyar.
    Ham veri _bozuk_ anahtarına yedeklendi — üzerine yazılmadan kurtarılabilir. */
 if(_veriOkumaHatasi){
