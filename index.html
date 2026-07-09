@@ -366,7 +366,7 @@ function hasatTartiGetir(oda, tur){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v206";
+var APP_VER = "v209";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -3100,38 +3100,66 @@ function getTourPendingRooms(){
     var gunluk=(c.gunluk||[]);
     var bugunKaydi=gunluk.find(function(g){return g.tarih===bugun;});
     if(!bugunKaydi || !bugunKaydi.kompostC){
-      pending.push({oda:c.oda, odaId:c.id});
+      pending.push({oda:c.oda, odaId:c.id, gelisTarihi:c.gelisTarihi||""});
     }
   });
   
+  /* Kompost geliş tarihine göre YENİDEN ESKİYE (en son gelen kompost en üstte).
+     Aynı gelişte oda adına göre. */
   pending.sort(function(a,b){
-    var aNum=parseInt(a.oda)||0, bNum=parseInt(b.oda)||0;
-    return aNum-bNum;
+    var ag=a.gelisTarihi, bg=b.gelisTarihi;
+    if(ag!==bg) return (ag>bg)?-1:1;   /* büyük tarih (yeni) önce */
+    return ((a.oda||"")<(b.oda||""))?-1:1;
   });
   
   return pending;
 }
 
-/* Helper: Son yapılan işlemler (audit log) */
+/* Helper: Son SAHA işlemleri (sulama, görev, protokol, tur, ölçüm — cihaz/yönetim değil) */
 function getRecentActions(){
   var d=loadData();
-  var actions=(d.settings&&d.settings.audit)?d.settings.audit.slice().reverse().slice(0, 5):[];
-  return actions;
+  var tum=(d.settings&&d.settings.audit)?d.settings.audit.slice():[];
+  /* Sadece sahada yapılan fiili işler gösterilir. Action metnindeki anahtar
+     kelimeye göre filtre — yeni saha action'ları otomatik dahil olur. */
+  var sahaAnahtar=["günlük","ölçüm","sulama","ilaçlama","işlem","görev","hızlı","toplu","hastalık","arıza","kontrol notu"];
+  var haricTut=["reçete","oluşturuldu","bilgisi güncellendi"]; /* yönetim işleri hariç */
+  var saha=tum.filter(function(a){
+    var act=(a.action||"").toLowerCase();
+    if(haricTut.some(function(k){return act.indexOf(k)>=0;})) return false;
+    return sahaAnahtar.some(function(k){return act.indexOf(k)>=0;});
+  });
+  return saha.reverse().slice(0,5);
 }
 
 /* Helper: Günün ilerleme bilgisi */
 function getDayProgress(){
   var d=loadData(), bugun=todayISO();
-  var tumGorevler=getTodaysTasks().concat((d.gorevler||[]).filter(function(g){return !g.done && g.tarih===bugun;}));
-  var tamamlanan=0, toplam=tumGorevler.length;
   
-  /* Tamamlanmış sayısı (gorevler.done=true ve tarih<=bugun) */
-  (getGorevler()||[]).filter(function(g){return g.done && g.tarih<=bugun;}).forEach(function(){tamamlanan++;});
+  /* KALAN: getTodaysTasks zaten bugünkü + geciken, tamamlanmamış işleri verir (tek kaynak) */
+  var kalan=getTodaysTasks().length;
   
+  /* TAMAMLANAN: SADECE bugün tamamlanmış işler.
+     doneAt (ISO timestamp) bugüne aitse sayılır. Eski kayıtlarda doneAt yoksa,
+     görev tarihi bugünse fallback olarak sayılır (geriye dönük uyum). */
+  var tamamlanan=0;
+  function bugunTamamlandiMi(item){
+    if(item.doneAt){ return item.doneAt.substring(0,10)===bugun; }
+    return item.tarih===bugun; /* eski kayıt fallback */
+  }
+  (d.cycles||[]).filter(function(c){return !c.bosaltimTarihi;}).forEach(function(c){
+    (c.odaGorevleri||[]).forEach(function(og){
+      if(og.done && bugunTamamlandiMi(og)) tamamlanan++;
+    });
+  });
+  (getGorevler()||[]).forEach(function(g){
+    if(g.done && bugunTamamlandiMi(g)) tamamlanan++;
+  });
+  
+  var toplam=tamamlanan+kalan;
   return {
     toplam: toplam,
     tamamlanan: tamamlanan,
-    kalan: toplam-tamamlanan,
+    kalan: kalan,
     yuzde: toplam>0?Math.round((tamamlanan/toplam)*100):0
   };
 }
@@ -3154,13 +3182,32 @@ function renderBugun(){
   /* 1. KRİTİK UYARI BANTU (Sticky) */
   if(alerts.length>0){
     var mainAlert=alerts[0];
-    h+='<div style="position:sticky;top:0;z-index:35;background:#a32d2d;color:#fff;padding:12px 14px 12px 16px;border-bottom:3px solid #7a2020;display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">'
-      +'<div style="font-size:14px;font-weight:600;">'
-      +'🚨 '+esc(mainAlert.msg)
-      +(alerts.length>1?(' (+'+(alerts.length-1)+' daha)'):'')
-      +'</div>'
-      +'<button class="del-x" style="margin:0;padding:8px 10px;" onclick="this.parentElement.style.display=\'none\';">×</button>'
+    /* Ana bant: ilk uyarıya dokun → çöz. Sağdaki sayı → tümünü aç/kapa. */
+    h+='<div id="alertBar" style="position:sticky;top:0;z-index:35;background:#a32d2d;color:#fff;border-bottom:3px solid #7a2020;margin-bottom:12px;">'
+      +'<div style="display:flex;align-items:stretch;">'
+      +'<div onclick="gotoAlert(0)" style="flex:1;padding:12px 14px 12px 16px;font-size:14px;font-weight:600;cursor:pointer;display:flex;align-items:center;gap:8px;">'
+      +'<span>🚨 '+esc(mainAlert.msg)+'</span>'
+      +'<span style="margin-left:auto;font-size:12px;opacity:.85;text-decoration:underline;">Çöz →</span>'
       +'</div>';
+    if(alerts.length>1){
+      h+='<button onclick="toggleAlerts()" style="background:rgba(0,0,0,.18);color:#fff;border:none;padding:0 16px;font-size:13px;font-weight:700;cursor:pointer;white-space:nowrap;" id="alertToggleBtn">+'+(alerts.length-1)+' daha ▾</button>';
+    }
+    h+='<button class="del-x" style="margin:0;padding:8px 12px;background:rgba(0,0,0,.18);color:#fff;border:none;" onclick="var b=el(\'alertBar\'); if(b) b.style.display=\'none\';">×</button>'
+      +'</div>';
+    /* Genişleyen liste (varsayılan kapalı) */
+    if(alerts.length>1){
+      h+='<div id="alertList" style="display:none;background:#8f2525;">';
+      alerts.forEach(function(a,i){
+        if(i===0) return; /* ilki üstte zaten */
+        h+='<div onclick="gotoAlert('+i+')" style="padding:10px 16px;border-top:1px solid rgba(255,255,255,.15);font-size:13px;cursor:pointer;display:flex;align-items:center;gap:8px;">'
+          +'<span>'+(a.severity>=2?'🔴':'🟠')+'</span>'
+          +'<span style="flex:1;">'+esc(a.msg)+'</span>'
+          +'<span style="opacity:.8;font-size:11px;text-decoration:underline;">Çöz →</span>'
+          +'</div>';
+      });
+      h+='</div>';
+    }
+    h+='</div>';
   }
   
   /* 2. GÜNÜN ÖZETI KARTI */
@@ -3259,20 +3306,71 @@ function renderBugun(){
   }
 }
 
+/* Kritik uyarı bandı: genişleyen listeyi aç/kapa */
+function toggleAlerts(){
+  var list=el("alertList"), btn=el("alertToggleBtn");
+  if(!list) return;
+  var acik=(list.style.display!=="none");
+  list.style.display=acik?"none":"block";
+  if(btn){
+    var say=list.querySelectorAll("div[onclick]").length;
+    btn.innerHTML=acik?("+"+say+" daha ▾"):("gizle ▴");
+  }
+}
+
+/* Kritik uyarıya dokununca doğrudan çözüm ekranına git */
+function gotoAlert(index){
+  var alerts=getCriticalAlerts();
+  var a=alerts[index];
+  if(!a){ go("bugun"); return; }
+  if(a.tipo==="ariza"){
+    /* Açık arıza → Arızalar ekranı */
+    go("arizalar");
+    return;
+  }
+  if(a.tipo==="kompost" || a.tipo==="temp"){
+    /* Kompost/tur eksik veya sıcaklık kritik → o odanın Günlük Tur ekranı */
+    if(a.odaId){
+      turOdayaGit(a.odaId);
+    } else {
+      go("tur");
+    }
+    return;
+  }
+  /* Bilinmeyen tip → güvenli varsayılan */
+  go("bugun");
+}
+
+/* Belirli bir odaya Günlük Tur ekranında doğrudan git (tek oda modu) */
+function turOdayaGit(odaId){
+  var d=loadData();
+  var active=d.cycles.filter(function(c){return !c.bosaltimTarihi;});
+  /* renderTur ile AYNI sıralama: en yeni → en eski */
+  active.sort(function(a,b){ return cmpDate(b.gelisTarihi||"", a.gelisTarihi||""); });
+  var idx=-1;
+  for(var i=0;i<active.length;i++){ if(active[i].id===odaId){ idx=i; break; } }
+  setTurMod("tek");        /* tek oda moduna geç */
+  turIndex=(idx>=0)?idx:0; /* hedef odanın index'i */
+  view={name:"tur", id:null};
+  window.scrollTo(0,0);
+  render();
+}
+
 /* Helper: Görev tamamla (oda veya genel) */
 function gorevTamamla(id, tipo, cyclicId){
   if(!can("edit")){ noPerm(); return; }
   var d=loadData();
+  var simdi=new Date().toISOString();
   if(tipo==="oda"){
     var c=d.cycles.find(function(x){return x.id===cyclicId;});
     if(c){
       var og=(c.odaGorevleri||[]).find(function(x){return x.id===id;});
-      if(og){ og.done=true; touchCycle(c); saveData(); logAudit("oda görevi tamamlandı", c.oda); render(); }
+      if(og){ og.done=true; og.doneAt=simdi; touchCycle(c); saveData(); logAudit("oda görevi tamamlandı", c.oda); render(); }
     }
   } else if(tipo==="genel"){
     var gorevler=getGorevler()||[];
     var g=gorevler.find(function(x){return x.id===id;});
-    if(g){ g.done=true; saveData(); logAudit("genel görev tamamlandı", g.baslik); render(); }
+    if(g){ g.done=true; g.doneAt=simdi; saveData(); logAudit("genel görev tamamlandı", g.baslik); render(); }
   }
   toast("✓ Tamamlandı");
 }
