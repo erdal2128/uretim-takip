@@ -366,7 +366,7 @@ function hasatTartiGetir(oda, tur){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v209";
+var APP_VER = "v211";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -3112,7 +3112,18 @@ function getTourPendingRooms(){
     return ((a.oda||"")<(b.oda||""))?-1:1;
   });
   
-  return pending;
+  /* Aynı oda adı birden fazla açık döngüde olamaz — tekilleştir.
+     Sıralama en yeniden eskiye olduğu için ilk görülen (en güncel) kalır.
+     Bu, yanlışlıkla açılmış çift kayıtların listeyi kirletmesini önler. */
+  var gorulen={}, tekil=[];
+  pending.forEach(function(p){
+    var ad=(p.oda||"").trim();
+    if(gorulen[ad]) return;
+    gorulen[ad]=true;
+    tekil.push(p);
+  });
+  
+  return tekil;
 }
 
 /* Helper: Son SAHA işlemleri (sulama, görev, protokol, tur, ölçüm — cihaz/yönetim değil) */
