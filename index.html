@@ -117,6 +117,7 @@
   <span class="title" id="hdrTitle" onclick="goHome()" style="cursor:pointer;">Üretim Takip</span>
   <span id="hdrVer" style="font-size:12px; opacity:.75;"></span>
   <span id="syncDot" style="font-size:12px; margin-left:8px;"></span>
+  <span id="cloudBakBadge" onclick="go('yedekleme')" style="font-size:11px; opacity:.7; margin-left:8px; cursor:pointer;" title="Yedekleme ekranını aç"></span>
   <input type="file" id="fileRestore" accept=".json" style="display:none">
 </header>
 <div id="app"></div>
@@ -364,7 +365,7 @@ function hasatTartiGetir(oda, tur){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v194";
+var APP_VER = "v200";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -395,8 +396,26 @@ function loadData(){
      Oturum başına bir kez; hem eski v173 kayıtlarını hem senkron duplicate'lerini düzeltir. */
   var _degMigrasyon = gunlukEskiNotlariAyir(memData);
   var _degTekil = gunlukNotlariTekille(memData);
-  if(_degMigrasyon || _degTekil) saveData();
+  var _degKompostInd = kompostIndirmeGeriyeDonukDoldur(memData);
+  if(_degMigrasyon || _degTekil || _degKompostInd) saveData();
   return memData;
+}
+/* TEK SEFERLİK GEÇİŞ: Zaten aktif olan (kompost içinde, günlük ölçüm giriliyor)
+   odalarda kompostIndirme hiç set edilmemiş olabilir (bu düzeltmeden önce oluşturulmuş
+   odalar). "Oda var = kompost zaten konmuş = indirilmiş" mantığıyla geriye dönük
+   dolduruyoruz — böylece "Yarın planlanan"da anlamsız bir "kompost indirme" görevi
+   kırmızı görünmeye devam etmez. İdempotent, zaten dolu olanlara dokunmaz. */
+function kompostIndirmeGeriyeDonukDoldur(d){
+  if(!d || !d.cycles) return false;
+  var degisti=false;
+  d.cycles.forEach(function(c){
+    if(c.bosaltimTarihi) return; /* boşaltılmış eski odaları geriye dönük değiştirmeye gerek yok */
+    if((!c.kompostIndirme || !c.kompostIndirme.tarih) && c.gelisTarihi){
+      c.kompostIndirme={tarih:c.gelisTarihi};
+      degisti=true;
+    }
+  });
+  return degisti;
 }
 /* TEK SEFERLİK GEÇİŞ (v187 öncesi kayıtlar için): eskiden protokol notları
    ("X yapıldı", "X ertelendi" vb.) sulama alanına karışık yazılıyordu. Bunları
@@ -762,7 +781,7 @@ function partiFromDate(iso){
    ref: "gelis" (kompost gelişi=0) veya "toprak" (toprak serimi=0) */
 var PROTOKOL = [
   {ref:"gelis", gun:3,  tip:"uyari", txt:"3. gün: misel patlarsa ve nem/sıcaklık/amonyak kötüyse poşet erken açılabilir"},
-  {ref:"gelis", gun:6,  tip:"olay", sahip:"ekip", rol:"poset", txt:"Poşet açılır (yetişmezse ertesi gün devam)"},
+  {ref:"kompostindirme", gun:6,  tip:"olay", sahip:"ekip", rol:"poset", txt:"Poşet açılır (yetişmezse ertesi gün devam)"},
   {ref:"gelis", gun:7,  tip:"olay", sahip:"ekip", rol:"tiftik", txt:"Tiftik yapılır"},
   {ref:"gelis", gun:6,  tip:"ilac", sahip:"ziraat", txt:"500 lt su + 250 ml Serenade", tekrarBitisRef:"toprak", tekrarBitisGun:-2, not:"Poşet açıldıktan toprak −2'ye kadar HER GÜN"},
   {ref:"gelis", gun:7,  tip:"uyari", sure:2, sonucSecenekleri:["Ateşlenmedi","Ateşlendi, müdahale edildi"], txt:"7.–8. gün: kompostta ateşlenme — kompost 28-30°ye fırlayabilir, ziraat mühendisi kontrol etsin"},
@@ -773,19 +792,20 @@ var PROTOKOL = [
   {ref:"toprak", gun:1,  tip:"ilac", sahip:"ziraat", txt:"1000 lt su + 500 ml insektisit"},
   {ref:"toprak", gun:3,  tip:"ilac", sahip:"ziraat", txt:"1000 lt su + 2 lt formaldehit (KRİTİK: sarım toprağa geçmediyse 1 gün ertelenebilir; ertelenirse Asena ve tırmık da kayar)"},
   {ref:"toprak", gun:5,  tip:"ilac", sahip:"ziraat", txt:"1000 lt su + 400 ml Asena"},
-  {ref:"toprak", gun:6,  tip:"olay", sahip:"ziraat", txt:"Tırmık −1: oda + kompost biraz ısıtılır (sarım hızlansın)"},
+  {ref:"tirmik", gun:-1, tip:"olay", sahip:"ziraat", txt:"Tırmık −1: oda + kompost biraz ısıtılır (sarım hızlansın)"},
   {ref:"toprak", gun:7,  tip:"olay", sahip:"ekip", rol:"tirmik", txt:"Tırmık (4 kişi ~yarım gün)"},
-  {ref:"toprak", gun:7,  tip:"olay", sahip:"ekip", txt:"Oda yıkanır (tırmık sonrası)"},
-  {ref:"toprak", gun:7,  tip:"uyari", txt:"Mühendis sarım notu al (ince/kalın, yoğun/az)"},
-  {ref:"toprak", gun:10, tip:"olay", sahip:"ziraat", rol:"hava", txt:"Havaya başlanır (tırmık+3; +5'e kayabilir) — ilk suda son 300 lt'ye Vivando · oda 4-5 günde 21-22→18°, CO₂ 2100-2400'e iner (oda sıcaklığı kritik)"},
-  {ref:"toprak", gun:11, tip:"ilac", sahip:"ziraat", txt:"Hava+1: nem zayıfsa Tezguard (nem iyiyse atla); 7-8. güne kadar neme göre sisleme"},
-  {ref:"toprak", gun:16, tip:"olay", sahip:"ziraat", txt:"~Pimler nokta nokta görünür · kompost 19-20° tutulur (tahmini)"},
-  {ref:"toprak", gun:17, tip:"ilac", sahip:"ziraat", txt:"Mantar kendini belli edince klor (2-3 günde bir)"},
-  {ref:"toprak", gun:19, tip:"ilac", sahip:"ziraat", txt:"Bezelye boyutu: oda 18°, kompost 20-21° · 1000 lt su + kalsiyum"},
-  {ref:"toprak", gun:20, tip:"ilac", sahip:"ziraat", txt:"Ceviz boyutu: son su · 1000 lt su + sodyum"},
-  {ref:"toprak", gun:20, tip:"olay", sahip:"ziraat", sure:5, rol:"hasat", txt:"Hasat başlar — 1.g sodyum → 2-3 seyreltme → 4-5 pik → 6 sıfırlama+kök temizliği+2000 lt su (2. 1000 lt'ye hidrojen peroksit). Hasat günü oda 17° (personel girer). Sıfırlama günü kompost 23°'ye çıkar, sonra her gün −1°; +2 gün 1000+1000 lt su (2.1000 lt gübre). CO₂: 1.flaş 2100-2400, 2.flaş 3000-3300. Ağırlıklı 2 flaş; kompost iyiyse 3. Boşaltım son flaşın sıfırlamasından sonra."}
+  {ref:"tirmik", gun:0,  tip:"olay", sahip:"ekip", txt:"Oda yıkanır (tırmık sonrası)"},
+  {ref:"tirmik", gun:0,  tip:"uyari", txt:"Mühendis sarım notu al (ince/kalın, yoğun/az)"},
+  {ref:"tirmik", gun:3,  tip:"olay", sahip:"ziraat", rol:"hava", txt:"Havaya başlanır (tırmık+3; +5'e kayabilir) — ilk suda son 300 lt'ye Vivando · oda 4-5 günde 21-22→18°, CO₂ 2100-2400'e iner (oda sıcaklığı kritik)"},
+  {ref:"hava", gun:1,  tip:"ilac", sahip:"ziraat", txt:"Hava+1: nem zayıfsa Tezguard (nem iyiyse atla); 7-8. güne kadar neme göre sisleme"},
+  {ref:"hava", gun:6,  tip:"olay", sahip:"ziraat", txt:"~Pimler nokta nokta görünür · kompost 19-20° tutulur (tahmini)"},
+  {ref:"hava", gun:7,  tip:"ilac", sahip:"ziraat", txt:"Mantar kendini belli edince klor (2-3 günde bir)"},
+  {ref:"hava", gun:9,  tip:"ilac", sahip:"ziraat", txt:"Bezelye boyutu: oda 18°, kompost 20-21° · 1000 lt su + kalsiyum"},
+  {ref:"hava", gun:10, tip:"ilac", sahip:"ziraat", txt:"Ceviz boyutu: son su · 1000 lt su + sodyum"},
+  {ref:"hava", gun:11, tip:"olay", sahip:"ziraat", sure:5, rol:"hasat", txt:"Hasat başlar — 1.g sodyum → 2-3 seyreltme → 4-5 pik → 6 sıfırlama+kök temizliği+2000 lt su (2. 1000 lt'ye hidrojen peroksit). Hasat günü oda 17° (personel girer). Sıfırlama günü kompost 23°'ye çıkar, sonra her gün −1°; +2 gün 1000+1000 lt su (2.1000 lt gübre). CO₂: 1.flaş 2100-2400, 2.flaş 3000-3300. Ağırlıklı 2 flaş; kompost iyiyse 3. Boşaltım son flaşın sıfırlamasından sonra."},
+  {ref:"gelis", gun:0,  tip:"olay", sahip:"ekip", rol:"kompostindirme", txt:"Kompost indirme"}
 ];
-var PROTOKOL_SURUM = 5; /* v5: 5 sabit günlük Serenade maddesi kaldırıldı, yerine "poşet açıldıktan toprak −2'ye kadar HER GÜN 500 lt su + 250 ml Serenade" aralık kuralı eklendi */
+var PROTOKOL_SURUM = 6; /* v6: Üretim zinciri yeniden kuruldu — Kompost indirme (gelis+0, YENİ) → Poşet (indirmeden+6, artık geliş yerine indirmeye bağlı) → Tiftik (gelis+7, bağımsız) → Toprak (offToprak, bağımsız) → Tırmık (toprak+7) → Hava (artık tırmık+3, eskiden toprak+10 sabitti) → Hasat (artık hava+11, eskiden toprak+20 sabitti). Poşet/tiftik gecikmesi sonrakini ETKİLEMEZ; kompost indirme/toprak/tırmık/hava gecikmesi bir SONRAKİ adımı ETKİLER (otomatik kayar). */
 /* KRİTİK FIX: Kullanıcı protokolünü v158'den (rol sistemi) ÖNCE özelleştirmişse,
    protokolOzellestirildi bayrağı zaten true olduğu için normal senkron mekanizması
    bir daha çalışmaz — bu da "rol" alanının hiç eklenmemesine yol açar! Sonuç: sistem
@@ -798,7 +818,7 @@ function protokolRolleriTamamla(P){
   if(!Array.isArray(P)) return;
   var atanmis={};
   P.forEach(function(s){ if(s && s.rol) atanmis[s.rol]=true; });
-  ["poset","tiftik","toprak","tirmik","hasat","hava"].forEach(function(rol){
+  ["poset","tiftik","toprak","tirmik","hasat","hava","kompostindirme"].forEach(function(rol){
     if(atanmis[rol]) return;
     var re=PROTOKOL_ROL_REGEX[rol]; if(!re) return;
     var sahipGerekli=(rol==="tiftik"||rol==="toprak"||rol==="tirmik")?"ekip":null;
@@ -825,7 +845,7 @@ function getProtokol(){
        Aksi halde her yazılım güncellemesinde kullanıcının sildiği/eklediği satırlar
        sessizce geri gelirdi — bu gerçekten yaşanmış bir hataydı. */
     if(!d.settings.protokolOzellestirildi && d.settings.protokolSurum !== PROTOKOL_SURUM){
-      d.settings.protokol = PROTOKOL.map(function(x){ return {ref:x.ref, gun:x.gun, tip:x.tip, sahip:x.sahip, txt:x.txt, sure:x.sure, tekrar:x.tekrar, rol:x.rol, sonucSecenekleri:x.sonucSecenekleri}; });
+      d.settings.protokol = PROTOKOL.map(protokolSatirKopyala);
       d.settings.protokolSurum = PROTOKOL_SURUM;
       saveData();
     }
@@ -834,13 +854,23 @@ function getProtokol(){
   }
   return PROTOKOL;
 }
+/* Bir protokol satırının TAM kopyasını çıkarır — tüm alanlar dahil.
+   TEK KAYNAK: ensureProtokol() ve protokolVarsayilan() burayı kullanır.
+   Eskiden üç yerde ayrı ayrı elle alan listesi vardı; yeni bir alan (örn.
+   tekrarBitisRef) eklendiğinde üçünü de güncellemek unutulabiliyordu —
+   tam da "poşetten sonra sulama vermedi" hatasının sebebi buydu: varsayılana
+   dönünce/otomatik güncellenince tekrarBitisRef sessizce düşüyordu. */
+function protokolSatirKopyala(x){
+  return {ref:x.ref, gun:x.gun, tip:x.tip, sahip:x.sahip, txt:x.txt, sure:x.sure, tekrar:x.tekrar, rol:x.rol,
+    sonucSecenekleri:x.sonucSecenekleri, tekrarBitisRef:x.tekrarBitisRef, tekrarBitisGun:x.tekrarBitisGun};
+}
 function ensureProtokol(){
   var d=loadData(); if(!d.settings) d.settings={};
   if(!Array.isArray(d.settings.protokol) || !d.settings.protokol.length){
-    d.settings.protokol = PROTOKOL.map(function(x){ return {ref:x.ref, gun:x.gun, tip:x.tip, sahip:x.sahip, txt:x.txt, sure:x.sure, tekrar:x.tekrar, rol:x.rol, sonucSecenekleri:x.sonucSecenekleri}; });
+    d.settings.protokol = PROTOKOL.map(protokolSatirKopyala);
     d.settings.protokolSurum = PROTOKOL_SURUM;
   } else if(!d.settings.protokolOzellestirildi && d.settings.protokolSurum !== PROTOKOL_SURUM){
-    d.settings.protokol = PROTOKOL.map(function(x){ return {ref:x.ref, gun:x.gun, tip:x.tip, sahip:x.sahip, txt:x.txt, sure:x.sure, tekrar:x.tekrar, rol:x.rol, sonucSecenekleri:x.sonucSecenekleri}; });
+    d.settings.protokol = PROTOKOL.map(protokolSatirKopyala);
     d.settings.protokolSurum = PROTOKOL_SURUM;
   }
   protokolRolleriTamamla(d.settings.protokol);
@@ -1043,6 +1073,7 @@ function posetAlerts(){
 function adimGercektenYapildiMi(c, idx, s){
   if(c.done && c.done["p"+idx]) return true;
   var rol=(s&&s.rol)||"";
+  if(rol==="kompostindirme") return !!(c.kompostIndirme && c.kompostIndirme.tarih);
   if(rol==="tiftik") return !!c.tiftikTarihi;
   if(rol==="toprak") return !!c.toprakTarihi;
   if(rol==="tirmik") return !!c.tirmikTarihi;
@@ -1085,9 +1116,11 @@ function adimTamamla(c, idx, opts){
   if(!c.done) c.done={};
   c.done["p"+idx]=true;
 
-  /* Rol'e göre özel tarih alanı — rapor/PDF/performans bunları okur, senkron şart */
+  /* Rol'e göre özel tarih alanı — rapor/PDF/performans bunları okur, senkron şart.
+     "kompostindirme" hariç: onun gerçek verisi Kompost İndirme Planı formundan
+     (c.kompostIndirme) gelir, burada ayrıca yazmıyoruz — SSOT tek kaynakta kalsın. */
   if(alanKey==="hava"){ if(!c.havaBaslangic) c.havaBaslangic=tarih; }
-  else if(alanKey && alanKey!=="poset" && alanKey!=="hasat"){ c[alanKey+"Tarihi"]=tarih; }
+  else if(alanKey && alanKey!=="poset" && alanKey!=="hasat" && alanKey!=="kompostindirme"){ c[alanKey+"Tarihi"]=tarih; }
 
   /* Geçmişe dönük tarih + not */
   if(!c.adimDetay) c.adimDetay={};
@@ -1106,7 +1139,7 @@ function adimGeriAl(c, idx){
   if(st){
     var alanKey = st.rol || protokolAdimAlanKey(st.txt);
     if(alanKey==="hava"){ c.havaBaslangic=""; }
-    else if(alanKey && alanKey!=="poset" && alanKey!=="hasat"){ c[alanKey+"Tarihi"]=""; }
+    else if(alanKey && alanKey!=="poset" && alanKey!=="hasat" && alanKey!=="kompostindirme"){ c[alanKey+"Tarihi"]=""; }
   }
   if(c.adimDetay) delete c.adimDetay["p"+idx];
   touchCycle(c);
@@ -1114,6 +1147,7 @@ function adimGeriAl(c, idx){
 /* Bir protokol adımının fiilen YAPILDIĞI tarihi döndürür (özel alan veya adimDetay). */
 function adimYapilmaTarihi(c, idx, s){
   var rol=(s&&s.rol)||protokolAdimAlanKey(s&&s.txt);
+  if(rol==="kompostindirme") return (c.kompostIndirme&&c.kompostIndirme.tarih)||"";
   if(rol==="tiftik") return c.tiftikTarihi||"";
   if(rol==="toprak") return c.toprakTarihi||"";
   if(rol==="tirmik") return c.tirmikTarihi||"";
@@ -1144,6 +1178,7 @@ function nextTasks(){
   d.cycles.filter(function(c){return !c.bosaltimTarihi;}).forEach(function(c){
     getProtokol().forEach(function(s,idx){
       if(s.silindi) return; /* soft-silinmiş satır — index kaymasın diye array'den hiç çıkarılmıyor */
+      if(s.rol==="kompostindirme") return; /* SSOT: gerçek kaydı Kompost İndirme Planı formunda tutuluyor (c.kompostIndirme) — burada sadece tarih zinciri için referans, ayrıca görev olarak gösterilmez */
       if(s.tip==="uyari") return; /* ateşlenme üstte ayrı kutuda gösteriliyor */
       if(s.tip==="ilac" || s.tip==="su") return; /* sulamalar görev listesinde değil, oda içinde */
       var base=protokolTarih(c,s); if(!base) return;
@@ -1225,7 +1260,7 @@ function protokolAdimAlanKey(txt){
    (örn. "Poşet açılır" → "Poşet kesimi"); sistem artık metne değil, satıra açıkça
    atanmış "rol" etiketine bakıyor. Böylece yeniden adlandırma hiçbir hesaplamayı bozmaz.
    Eski (henüz rol atanmamış) kayıtlar için metin eşleşmesine geriye dönük düşer. */
-var PROTOKOL_ROL_REGEX = {poset:/po\u015fet/i, tiftik:/tiftik/i, toprak:/toprak/i, tirmik:/t\u0131rm\u0131k/i, hasat:/hasat/i, hava:/hava/i};
+var PROTOKOL_ROL_REGEX = {poset:/po\u015fet/i, tiftik:/tiftik/i, toprak:/toprak/i, tirmik:/t\u0131rm\u0131k/i, hasat:/hasat/i, hava:/hava/i, kompostindirme:/kompost indirme/i};
 function protokolRolIdx(rol){
   var P=getProtokol();
   for(var i=0;i<P.length;i++){ if(!P[i].silindi && P[i].tip==="olay" && P[i].rol===rol) return i; }
@@ -4789,7 +4824,13 @@ function saveForm(id){
   [["offTiftik","f_o_tiftik"],["offToprak","f_o_toprak"],["offTirmik","f_o_tirmik"],["offHava","f_o_hava"],["offHasat","f_o_hasat"]].forEach(function(pr){
     var e2=el(pr[1]); var vv=e2?e2.value.trim():""; if(vv!=="" && !isNaN(parseInt(vv,10))) c.offsets[pr[0]]=parseInt(vv,10);
   });
-  if(!id) d.cycles.push(c);
+  if(!id){
+    /* Oda oluşturmak = kompostu koymak = kompostu indirmek. Kompost İndirme Planı
+       (WhatsApp) formu daha önce/sonra daha detaylı bilgiyle (makine/ekip) üzerine
+       yazabilir; burada sadece zaten boşsa dolduruyoruz. */
+    if(!c.kompostIndirme || !c.kompostIndirme.tarih) c.kompostIndirme={tarih:c.gelisTarihi};
+    d.cycles.push(c);
+  }
   touchCycle(c);
   saveData();
   logAudit(id?"oda bilgisi güncellendi":"oda oluşturuldu", c.oda);
@@ -5306,32 +5347,57 @@ function setManuelDonem(id,val){
 var CLOUD_BACKUP_SAAT = 4;
 var CLOUD_YEDEK_LIMIT = 700000; /* güvenli karakter sınırı — Firestore'un 1MB doküman limitine karşı tampon */
 function getLastCloudBackup(){ try{ return localStorage.getItem("utp_cloudbak_last")||null; }catch(e){ return null; } }
-function setLastCloudBackup(){ try{ localStorage.setItem("utp_cloudbak_last", ""+Date.now()); }catch(e){ console.warn("bulut yedek zamanı kaydedilemedi", e); } }
+function setLastCloudBackup(){ try{ localStorage.setItem("utp_cloudbak_last", ""+Date.now()); }catch(e){ console.warn("bulut yedek zamanı kaydedilemedi", e); } updateCloudBakBadge(); }
+/* Header'daki küçük "☁️ X önce" rozeti — göreli zaman, dakikada bir tazelenir (bkz. setInterval) */
+function zamanOnce(ms){
+  if(!ms) return "";
+  var fark=Date.now()-ms;
+  if(fark<60000) return "az önce";
+  var dk=Math.floor(fark/60000);
+  if(dk<60) return dk+" dk önce";
+  var sa=Math.floor(dk/60);
+  if(sa<24) return sa+" saat önce";
+  var gun=Math.floor(sa/24);
+  return gun+" gün önce";
+}
+function updateCloudBakBadge(){
+  var e=document.getElementById("cloudBakBadge"); if(!e) return;
+  var lb=getLastCloudBackup();
+  e.textContent = lb ? ("☁️ "+zamanOnce(+lb)) : "☁️ henüz yedek yok";
+}
 function cloudYedekGerekliMi(){
   var lb=getLastCloudBackup();
   if(!lb) return true;
   return (Date.now()-(+lb)) > CLOUD_BACKUP_SAAT*3600*1000;
 }
 function cloudYedekYaz(docId, payload){
-  if(!FB.ready || !FB.db) return;
+  if(!FB.ready || !FB.db) return Promise.reject(new Error("bulut hazır değil"));
   var json;
-  try{ json=JSON.stringify(payload); }catch(e){ console.warn("bulut yedek: JSON hatası ("+docId+")", e); return; }
+  try{ json=JSON.stringify(payload); }catch(e){ console.warn("bulut yedek: JSON hatası ("+docId+")", e); return Promise.reject(e); }
   if(json.length > CLOUD_YEDEK_LIMIT){
     console.warn("bulut yedek: '"+docId+"' çok büyük ("+json.length+" karakter) — atlandı, cihaz yedeği hâlâ çalışıyor.");
-    return;
+    return Promise.reject(new Error("veri çok büyük"));
   }
-  FB.db.collection("farms").doc(FARM_CODE).collection("yedekler").doc(docId)
+  return FB.db.collection("farms").doc(FARM_CODE).collection("yedekler").doc(docId)
     .set({ts:new Date().toISOString(), gun:todayISO(), veri:payload})
-    .catch(function(e){ console.warn("bulut yedek yazılamadı ("+docId+")", e); });
+    .catch(function(e){ console.warn("bulut yedek yazılamadı ("+docId+")", e); throw e; });
 }
 function cloudYedekTetikle(){
   if(!cloudYedekGerekliMi()) return;
   if(!FB.ready) return; /* internet yoksa sessizce atla, bir sonraki fırsatta dener */
   var d=loadData();
   var slot=new Date().getDay(); /* 0-6, haftalık rotasyon — sınırsız büyümeyi engeller */
-  cloudYedekYaz("aktif_"+slot, {cycles:d.cycles||[], gorevler:d.gorevler||[], settings:d.settings||{}});
-  cloudYedekYaz("arsiv_"+slot, {arsiv:d.arsiv||[]});
-  setLastCloudBackup();
+  var aktifP=cloudYedekYaz("aktif_"+slot, {cycles:d.cycles||[], gorevler:d.gorevler||[], settings:d.settings||{}});
+  cloudYedekYaz("arsiv_"+slot, {arsiv:d.arsiv||[]}).catch(function(){}); /* arşiv ayrı, best-effort — büyükse atlanır, ana yedeği engellemez */
+  aktifP.then(function(){
+    /* KRİTİK: zaman damgasını ancak yazma GERÇEKTEN başarılı olduktan sonra kaydet.
+       Eskiden yazma denemesi başlar başlamaz (sonucu beklemeden) kaydediliyordu —
+       yazma sessizce başarısız olsa bile "az önce yedeklendi" görünüyordu. */
+    setLastCloudBackup();
+    /* Yedekleme ekranı o an açıksa, orada da anında görünsün — arka planda otomatik
+       tetiklenince ekran kendini yenilemiyordu, üstteki rozetle "farklı saat" gösteriyordu. */
+    if(typeof view!=="undefined" && view && view.name==="yedekleme") render();
+  }).catch(function(){ /* ana yedek de başarısız oldu — zaman kaydedilmedi, bir sonraki döngüde tekrar dener */ });
 }
 /* ---------- Otomatik yedek (cihaz içi) + hatırlatma ---------- */
 function setLastBackup(){ try{ localStorage.setItem("utp_meta", JSON.stringify({lastFileBackup:new Date().toISOString()})); }catch(e){ console.warn("yedek zamanı kaydedilemedi", e); } }
@@ -5916,6 +5982,11 @@ function planToOda(id){
   }
   var m2=odaM2Get(odaN);
   var c={id:uid(), oda:odaN, kompostFirma:x.firma||"", gelisTarihi:x.cikis, partiNo:partiFromDate(x.cikis), alanM2:(m2!==null?String(m2):""), gunluk:[], hava:[], hasat:[]};
+  /* Oda oluşturmak = kompostu koymak = kompostu indirmek. Ayrı bir "kompost indirme"
+     görevi beklememeli — Kompost İndirme Planı (WhatsApp) formu daha detaylı bilgiyle
+     (makine/ekip) üzerine yazabilir, ama en azından tarih baştan dolu, "yarın planlı"
+     diye kırmızı görünmez. */
+  c.kompostIndirme={tarih:c.gelisTarihi};
   d.cycles.push(c);
   touchCycle(c);
   x.done=true;
@@ -6095,7 +6166,7 @@ function resetRecete(){
   if(!can("manage")) return noPerm();
   if(!confirm("Reçete varsayılana dönsün mü? Eklediğin/değiştirdiğin adımlar gider.")) return;
   var d=loadData(); if(!d.settings) d.settings={};
-  d.settings.protokol = PROTOKOL.map(function(x){ return {ref:x.ref, gun:x.gun, tip:x.tip, sahip:x.sahip, txt:x.txt, sure:x.sure, tekrar:x.tekrar, rol:x.rol, sonucSecenekleri:x.sonucSecenekleri}; });
+  d.settings.protokol = PROTOKOL.map(protokolSatirKopyala);
   receteEdit=-1; saveData(); toast("Varsayılan reçete yüklendi"); render();
 }
 
@@ -6655,11 +6726,17 @@ function cloudYedekZorla(){
   if(!FB.ready){ toast("Bulut bağlantısı yok — internete bağlanınca tekrar dene"); return; }
   var d=loadData();
   var slot=new Date().getDay();
-  cloudYedekYaz("aktif_"+slot, {cycles:d.cycles||[], gorevler:d.gorevler||[], settings:d.settings||{}});
-  cloudYedekYaz("arsiv_"+slot, {arsiv:d.arsiv||[]});
-  setLastCloudBackup();
-  toast("☁️ Buluta yedeklendi");
-  render();
+  toast("☁️ Yedekleniyor...");
+  var aktifP=cloudYedekYaz("aktif_"+slot, {cycles:d.cycles||[], gorevler:d.gorevler||[], settings:d.settings||{}});
+  cloudYedekYaz("arsiv_"+slot, {arsiv:d.arsiv||[]}).catch(function(){}); /* arşiv best-effort, ana yedeği engellemez */
+  aktifP.then(function(){
+    setLastCloudBackup();
+    toast("☁️ Buluta yedeklendi");
+    render();
+  }).catch(function(e){
+    console.warn("manuel bulut yedek başarısız", e);
+    toast("⚠️ Bulut yedeği başarısız oldu — internet bağlantını kontrol et");
+  });
 }
 function cloudYedekleriGetir(){
   if(!FB.ready || !FB.db){ toast("Bulut bağlantısı yok"); return; }
@@ -7159,14 +7236,16 @@ function renderAyarlar(){
     h+='<div style="margin-top:10px;"><input type="text" id="yeni_gorevtur" placeholder="örn. ilaçlama, bakım, nakliye">'
       +'<button class="btn small" style="margin-top:6px;" onclick="gorevTurEkle(el(\'yeni_gorevtur\').value)">+ Görev türü ekle</button></div>';
     h+='</div>';
-    var _silinenP=(loadData().settings.protokol||[]).map(function(s,idx){return {s:s,idx:idx};}).filter(function(x){return x.s.silindi;});
+    var _silinenP=(loadData().settings.protokol||[]).map(function(s,idx){return {s:s,idx:idx};}).filter(function(x){return x.s.silindi && !x.s.kaliciSilindi;});
     if(_silinenP.length){
       h+='<div class="card"><div class="sec-title" style="margin-top:0;">🗑 Silinen Satırlar ('+_silinenP.length+')</div>'
-        +'<div class="muted" style="margin-bottom:8px;">Sildiğin reçete satırları burada — yanlışlıkla sildiysen geri getirebilirsin. Kalıcı olarak kaybolmuyor.</div>';
+        +'<div class="muted" style="margin-bottom:8px;">Sildiğin reçete satırları burada — yanlışlıkla sildiysen geri getirebilirsin. Kalıcı silmedikçe kaybolmaz.</div>';
       _silinenP.forEach(function(x){
-        h+='<div style="display:flex;justify-content:space-between;align-items:center;padding:5px 2px;border-bottom:1px solid #eee;"><span style="text-decoration:line-through;color:#999;">'+esc(x.s.txt)+'</span>'
-          +'<button class="btn ghost small" onclick="protokolSatirGeriGetir('+x.idx+')">↩ Geri getir</button></div>';
+        h+='<div style="display:flex;justify-content:space-between;align-items:center;padding:5px 2px;border-bottom:1px solid #eee;gap:6px;"><span style="text-decoration:line-through;color:#999;flex:1;">'+esc(x.s.txt)+'</span>'
+          +'<button class="btn ghost small" onclick="protokolSatirGeriGetir('+x.idx+')">↩ Geri getir</button>'
+          +'<button class="del-x" onclick="protokolSatirKaliciSil('+x.idx+')" title="Kalıcı sil">×</button></div>';
       });
+      h+='<button class="btn ghost small" style="margin-top:10px;" onclick="protokolSilinenleriTemizle()">🗑 Tümünü kalıcı olarak temizle ('+_silinenP.length+')</button>';
       h+='</div>';
     }
   }
@@ -7235,6 +7314,28 @@ function protokolSatirGeriGetir(idx){
   d.settings.protokolOzellestirildi=true;
   saveData(); toast("Geri getirildi"); render();
 }
+/* Kalıcı silme: "Silinen Satırlar" listesinden bir daha görünmesin. Yine P.splice
+   ETMİYORUZ — aynı index kayması riski (yukarıdaki protokolSatirSil'deki not
+   geçerli). Sadece kaliciSilindi işaretliyoruz; dizi konumu, dolayısıyla
+   odalardaki geçmiş ertele/tamamlama kayıtları asla bozulmaz. */
+function protokolSatirKaliciSil(idx){
+  if(!can("manage")) return noPerm();
+  var d=loadData(); ensureProtokol();
+  var P=d.settings.protokol; if(!P||!P[idx]) return;
+  if(!confirm('"'+P[idx].txt+'" listeden tamamen kaldırılsın mı? Bir daha "Geri getir" ile çıkmaz (odalardaki geçmiş kayıtlar etkilenmez).')) return;
+  P[idx].kaliciSilindi=true;
+  saveData(); toast("Kalıcı olarak temizlendi"); render();
+}
+function protokolSilinenleriTemizle(){
+  if(!can("manage")) return noPerm();
+  var d=loadData(); ensureProtokol();
+  var P=d.settings.protokol; if(!P) return;
+  var n=P.filter(function(x){return x.silindi && !x.kaliciSilindi;}).length;
+  if(!n){ toast("Temizlenecek satır yok"); return; }
+  if(!confirm(n+' silinmiş satır listeden tamamen kaldırılsın mı? Bir daha geri getirilemez (odalardaki geçmiş kayıtlar etkilenmez).')) return;
+  P.forEach(function(x){ if(x.silindi) x.kaliciSilindi=true; });
+  saveData(); toast("Silinen satırlar temizlendi"); render();
+}
 function protokolGorevEkle(){
   if(!can("manage")) return noPerm();
   var ref=el("pg_ref").value, gun=parseInt(el("pg_gun").value,10), txt=(el("pg_txt").value||"").trim(), sahip=el("pg_sahip").value;
@@ -7290,7 +7391,7 @@ function protokolVarsayilan(){
   if(!can("manage")) return noPerm();
   if(!confirm("Tüm reçete (görev + ilaçlama) varsayılan haline dönsün mü? Yaptığın tüm değişiklikler ve eklemeler silinir.")) return;
   var d=loadData(); if(!d.settings) d.settings={};
-  d.settings.protokol=PROTOKOL.map(function(x){ return {ref:x.ref, gun:x.gun, tip:x.tip, sahip:x.sahip, txt:x.txt, sure:x.sure, tekrar:x.tekrar, rol:x.rol, sonucSecenekleri:x.sonucSecenekleri}; });
+  d.settings.protokol=PROTOKOL.map(protokolSatirKopyala);
   d.settings.protokolSurum=PROTOKOL_SURUM;
   saveData(); toast("Reçete varsayılana döndü"); render();
 }
@@ -7554,6 +7655,7 @@ function havaHedef(c){
 el("fileRestore").onchange = function(e){ if(e.target.files[0]) restoreJSON(e.target.files[0]); e.target.value=""; };
 
 el("hdrVer").textContent = APP_VER;
+updateCloudBakBadge();
 fbInit();
 document.addEventListener("visibilitychange", function(){ if(document.visibilityState==="hidden"){ saveData(); autoSnapshot(); } });
 window.addEventListener("pagehide", function(){ saveData(); autoSnapshot(); });
@@ -7574,6 +7676,7 @@ if(_veriOkumaHatasi){
 autoSnapshotThrottled();
 /* Başarısız senkron denemelerini periyodik olarak tekrar dene (internet geri gelince otomatik kurtarır) */
 setInterval(function(){ if(FB.ready){ fbPushDirty(); fbPushDirtyGorev(); fbPushSettings(); cloudYedekTetikle(); } }, 30000);
+setInterval(updateCloudBakBadge, 60000);
 if("serviceWorker" in navigator){
   window.addEventListener("load", function(){
     navigator.serviceWorker.register("sw.js").catch(function(e){ console.warn("sw register", e); });
