@@ -365,7 +365,7 @@ function hasatTartiGetir(oda, tur){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v200";
+var APP_VER = "v201";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -1609,7 +1609,7 @@ function toggleTask(cid, idx){
       adimDetayKutusuAc(cid, idx, alanKey);
       return;
     }
-    if(!adimTamamla(c, idx, {})) return; /* sıra engeli — sessizce dur */
+    if(!adimTamamla(c, idx, {})){ toast("İşlem kaydedilmedi — önceki adım henüz tamamlanmamış"); render(); return; }
   }
   saveData(); render();
 }
@@ -2238,7 +2238,7 @@ function adimDetayKaydet(cid, idx, key){
   var c=loadData().cycles.find(function(x){return x.id===cid;}); if(!c) return;
   var tarih=(el("adk_tarih")&&el("adk_tarih").value)||todayISO();
   /* SSOT: tek yazma kapısı — bayrak, özel tarih (c.tiftikTarihi vb.) ve günlük not birlikte */
-  if(!adimTamamla(c, idx, {tarih:tarih})){ closeWarnBox(); return; } /* sıra engeli reddedildi */
+  if(!adimTamamla(c, idx, {tarih:tarih})){ closeWarnBox(); toast("Kaydedilmedi — önceki adım henüz tamamlanmamış"); render(); return; }
   c[key+"Personel"]=(el("adk_personel")&&el("adk_personel").value.trim())||"";
   c[key+"Dogru"]=!!(el("adk_dogru")&&el("adk_dogru").checked);
   c[key+"Not"]=(el("adk_not")&&el("adk_not").value.trim())||"";
@@ -4663,13 +4663,23 @@ function formOdaDegisti(){
   if(!sel || !box) return;
   box.innerHTML = odaGecmisHastalikHTML(sel.value, _formEditId||null);
 }
+/* SSOT: Tiftik/Toprak/Tırmık artık BURADAN girilmiyor — tek giriş kapısı Günlük Tur'un
+   "detay kutusu". Eskiden burada da ayrı bir form vardı; iki giriş noktası aynı veriye
+   farklı şekilde yazınca (biri sessizce reddedebiliyordu — bkz. oncekiAdimTamamMi)
+   kafa karıştırıyordu. Şimdi sadece son durumu gösterir. */
 function stepBlock(key,label,c){
-  function v(k){ return c && c[k]!=null ? esc(c[k]) : ""; }
-  function ck(k){ return c && c[k] ? "checked" : ""; }
-  return '<label>'+label+' tarihi</label><input type="date" id="f_'+key+'_t" value="'+v(key+"Tarihi")+'">'
-    + '<div class="field-row"><div><label>'+label+' personeli</label><input type="text" id="f_'+key+'_p" value="'+v(key+"Personel")+'"></div></div>'
-    + '<div class="chk"><input type="checkbox" id="f_'+key+'_d" '+ck(key+"Dogru")+'><label>Doğru yapıldı</label></div>'
-    + '<input type="text" id="f_'+key+'_n" value="'+v(key+"Not")+'" placeholder="Not (neresi yanlış oldu, gözlem...)">';
+  function v(k){ return c && c[k]!=null ? c[k] : ""; }
+  var tarih=v(key+"Tarihi"), personel=v(key+"Personel"), dogru=v(key+"Dogru"), not_=v(key+"Not");
+  var h='<div style="font-weight:600;margin-bottom:4px;">'+esc(label)+'</div>';
+  if(!tarih){
+    h+='<div class="muted" style="font-size:13px;margin-bottom:6px;">Henüz yapılmadı.</div>';
+  } else {
+    h+='<div style="font-size:14.5px;">'+fmtDate(tarih)+(dogru?' <span style="color:#1f7a4d;">✓</span>':'')
+      +(personel?(' · <span class="muted">'+esc(personel)+'</span>'):'')+'</div>';
+    if(not_) h+='<div class="muted" style="font-size:12.5px;margin-top:2px;">'+esc(not_)+'</div>';
+  }
+  if(c && c.id) h+='<button class="btn ghost small" style="margin-top:6px;" onclick="turOdadaAc(\''+c.id+'\')">📋 '+(tarih?"Tur\u2019dan d\u00fczenle":"Tur\u2019dan gir")+'</button>';
+  return h;
 }
 function opt(value,c,key,label){
   var sel = (c && (c[key]||"")===value) ? "selected" : "";
@@ -4764,24 +4774,9 @@ function saveForm(id){
   }
   c.gelisTarihi = el("f_gelis").value;
   c.partiNo = partiFromDate(c.gelisTarihi);
-  ["tiftik","toprak","tirmik"].forEach(function(k){
-    var eskiTarih = c[k+"Tarihi"];
-    var yeniTarih = el("f_"+k+"_t").value;
-    /* Yeni bir tarih giriliyorsa (önceden boştu) ve sıra atlanıyorsa uyar — sert engel değil */
-    if(!eskiTarih && yeniTarih && k!=="tiftik" && !oncekiAdimTamamMi(c,k)){
-      yeniTarih = ""; /* onaylanmadıysa bu alanı boş bırak, diğer alanlar yine de kaydedilsin */
-    }
-    c[k+"Tarihi"]=yeniTarih;
-    c[k+"Personel"]=el("f_"+k+"_p").value.trim();
-    c[k+"Dogru"]=el("f_"+k+"_d").checked;
-    var nEl=el("f_"+k+"_n"); c[k+"Not"]=nEl?nEl.value.trim():"";
-    /* SSOT senkron: tarih yeni girildiyse tamamla, silindiyse geri al — bayrak hep hizalı */
-    var piK=protokolRolIdx(k);
-    if(piK>=0){
-      if(yeniTarih && !eskiTarih) protokolGoreviTamamla(c, k, yeniTarih);
-      else if(!yeniTarih && eskiTarih) adimGeriAl(c, piK);
-    }
-  });
+  /* Tiftik/Toprak/Tırmık artık bu formdan yazılmıyor — SSOT: tek giriş kapısı
+     Günlük Tur'un detay kutusu (adimDetayKaydet). Burada sadece stepBlock ile
+     salt-okunur gösteriliyor. */
   /* Diğer Üretim İşlemleri (poşet, oda yıkama, hasat vb.) — geçmişe yönelik düzenleme.
      SSOT: her adım tek kapıdan (adimTamamla/adimGeriAl) yazılır. */
   if(!c.done) c.done={};
