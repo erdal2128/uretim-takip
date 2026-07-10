@@ -366,7 +366,7 @@ function hasatTartiGetir(oda, tur){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v218";
+var APP_VER = "v236";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -1123,9 +1123,17 @@ function adimTamamla(c, idx, opts){
   if(alanKey==="hava"){ if(!c.havaBaslangic) c.havaBaslangic=tarih; }
   else if(alanKey && alanKey!=="poset" && alanKey!=="hasat" && alanKey!=="kompostindirme"){ c[alanKey+"Tarihi"]=tarih; }
 
-  /* Geçmişe dönük tarih + not */
+  /* Geçmişe dönük tarih + not + (tiftik/toprak/tırmık DIŞINDAKİ adımlar için)
+     kim yaptı / doğru mu — bunlar rapor okumadığı için buraya YAZILABİLİR,
+     tiftik/toprak/tırmık'ın kendi özel alanlarına (rapor okur) DOKUNULMAZ. */
   if(!c.adimDetay) c.adimDetay={};
-  c.adimDetay["p"+idx]={tarih:tarih, not:opts.not||((c.adimDetay["p"+idx]&&c.adimDetay["p"+idx].not)||"")};
+  var oncekiDetay=c.adimDetay["p"+idx]||{};
+  c.adimDetay["p"+idx]={
+    tarih:tarih,
+    not:(opts.not!=null?opts.not:oncekiDetay.not)||"",
+    personel:(opts.personel!=null?opts.personel:oncekiDetay.personel)||"",
+    dogru:(opts.dogru!=null?opts.dogru:oncekiDetay.dogru)||false
+  };
 
   if(!opts.sessiz) gunlukNotTariheEkle(c, tarih, st.txt+" yapıldı");
   touchCycle(c);
@@ -1281,6 +1289,21 @@ function adimGosterMetni(c, idx, st, tarih){
   var d=c && c.yarinDegisiklik && c.yarinDegisiklik["p"+idx];
   if(d && d.txt && d.t===tarih) return d.txt;
   return st.txt;
+}
+/* siradakiProtokolAdimi'nin tersi: en son TAMAMLANMIŞ olay tipi adım.
+   c.adimDetay["p"+idx].tarih her tamamlanan adımda evrensel olarak tutulur
+   (poşet dahil, rol'e özel alanlara ihtiyaç yok) — SSOT'tan okunur. */
+function sonYapilanOlayAdimi(c){
+  var best=null;
+  getProtokol().forEach(function(s,idx){
+    if(s.silindi || s.tip!=="olay") return;
+    if(!adimGercektenYapildiMi(c,idx,s)) return;
+    var detay=c.adimDetay && c.adimDetay["p"+idx];
+    var tarih=detay?detay.tarih:null;
+    if(!tarih) return;
+    if(!best || tarih>best.tarih){ best={idx:idx, tarih:tarih, txt:s.txt}; }
+  });
+  return best;
 }
 function siradakiProtokolAdimi(c){
   var best=null;
@@ -1526,25 +1549,10 @@ function kontrolKararSec(cid, idx, secim){
   touchCycle(c); saveData(); toast("Kaydedildi: "+secim); render();
 }
 function turSiradakiAdimHTML(c){
-  var sd=siradakiProtokolAdimi(c);
+  /* NOT: "Sıradaki adım" checkbox/buton bloğu buradan Odalar sekmesindeki
+     "Protokol Özeti"ne taşındı (odaProtokolOzetSatiriHTML) — aynı toggleTask/
+     protokolYarinaCek fonksiyonlarını kullanıyor, veri yazımı değişmedi. */
   var h="";
-  if(sd){
-    var today=todayISO();
-    if(sd.t<=today){
-      var done=adimGercektenYapildiMi(c, sd.idx, getProtokol()[sd.idx]);
-      h += '<div style="margin-top:8px; padding-top:8px; border-top:1px solid #eee;">'
-        + '<label style="display:flex; align-items:center; gap:8px; font-size:14px; cursor:pointer;">'
-        + '<input type="checkbox" '+(done?'checked':'')+' onchange="toggleTask(\''+c.id+'\','+sd.idx+')" style="width:22px;height:22px; flex:none;">'
-        + '<span>'+(sd.t<today?'<span style="color:#c0291f;">Gecikmiş —</span> ':'<b>Bugün:</b> ')+esc(sd.txt)+' — yapıldı mı?</span>'
-        + '</label></div>';
-    } else {
-      var yarin=addDays(today,1);
-      h += '<div style="margin-top:8px; padding-top:8px; border-top:1px solid #eee;">'
-        + '<div class="muted" style="font-size:12px;">Sıradaki adım: <b>'+esc(sd.txt)+'</b> — beklenen '+fmtDate(sd.t)+(sd.t===yarin?' (yarın)':'')+'</div>'
-        + '<button class="btn ghost small" style="margin-top:4px;" onclick="protokolYarinaCek(\''+c.id+'\','+sd.idx+')">✓ Yarın '+esc(sd.txt)+' yapılsın</button>'
-        + '</div>';
-    }
-  }
   var sartlar=aktifSartliKurallar(c);
   sartlar.forEach(function(sr){
     var k=sr.kural;
@@ -1810,6 +1818,15 @@ function gunEtiket(c){
 function addDays(iso,n){
   var t=parseISO(iso); if(t===null) return null;
   var d=new Date(t + n*86400000);
+  var m=("0"+(d.getUTCMonth()+1)).slice(-2); var dd=("0"+d.getUTCDate()).slice(-2);
+  return d.getUTCFullYear()+"-"+m+"-"+dd;
+}
+/* Ay ekleme — periyodik bakım/kalibrasyon aralıkları için (6 ayda bir, yılda
+   bir vb). Ay taşmalarını (örn. 31 Ocak + 1 ay) JS Date kendi normalize eder. */
+function addMonths(iso,n){
+  var t=parseISO(iso); if(t===null) return null;
+  var d=new Date(t);
+  d.setUTCMonth(d.getUTCMonth()+n);
   var m=("0"+(d.getUTCMonth()+1)).slice(-2); var dd=("0"+d.getUTCDate()).slice(-2);
   return d.getUTCFullYear()+"-"+m+"-"+dd;
 }
@@ -2549,6 +2566,99 @@ function arizaTopluGonder(){
   toast("✓ WhatsApp açıldı — grubu seç, mesaj hazır");
   render();
 }
+/* ============ PERİYODİK BAKIM / KALİBRASYON ============
+   Arızalardan (reaktif — bir şey bozulunca) tamamen ayrı bir kavram:
+   proaktif, takvime bağlı tekrar eden bakımlar (CO2 sensör kalibrasyonu
+   6 ayda bir, araç muayenesi yılda/2 yılda bir vb). Aralık AY cinsinden
+   tek bir sayı — "6 ay", "12 ay" (yıl), "24 ay" (2 yıl) hepsini kapsar,
+   ayrı yıl/ay birimi seçtirmeye gerek yok. */
+function getPeriyodikBakim(){
+  var d=loadData();
+  if(!d.settings) d.settings={};
+  if(!Array.isArray(d.settings.periyodikBakim)) d.settings.periyodikBakim=[];
+  return d.settings.periyodikBakim;
+}
+function periyodikBakimEkle(ad, aralikAy, sonYapilan){
+  if(!can("edit")) return noPerm();
+  ad=(ad||"").trim(); if(!ad){ toast("Bakım adı gir"); return; }
+  var ay=parseInt(aralikAy,10); if(!ay||ay<1){ toast("Geçerli bir aralık (ay) gir"); return; }
+  var L=getPeriyodikBakim();
+  L.push({id:uid(), ad:ad, aralikAy:ay, sonYapilan:sonYapilan||"", not:""});
+  saveData(); toast("Eklendi"); _pbFormAcik=false; render();
+}
+function periyodikBakimYapildi(id, tarih){
+  if(!can("edit")) return noPerm();
+  var L=getPeriyodikBakim();
+  var x=L.find(function(i){return i.id===id;}); if(!x) return;
+  x.sonYapilan=tarih||todayISO();
+  saveData(); toast("Kaydedildi"); render();
+}
+function periyodikBakimSil(id){
+  if(!can("manage")) return noPerm();
+  var d=loadData();
+  d.settings.periyodikBakim=getPeriyodikBakim().filter(function(i){return i.id!==id;});
+  saveData(); toast("Silindi"); render();
+}
+function periyodikBakimDurum(x, today){
+  if(!x.sonYapilan) return "hicYapilmadi";
+  var sonraki=addMonths(x.sonYapilan, x.aralikAy);
+  if(sonraki<today) return "gecikti";
+  if(daysBetween(today,sonraki)<=30) return "yaklasiyor";
+  return "uzak";
+}
+var _pbFormAcik=false;
+function periyodikBakimHTML(){
+  var L=getPeriyodikBakim().slice();
+  var today=todayISO();
+  /* Aciliyete göre sırala: gecikti > yaklaşıyor > hiç yapılmadı > uzak */
+  var siraPuan={gecikti:0, yaklasiyor:1, hicYapilmadi:2, uzak:3};
+  L.sort(function(a,b){ return siraPuan[periyodikBakimDurum(a,today)]-siraPuan[periyodikBakimDurum(b,today)]; });
+
+  var h='<div class="card"><div class="sec-title" style="margin-top:0;display:flex;justify-content:space-between;align-items:center;">'
+    +'<span>🔧 Periyodik Bakım / Kalibrasyon</span>'
+    +(can("edit")?('<button class="btn ghost small" onclick="_pbFormAcik=!_pbFormAcik;render();">'+(_pbFormAcik?'Vazgeç':'+ Yeni')+'</button>'):'')
+    +'</div>'
+    +'<div class="muted" style="margin-bottom:8px;">CO2 sensör kalibrasyonu, araç muayenesi gibi takvime bağlı, tekrar eden bakımlar — arıza değil, önceden planlı iş.</div>';
+
+  if(_pbFormAcik){
+    h+='<div style="padding:10px;background:var(--gray-soft);border-radius:8px;margin-bottom:10px;">'
+      +'<label>Bakım adı</label><input type="text" id="pb_ad" placeholder="ör. CO2 sensörü kalibrasyonu">'
+      +'<label>Aralık (ay)</label><input type="number" inputmode="numeric" id="pb_aralik" placeholder="ör. 6 (yılda bir=12, 2 yılda bir=24)">'
+      +'<label>Son yapılma tarihi (biliniyorsa)</label><input type="date" id="pb_son" value="'+today+'">'
+      +'<button class="btn small" style="margin-top:8px;" onclick="periyodikBakimEkle(el(\'pb_ad\').value, el(\'pb_aralik\').value, el(\'pb_son\').value)">Ekle</button>'
+      +'</div>';
+  }
+
+  if(!L.length){
+    h+='<div class="muted" style="padding:8px 0;">Henüz periyodik bakım tanımlanmadı.</div>';
+  } else {
+    L.forEach(function(x){
+      var durum=periyodikBakimDurum(x,today);
+      var sonraki=x.sonYapilan?addMonths(x.sonYapilan,x.aralikAy):null;
+      var renk = (durum==="gecikti")?"var(--red)":(durum==="yaklasiyor")?"var(--amber)":"var(--line)";
+      var bg = (durum==="gecikti")?"#fdf3f3":"transparent";
+      h+='<div style="padding:10px;border-left:4px solid '+renk+';background:'+bg+';border-bottom:1px solid var(--line);border-radius:6px;margin-bottom:2px;">'
+        +'<div style="font-weight:700;font-size:14px;">'+esc(x.ad)+' <span class="muted" style="font-weight:400;font-size:12px;">('+x.aralikAy+' ayda bir)</span></div>';
+      if(x.sonYapilan){
+        h+='<div style="font-size:12.5px;color:var(--muted);margin-top:2px;">Son yapılan: '+fmtDate(x.sonYapilan)+'</div>';
+        var durumKelime = durum==="gecikti"?" — GECİKTİ":(durum==="yaklasiyor"?" — YAKLAŞIYOR":"");
+        h+='<div style="font-size:13px;margin-top:2px;'+(durum==="gecikti"?'color:var(--red);font-weight:700;':(durum==="yaklasiyor"?'color:var(--amber);font-weight:700;':''))+'">Sıradaki: '+fmtDate(sonraki)+durumKelime+'</div>';
+      } else {
+        h+='<div style="font-size:13px;color:var(--red);font-weight:600;margin-top:2px;">Henüz hiç yapılmadı</div>';
+      }
+      if(can("edit")){
+        h+='<div style="display:flex;gap:6px;margin-top:7px;">'
+          +'<button class="btn small" onclick="periyodikBakimYapildi(\''+x.id+'\')">✓ Bugün yapıldı</button>'
+          +(can("manage")?('<button class="btn ghost small" onclick="periyodikBakimSil(\''+x.id+'\')">Sil</button>'):'')
+          +'</div>';
+      }
+      h+='</div>';
+    });
+  }
+  h+='</div>';
+  return h;
+}
+
 function renderArizalar(){
   el("hdrTitle").textContent="Arızalar";
   var d=loadData();
@@ -2575,6 +2685,8 @@ function renderArizalar(){
   }
   /* Not: Arıza bildirimi artık kişiye değil GRUBA — WhatsApp mesaj hazır açılır,
      grup seçilir. Teknisyen numarası uyarısı bu yüzden kaldırıldı. */
+
+  h += periyodikBakimHTML();
 
   if(can("edit")){
     h += arizaEkleFormHTML();
@@ -5773,13 +5885,7 @@ function turOdaKartIcHTML(c, ge, showExtra){
         +'<input type="hidden" class="tur_su" value=""><input type="hidden" id="tsulama_'+c.id+'" class="tur_sulama" value="'+esc(ge.sulama||"")+'">')
     +turSiradakiAdimHTML(c)
     +turNotAlaniHTML(c)
-    +(showExtra?(
-      '<div style="margin-top:10px;padding-top:10px;border-top:1px dashed #ddd;">'
-      +'<div style="font-weight:600;font-size:13px;margin-bottom:4px;">📜 İşlem Geçmişi</div>'
-      +odaIslemGecmisiHTML(c)
-      +'</div>'
-      +hasatTakipKart(c)
-    ):'');
+    +(showExtra?hasatTakipKart(c):'');
 }
 function renderTur(){
   el("hdrTitle").textContent = "Günlük tur";
@@ -5788,8 +5894,10 @@ function renderTur(){
   var tarihVal = _turTarihVal || todayISO();
   var mod = getTurMod();
   function gunKaydiBul(c){ return (c.gunluk||[]).find(function(g){return g.tarih===tarihVal;})||{}; }
-  var h='<div class="card"><div><label>Tarih</label><input type="date" id="tur_tarih" value="'+tarihVal+'" onchange="turTarihDegis()"></div>'
-    +'<div class="muted" style="margin-top:4px;">Her odaya o günün ölçümlerini gir. Boş bıraktığın oda atlanır. Daha önce girilen veri varsa aşağıda görünür — Ana Ekran\'dan girilen de burada çıkar.</div>'
+  var h='<div class="card">'
+    +(mod==="tek"?('<div><label>Tarih</label><input type="date" id="tur_tarih" value="'+tarihVal+'" onchange="turTarihDegis()"></div>'
+      +'<div class="muted" style="margin-top:4px;">Bu odaya o günün ölçümlerini gir. Daha önce girilen veri varsa aşağıda görünür.</div>')
+      :('<div class="muted">📊 Tüm odaların bugünkü özeti. Satıra dokun → o odanın giriş ekranına gider.</div>'))
     +'<div style="margin-top:8px; text-align:right;"><button class="btn ghost small" onclick="turModDegistir()">'+(mod==="tek"?"📋 Liste görünümü":"➡️ Tek oda görünümü")+'</button></div>'
     +'</div>';
   if(active.length===0){
@@ -5814,15 +5922,11 @@ function renderTur(){
       +'</div>';
     h+='<button class="btn ghost" style="width:100%; margin-top:10px;" onclick="go(\'list\')">‹ Listeye dön</button>';
   } else {
-    active.forEach(function(c,turIdx){
-      var st=stageOf(c);
-      h+='<div class="card" data-cid="'+c.id+'" style="padding:12px;">'
-        +'<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">'
-        +'<span style="font-weight:700; font-size:18px;"><span class="muted" style="font-size:13px; font-weight:400;">'+(turIdx+1)+'.</span> '+esc(c.oda)+'</span><span class="badge '+st.cls+'">'+st.t+'</span></div>'
-        +turOdaKartIcHTML(c, gunKaydiBul(c), false)
-        +'</div>';
-    });
-    h+='<button class="btn" style="width:100%; margin-top:4px;" onclick="saveTur()">Hepsini kaydet</button>';
+    /* Liste modu artık yoğun tablo (panoHTML) — Firma, Oda, Gün, Puan, Derece,
+       Bugün işlem tek bakışta. Satıra dokunma → panoEdit (özet) → "Günlük Tur'u
+       aç" → turOdadaAc → o odanın TEK ODA modundaki tam ekranına atlar.
+       Böylece SSOT korunur: veri girişi hep tek odaya odaklanmış ekrandan. */
+    h += panoHTML(active);
     h+='<button class="btn ghost" style="width:100%; margin-top:10px;" onclick="go(\'list\')">‹ Geri</button>';
   }
   el("app").innerHTML=h;
@@ -6524,73 +6628,523 @@ function planHatirlatici(){
   return h;
 }
 
+/* ============ PLANLAMA — ÜRETİM TAKVİMİ / YAKLAŞAN İŞLER / ODA TAKVİMİ ============
+   Hiçbir yeni veri modeli gerektirmez: beklenenTakvim(c) protokol offsetlerinden
+   zaten hesaplıyordu, önceden sadece tek oda detayında gömülüydü. Burada tüm
+   aktif odalara genişletilip Planlama ekranında gösteriliyor (SSOT). */
+
+/* Bir adımın durumu: gerçekleşti mi, gecikti mi, ne zaman bekleniyor */
+function takvimAdimDurum(adim, bugun){
+  if(adim.ger) return "yapildi";
+  if(!adim.beklenen) return "bilinmiyor";
+  if(adim.beklenen < bugun) return "gecikti";
+  return "bekleniyor";
+}
+
+/* 1. ÜRETİM TAKVİMİ — tüm odalar, kompakt yatay zaman çizgisi (Kompost dahil,
+   Boşaltma protokolde tanımlı olmadığı için sadece gerçekleştiyse gösterilir —
+   tahmini boşaltma tarihi UYDURULMAZ). */
+function uretimTakvimiHTML(active){
+  if(!active.length) return '<div class="muted" style="padding:8px 0;">Aktif oda yok.</div>';
+  var bugun=todayISO();
+  var arr=active.slice().sort(function(a,b){ return cmpDate(b.gelisTarihi||"", a.gelisTarihi||""); });
+  var h='<div style="overflow-x:auto;"><table style="font-size:12.5px;"><thead><tr>'
+    +'<th>Oda</th><th>Kompost</th><th>Tiftik</th><th>Toprak</th><th>Tırmık</th><th>Hava</th><th>Hasat</th><th>Boşaltma</th>'
+    +'</tr></thead><tbody>';
+  arr.forEach(function(c){
+    var tk=beklenenTakvim(c);
+    var byAd={}; tk.forEach(function(a){ byAd[a.ad]=a; });
+    function hucre(adim){
+      if(!adim) return '<td class="note">—</td>';
+      var durum=takvimAdimDurum(adim,bugun);
+      var tarih=adim.ger||adim.beklenen;
+      if(!tarih) return '<td class="note">—</td>';
+      var renk = durum==="yapildi"?"var(--green)":(durum==="gecikti"?"var(--red)":"var(--muted)");
+      var isim = durum==="yapildi"?"✓ ":(durum==="gecikti"?"⚠️ ":"");
+      return '<td style="color:'+renk+';white-space:nowrap;">'+isim+fmtDate(tarih).substring(0,5)+'</td>';
+    }
+    h+='<tr onclick="odaTakvimAcKapa(\''+c.id+'\')" style="cursor:pointer;">'
+      +'<td><b>'+esc(c.oda)+'</b></td>'
+      +'<td style="white-space:nowrap;">'+(c.gelisTarihi?fmtDate(c.gelisTarihi).substring(0,5):'—')+'</td>'
+      +hucre(byAd["Tiftik"])+hucre(byAd["Toprak"])+hucre(byAd["Tırmık"])+hucre(byAd["Hava"])+hucre(byAd["1. Hasat"])
+      +'<td class="note">'+(c.bosaltimTarihi?('✓ '+fmtDate(c.bosaltimTarihi).substring(0,5)):'—')+'</td>'
+      +'</tr>';
+    /* Genişleyen oda takvimi satırı — açık/kapalı durumu _planTakvimAcik'te
+       kalıcı tutulur (sadece DOM'da tutulsaydı, checkbox işaretlenince
+       render() tüm ekranı yenileyip satırı sessizce kapatırdı). */
+    var acikMi = !!(_planTakvimAcik && _planTakvimAcik[c.id]);
+    h+='<tr id="odatakvim_'+c.id+'" style="'+(acikMi?'':'display:none;')+'"><td colspan="8" style="padding:0;">'+odaTakvimiHTML(c)+'</td></tr>';
+  });
+  h+='</tbody></table></div>'
+    +'<div class="muted" style="margin-top:6px;font-size:12px;">Satıra dokun: odanın detaylı takvimini aç/kapat. ⚠️ = beklenen tarih geçti, henüz yapılmadı.</div>';
+  return h;
+}
+var _planTakvimAcik={};
+function odaTakvimAcKapa(cid){
+  _planTakvimAcik[cid] = !_planTakvimAcik[cid];
+  render();
+}
+
+/* 3. ODA TAKVİMİ — tek odanın geleceği, "Bugün / X gün sonra" göreceli dille. */
+function odaTakvimiHTML(c){
+  var bugun=todayISO();
+  var tk=beklenenTakvim(c);
+  var h='<div style="padding:10px 14px;background:var(--gray-soft);">';
+  tk.forEach(function(a){
+    var tarih=a.ger||a.beklenen;
+    if(!tarih){ return; }
+    var durum=takvimAdimDurum(a,bugun);
+    var fark=daysBetween(bugun,tarih);
+    var etiket = durum==="yapildi" ? ("✓ Yapıldı — "+fmtDate(tarih))
+      : (fark===0?"Bugün":(fark>0?(fark+" gün sonra"):((-fark)+" gün önce — GECİKTİ")));
+    var renk = durum==="yapildi"?"var(--green)":(durum==="gecikti"?"var(--red)":"var(--text)");
+    h+='<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px dashed #ddd;font-size:13px;">'
+      +'<span>'+esc(a.ad)+'</span>'
+      +'<span style="color:'+renk+';font-weight:600;">'+etiket+'</span>'
+      +'</div>';
+  });
+  if(c.bosaltimTarihi){
+    h+='<div style="display:flex;justify-content:space-between;padding:4px 0;font-size:13px;">'
+      +'<span>Boşaltma</span><span style="color:var(--green);font-weight:600;">✓ '+fmtDate(c.bosaltimTarihi)+'</span></div>';
+  } else {
+    h+='<div class="muted" style="font-size:12px;padding-top:4px;">Boşaltma tarihi için protokolde tahmini offset tanımlı değil — gerçekleşince burada görünecek.</div>';
+  }
+  h+='</div>';
+  return h;
+}
+
+/* 2. YAKLAŞAN İŞLER — tüm odalardan, seçili gün aralığında (3/7/15), henüz
+   yapılmamış protokol adımları. Tarihe göre gruplanıp sıralanır. */
+var _yaklasanGunAraligi = 7;
+function yaklasanGunAraligiSec(n){ _yaklasanGunAraligi=n; render(); }
+function yaklasanIslerHTML(active){
+  var bugun=todayISO();
+  var sinir=addDays(bugun,_yaklasanGunAraligi);
+  var liste=[];
+  active.forEach(function(c){
+    beklenenTakvim(c).forEach(function(a){
+      if(a.ger || !a.beklenen) return; /* zaten yapılmış veya tarihsiz — atla */
+      if(a.beklenen>=bugun && a.beklenen<=sinir){
+        liste.push({tarih:a.beklenen, oda:c.oda, islem:a.ad});
+      }
+    });
+  });
+  liste.sort(function(x,y){ return cmpDate(x.tarih,y.tarih); });
+  var h='<div style="display:flex;gap:6px;margin-bottom:10px;">'
+    +[3,7,15,30].map(function(n){
+      return '<button class="btn '+(_yaklasanGunAraligi===n?'':'ghost')+' small" onclick="yaklasanGunAraligiSec('+n+')">'+n+' gün</button>';
+    }).join('')
+    +'</div>';
+  if(!liste.length){
+    h+='<div class="muted" style="padding:8px 0;">Önümüzdeki '+_yaklasanGunAraligi+' gün içinde planlı işlem yok.</div>';
+    return h;
+  }
+  var sonTarih=null;
+  liste.forEach(function(x){
+    if(x.tarih!==sonTarih){
+      h+='<div style="font-weight:700;margin-top:10px;font-size:13px;color:var(--muted);">'+fmtDate(x.tarih)+' '+gunAdi(x.tarih)+'</div>';
+      sonTarih=x.tarih;
+    }
+    h+='<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--line);">'
+      +'<span><b>'+esc(x.oda)+'</b></span><span class="note">'+esc(x.islem)+'</span>'
+      +'</div>';
+  });
+  return h;
+}
+
+/* 5. ODA DOLULUK PLANI — gerçek veriden 3 durum (Üretimde/Beklemede/Boş).
+   NOT: "Hazırlıkta" ve "Temizlikte" doküman istese de sistemde hiç izlenmiyor
+   (PHASES listesinde yok, ayrı bir alan da yok) — burada UYDURULMAZ. Boş
+   odalar için Kompost Planlaması'na bakılıp planlı gelişi olan "Beklemede"
+   sayılır, olmayan "Boş" kalır. Hasat aşamasındaki dolu odalar ayrıca
+   işaretlenir — boşaltma için kesin tarih yok ama hasat = boşaltmaya en
+   yakın aşama olduğu protokolden biliniyor (kesin tarih uydurulmadan sinyal). */
+/* Kompakt tek satır: bu odada son yapılan olay + sıradaki olay + aksiyon
+   butonları. Sulama/ilaçlama HARİÇ — sadece protokol kilometre taşları
+   (tiftik/toprak/tırmık/hava/hasat/poşet/kompost indirme). Aksiyon butonları
+   toggleTask/protokolGorevErtele/protokolYarinaCek'i AYNEN çağırır (SSOT,
+   Günlük Tur'daki ile birebir aynı mantık, kod tekrarı yok). */
+/* Sade tarih düzenleme — tiftik/toprak/tırmık'ın "kim yaptı/doğru mu" modalından
+   farklı, sadece tarih. Poşet/hava/hasat/kompost indirme gibi adımlarda ve
+   zaten yapılmış herhangi bir adımın tarihini düzeltmede kullanılır. Yazma
+   yine adimTamamla üzerinden (SSOT), tarihi opts.tarih ile geçirir. */
+function adimTarihDuzenleAc(cid, idx){
+  var wm=el("warnModal"); if(!wm) return;
+  var c=loadData().cycles.find(function(x){return x.id===cid;}); if(!c) return;
+  var s=getProtokol()[idx]; if(!s) return;
+  var detay=c.adimDetay && c.adimDetay["p"+idx];
+  var mevcutTarih=detay?detay.tarih:(_turTarihVal||todayISO());
+  wm.innerHTML='<div class="modal-bg" onclick="if(event.target===this) closeWarnBox();"><div class="modal">'
+    +'<div style="font-weight:700;font-size:17px;margin-bottom:8px;">'+esc(s.txt)+'</div>'
+    +'<label>Tarih</label><input type="date" id="atd_tarih" value="'+mevcutTarih+'">'
+    +'<div class="row" style="margin-top:14px;"><button class="btn" onclick="adimTarihKaydet(\''+cid+'\','+idx+')">Kaydet</button>'
+    +'<button class="btn ghost" onclick="closeWarnBox()">Vazgeç</button></div>'
+    +'</div></div>';
+}
+function adimTarihKaydet(cid, idx){
+  var c=loadData().cycles.find(function(x){return x.id===cid;}); if(!c) return;
+  var tarih=(el("atd_tarih")&&el("atd_tarih").value)||todayISO();
+  if(!adimTamamla(c, idx, {tarih:tarih})){ closeWarnBox(); toast("Kaydedilmedi — önceki adım henüz tamamlanmamış"); render(); return; }
+  touchCycle(c); saveData(); closeWarnBox(); toast("Tarih kaydedildi"); render();
+}
+
+/* Sadece "son yapılan"ı değil, TAMAMLANMIŞ TÜM olay-tipi adımları listeler —
+   herhangi birinin tarihini/detayını düzeltmek için. Ana kartı kalabalıklaştırmaz
+   (talep üzerine açılır), ama geçmişteki bir hatayı düzeltme imkânı sağlar. */
+function gecmisIslemleriGosterAc(cid){
+  var wm=el("warnModal"); if(!wm) return;
+  var c=loadData().cycles.find(function(x){return x.id===cid;}); if(!c) return;
+  var rows=[];
+  getProtokol().forEach(function(s,idx){
+    if(s.silindi || s.tip!=="olay") return;
+    if(!adimGercektenYapildiMi(c,idx,s)) return;
+    var detay=c.adimDetay && c.adimDetay["p"+idx];
+    rows.push({idx:idx, txt:s.txt, tarih:detay?detay.tarih:null});
+  });
+  rows.sort(function(a,b){ return (a.tarih||"")<(b.tarih||"")?-1:((a.tarih||"")>(b.tarih||"")?1:0); });
+  var body = rows.length ? rows.map(function(r){
+    return '<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid #eee;font-size:13.5px;">'
+      +'<span>'+esc(r.txt)+' — '+(r.tarih?fmtDate(r.tarih):'—')+'</span>'
+      +'<button class="btn ghost small" onclick="closeWarnBox();adimDuzenleAc(\''+cid+'\','+r.idx+')">Düzelt</button>'
+      +'</div>';
+  }).join('') : '<div class="muted" style="padding:8px 0;">Henüz tamamlanmış işlem yok.</div>';
+  wm.innerHTML='<div class="modal-bg" onclick="if(event.target===this) closeWarnBox();"><div class="modal">'
+    +'<div style="font-weight:700;font-size:17px;margin-bottom:8px;">'+esc(c.oda)+' — geçmiş işlemler</div>'
+    +body
+    +'<div class="row" style="margin-top:14px;"><button class="btn ghost" onclick="closeWarnBox()">Kapat</button></div>'
+    +'</div></div>';
+}
+/* Tiftik/Toprak/Tırmık DIŞINDAKİ olay-tipi adımlar için zengin düzenleme —
+   aynı görünüm (kim yaptı/doğru mu/tarih/not), ama c.adimDetay["p"+idx] içine
+   yazar (rapor okumadığı için güvenli, tiftik/toprak/tırmık'ın rapor-okunan
+   özel alanlarına dokunmaz). "Üretim protokolünün kalbi" — her adımda aynı
+   zenginlikte düzeltme imkânı. */
+function adimTamDuzenleAc(cid, idx){
+  var wm=el("warnModal"); if(!wm) return;
+  var c=loadData().cycles.find(function(x){return x.id===cid;}); if(!c) return;
+  var s=getProtokol()[idx]; if(!s) return;
+  var detay=(c.adimDetay && c.adimDetay["p"+idx])||{};
+  var L=getPersonelList();
+  var chips = L.length
+    ? '<div style="display:flex;flex-wrap:wrap;gap:6px;margin:6px 0;">'
+      + L.map(function(p){ return '<button type="button" class="btn ghost small" style="padding:4px 10px;" onclick="atdPersonelEkle(\''+esc(p.ad).replace(/'/g,"\\'")+'\')">+ '+esc(p.ad)+'</button>'; }).join('')
+      + '</div>'
+    : '<div class="muted" style="font-size:12px;margin:4px 0;">Ayarlar → Personel\'e kişi eklersen burada dokunarak seçersin.</div>';
+  wm.innerHTML='<div class="modal-bg" onclick="if(event.target===this) closeWarnBox();"><div class="modal">'
+    +'<div style="font-weight:700;font-size:17px;margin-bottom:8px;">'+esc(s.txt)+' — detaylar</div>'
+    +'<label>Tarih</label><input type="date" id="atd_tarih" value="'+(detay.tarih||_turTarihVal||todayISO())+'">'
+    +'<label style="margin-top:8px;">Kim yaptı? (listeden dokun veya elle yaz)</label>'
+    +chips
+    +'<input type="text" id="atd_personel" value="'+esc(detay.personel||"")+'" placeholder="ör. Ahmet, Mehmet, dış ekip 2 kişi">'
+    +'<div class="chk" style="margin-top:8px;"><input type="checkbox" id="atd_dogru" '+(detay.dogru?"checked":"")+'><label>Doğru yapıldı</label></div>'
+    +'<input type="text" id="atd_not" value="'+esc(detay.not||"")+'" placeholder="Not (neresi yanlış oldu, gözlem...)" style="margin-top:6px;">'
+    +'<div class="row" style="margin-top:14px;"><button class="btn" onclick="adimTamKaydet(\''+cid+'\','+idx+')">Kaydet</button>'
+    +'<button class="btn ghost" onclick="closeWarnBox()">Vazgeç</button></div>'
+    +'</div></div>';
+}
+function atdPersonelEkle(ad){
+  var inp=el("atd_personel"); if(!inp) return;
+  var mevcut=inp.value.trim();
+  if(mevcut.split(",").map(function(x){return x.trim();}).indexOf(ad)>=0) return;
+  inp.value = mevcut ? (mevcut+", "+ad) : ad;
+}
+function adimTamKaydet(cid, idx){
+  var c=loadData().cycles.find(function(x){return x.id===cid;}); if(!c) return;
+  var tarih=(el("atd_tarih")&&el("atd_tarih").value)||todayISO();
+  var personel=(el("atd_personel")&&el("atd_personel").value.trim())||"";
+  var dogru=!!(el("atd_dogru")&&el("atd_dogru").checked);
+  var not=(el("atd_not")&&el("atd_not").value.trim())||"";
+  if(!adimTamamla(c, idx, {tarih:tarih, personel:personel, dogru:dogru, not:not})){
+    closeWarnBox(); toast("Kaydedilmedi — önceki adım henüz tamamlanmamış"); render(); return;
+  }
+  touchCycle(c); saveData(); closeWarnBox(); toast("Kaydedildi"); render();
+}
+/* Bir adım idx'i için doğru düzenleme modalını açar: tiftik/toprak/tırmık
+   kendi rapor-okunan zengin modalını (adimDetayKutusuAc) kullanır, diğer
+   TÜM adımlar (poşet/hava/hasat/kompost indirme/vb.) aynı zenginlikte ama
+   c.adimDetay tabanlı genel modalı (adimTamDuzenleAc) kullanır. Tek yerden
+   karar verilir — "hangi adımda hangi modal" sorusu burada çözülür. */
+function adimDuzenleAc(cid, idx){
+  var s=getProtokol()[idx]; if(!s) return;
+  var alanKey=s.rol||protokolAdimAlanKey(s.txt);
+  if(alanKey==="tiftik"||alanKey==="toprak"||alanKey==="tirmik"){
+    adimDetayKutusuAc(cid, idx, alanKey);
+  } else {
+    adimTamDuzenleAc(cid, idx);
+  }
+}
+function odaProtokolOzetSatiriHTML(c){
+  var son=sonYapilanOlayAdimi(c);
+  var sd=siradakiProtokolAdimi(c);
+  var today=todayISO();
+  var gecikti = sd && sd.t<today;
+  var bugunMu = sd && sd.t===today;
+  var nokta = gecikti?"🔴":(bugunMu?"🟡":"🟢");
+  var seritRenk = gecikti?"var(--red)":(bugunMu?"var(--amber)":"var(--line)");
+
+  var h='<div style="padding:12px;border-left:4px solid '+seritRenk+';border-bottom:8px solid var(--bg);background:'+(gecikti?'#fdf3f3':'#fff')+';border-radius:10px;margin-bottom:2px;">';
+
+  /* Başlık: durum noktası + oda adı */
+  h+='<div style="font-weight:700;font-size:15px;">'+nokta+' '+esc(c.oda)+'</div>';
+
+  /* Son yapılan — küçük, ikincil satır */
+  if(son){
+    h+='<div style="font-size:12px;color:var(--muted);margin-top:2px;">Son yapılan: '+esc(son.txt)+' — '+fmtDate(son.tarih)
+      +(can("edit")?' <span onclick="adimDuzenleAc(\''+c.id+'\','+son.idx+')" style="text-decoration:underline;cursor:pointer;">düzelt</span>':'')
+      +(can("edit")?' · <span onclick="gecmisIslemleriGosterAc(\''+c.id+'\')" style="text-decoration:underline;cursor:pointer;">diğer geçmiş işlemler</span>':'')
+      +'</div>';
+  }
+
+  if(sd){
+    var sdStep=getProtokol()[sd.idx];
+    var sdAlanKey=(sdStep&&sdStep.rol)||protokolAdimAlanKey(sdStep?sdStep.txt:"");
+    var zenginModal=(sdAlanKey==="tiftik"||sdAlanKey==="toprak"||sdAlanKey==="tirmik");
+    var onaylaFonk = zenginModal ? ("toggleTask('"+c.id+"',"+sd.idx+")") : ("adimTamDuzenleAc('"+c.id+"',"+sd.idx+")");
+    var gecikmisVeyaBugun = sd.t<=today;
+
+    h+='<div style="border-top:1px solid var(--line);margin-top:8px;padding-top:8px;">'
+      +'<div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.03em;">Sıradaki İş</div>'
+      +'<div style="font-weight:700;font-size:16px;margin-top:2px;">'+esc(sd.txt)+'</div>'
+      +'<div style="font-size:12.5px;color:var(--muted);margin-top:3px;">📅 Planlanan: <b>'+fmtDate(sd.t)+'</b></div>';
+
+    h+='<div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.03em;margin-top:8px;">Durum</div>';
+    if(gecikmisVeyaBugun && can("edit")){
+      /* Sırası gelmiş: "Durum" satırı kendisi dokunulabilir aksiyon —
+         tıklayınca yapıldı işaretlenir (tiftik/toprak/tırmık'ta detay kutusu,
+         diğerlerinde sade tarih kutusu açılır). */
+      h+='<div onclick="'+onaylaFonk+'" style="cursor:pointer;margin-top:3px;padding:8px 10px;background:var(--green-soft);color:var(--green-dark);border-radius:8px;font-weight:600;font-size:13.5px;">'
+        +(gecikti?'⚠️ Gecikti — Yapıldı mı? Dokun':'Bugün — Yapıldı mı? Dokun')
+        +'</div>';
+    } else {
+      h+='<div style="margin-top:3px;font-size:13px;color:var(--muted);">Henüz zamanı gelmedi</div>';
+    }
+
+    if(can("edit")){
+      h+='<div style="display:flex;gap:8px;margin-top:10px;">';
+      if(gecikmisVeyaBugun){
+        h+='<button class="btn ghost small" style="flex:1;" onclick="protokolGorevErtele(\''+c.id+'\','+sd.idx+',\'diger\')">Ertele (1 gün)</button>';
+      } else {
+        h+='<button class="btn small" style="flex:1;" onclick="'+onaylaFonk+'">Erken Yap</button>';
+      }
+      h+='</div>';
+    }
+    h+='</div>';
+  } else if(!son){
+    h+='<div class="muted" style="font-size:13px;margin-top:4px;">Protokol adımı yok</div>';
+  }
+
+  h+='</div>';
+  return h;
+}
+function odaProtokolOzetListesiHTML(active){
+  if(!active.length) return '<div class="muted" style="padding:8px 0;">Dolu oda yok.</div>';
+  var today=todayISO();
+  /* Aciliyete göre sırala: en gecikmiş en üstte, sonra bugün, sonra en yakın
+     gelecek tarih. Sıradaki adımı olmayan odalar (protokol bitmiş vb.) en sona. */
+  var arr=active.slice().sort(function(a,b){
+    var sa=siradakiProtokolAdimi(a), sb=siradakiProtokolAdimi(b);
+    var ta = sa?daysBetween(today,sa.t):99999;
+    var tb = sb?daysBetween(today,sb.t):99999;
+    return ta-tb;
+  });
+  var h='';
+  arr.forEach(function(c){ h+=odaProtokolOzetSatiriHTML(c); });
+  return h;
+}
+
+function odaDolulukPlaniHTML(active, tumOdaAdlari){
+  var d=loadData();
+  var plan=getPlan().filter(function(x){return !x.done;});
+  var byOda={}; active.forEach(function(c){ byOda[normalizeOda(c.oda)]=c; });
+  var uretimde=[], beklemede=[], bos=[];
+  tumOdaAdlari.forEach(function(o){
+    var c=byOda[normalizeOda(o)];
+    if(c){
+      var st=stageOf(c);
+      var hasatAsamasi = /^Hasat/.test(st.t);
+      uretimde.push({oda:o, durum:st.t, hasat:hasatAsamasi});
+    } else {
+      var pl=plan.find(function(x){return normalizeOda(x.oda)===normalizeOda(o);});
+      if(pl){ beklemede.push({oda:o, tarih:pl.cikis, firma:pl.firma}); }
+      else { bos.push({oda:o}); }
+    }
+  });
+  var h='';
+  h+='<div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;">'
+    +'<span class="badge b-harvest">🌱 Üretimde ('+uretimde.length+')</span>'
+    +'<span class="badge b-amber">⏳ Beklemede ('+beklemede.length+')</span>'
+    +'<span class="badge b-gray">◻ Boş ('+bos.length+')</span>'
+    +'</div>';
+  if(uretimde.length){
+    h+='<div style="font-weight:600;font-size:13px;margin-top:8px;margin-bottom:4px;">🌱 Üretimde</div>';
+    uretimde.forEach(function(x){
+      h+='<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--line);font-size:13px;">'
+        +'<span><b>'+esc(x.oda)+'</b></span>'
+        +'<span class="note">'+esc(x.durum)+(x.hasat?' <span style="color:var(--red);font-weight:600;">🔜 yakında boşalabilir</span>':'')+'</span>'
+        +'</div>';
+    });
+  }
+  if(beklemede.length){
+    h+='<div style="font-weight:600;font-size:13px;margin-top:12px;margin-bottom:4px;">⏳ Beklemede (planlı geliş var)</div>';
+    beklemede.forEach(function(x){
+      h+='<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--line);font-size:13px;">'
+        +'<span><b>'+esc(x.oda)+'</b></span>'
+        +'<span class="note">'+fmtDate(x.tarih)+(x.firma?(' · '+esc(x.firma)):'')+'</span>'
+        +'</div>';
+    });
+  }
+  if(bos.length){
+    h+='<div style="font-weight:600;font-size:13px;margin-top:12px;margin-bottom:4px;">◻ Boş (plansız)</div>'
+      +'<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(50px,1fr));gap:6px;">';
+    bos.forEach(function(x){
+      h+='<button class="card tap" style="padding:8px 4px;text-align:center;cursor:pointer;border:2px dashed var(--gray);font-size:13px;" onclick="openForm(null,\''+esc(x.oda).replace(/'/g,"\\'")+'\')">'+esc(x.oda)+'</button>';
+    });
+    h+='</div>';
+  }
+  h+='<div class="muted" style="margin-top:10px;font-size:11.5px;">"Hazırlıkta" ve "Temizlikte" durumları sistemde ayrıca izlenmiyor, bu yüzden burada gösterilmiyor.</div>';
+  return h;
+}
+
+/* ÜST ÖZET: kaç oda hangi aşamada — stageOf() zaten her odanın gerçek
+   aşamasını biliyor, burada sadece sayılıyor. Uydurma kategori yok. */
+function odaAsamaOzetiHTML(active, tumOdaAdlari){
+  var sayim={};
+  var sira=["Kuluçka dönemi","Toprak dönemi","1. Misel gelişim","2. Misel gelişim","Pimleme dönemi","Bezelye boyutu","Ceviz boyutu"];
+  active.forEach(function(c){
+    var t=stageOf(c).t;
+    var key=/^Hasat/.test(t)?"Hasat":t;
+    sayim[key]=(sayim[key]||0)+1;
+  });
+  var bosSayi=tumOdaAdlari.length-active.length;
+  function kutu(etiket,sayi,renk){
+    return '<div style="flex:1;min-width:64px;text-align:center;border:1px solid var(--line);border-radius:10px;padding:8px 4px;background:'+(sayi>0?renk:'transparent')+';">'
+      +'<div style="font-size:20px;font-weight:700;">'+sayi+'</div>'
+      +'<div class="muted" style="font-size:10.5px;line-height:1.2;">'+etiket+'</div>'
+      +'</div>';
+  }
+  var h='<div style="display:flex;gap:6px;flex-wrap:wrap;">';
+  sira.forEach(function(ad){
+    if(sayim[ad]) h+=kutu(ad.replace(" dönemi","").replace(" gelişim","").replace(" boyutu",""), sayim[ad], "var(--amber-soft)");
+  });
+  Object.keys(sayim).forEach(function(k){
+    if(sira.indexOf(k)<0 && k!=="Hasat"){ h+=kutu(k, sayim[k], "var(--teal-soft)"); }
+  });
+  if(sayim["Hasat"]) h+=kutu("Hasat", sayim["Hasat"], "var(--harvest-soft)");
+  h+=kutu("Boş", bosSayi, "var(--gray-soft)");
+  h+='</div>';
+  return h;
+}
+
+var _planKategori="uretim"; /* uretim (varsayılan) | kompost | kapasite */
+function planKategoriDegistir(k){ _planKategori=k; window.scrollTo(0,0); render(); }
 function renderPlan(){
-  el("hdrTitle").textContent="Kompost Planı";
+  el("hdrTitle").textContent="Planlama";
+  var d0=loadData();
+  var active=(d0.cycles||[]).filter(function(c){return !c.bosaltimTarihi;});
   var plan=getPlan().slice().sort(function(a,b){ return cmpDate(a.cikis,b.cikis); });
   var today=todayISO();
-  var h='<div class="card"><div class="sec-title" style="margin-top:0;">Yeni plan satırı</div>'
-    +'<div class="muted" style="margin-bottom:8px;">Tarih = firma çıkış tarihidir; oda gelişi de aynı tarihtir. Ziraat mühendisi 2 gün önceden hatırlatılır.</div>'
-    +'<label>Çıkış tarihi (firmadan)</label><input type="date" id="pl_cikis">'
-    +'<label>Oda</label><select id="pl_oda">'+odaOptions("")+'</select>'
-    +'<label>Kompost firması</label><select id="pl_firma" onchange="firmaPick(\'pl_firma\')">'+firmaOptions("")+'</select>'
-    +'<div class="row" style="margin-top:12px;"><button class="btn" onclick="addPlan()">Plana ekle</button>'
-    +'<button class="btn ghost" onclick="go(\'list\')">‹ Geri</button></div></div>'
+  
+  /* Üstte sabit 3 buton — Ayarlar'daki "önce menü, sonra ekran" yerine tek
+     ekranda kalıp içerik değiştiren segment control (günlük kullanım daha hızlı). */
+  var KATS=[{key:"uretim",ic:"🌱",ad:"Üretim"},{key:"kompost",ic:"🚚",ad:"Kompost"},{key:"kapasite",ic:"📈",ad:"Kapasite"}];
+  var h='<div style="display:flex;gap:6px;margin-bottom:12px;">';
+  KATS.forEach(function(k){
+    var aktif=(_planKategori===k.key);
+    h+='<button class="btn '+(aktif?'':'ghost')+'" style="flex:1;padding:10px 4px;font-size:13px;" onclick="planKategoriDegistir(\''+k.key+'\')">'+k.ic+' '+k.ad+'</button>';
+  });
+  h+='</div>';
+  
+  if(_planKategori==="uretim"){
+    h+='<div class="card"><div class="sec-title" style="margin-top:0;">🗓️ Üretim Takvimi ('+active.length+' oda)</div>'
+      +'<div class="muted" style="margin-bottom:8px;">Her odanın protokole göre beklenen tarihleri — otomatik hesaplanır, elle girilmez.</div>'
+      +uretimTakvimiHTML(active)
+      +'</div>';
     
-    +'<div class="card"><div class="sec-title" style="margin-top:0;">📋 Kompost İndirme Planı</div>'
-    +'<div class="muted" style="margin-bottom:8px;">WhatsApp grubuna göndermek üzere ekip planını hazırla. İsimlere dokunarak seç/kaldır.</div>'
-    +'<label>Tarih</label><input type="date" id="ind_tarih" value="'+esc(_indTarih||"")+'" onchange="_indTarih=this.value">'
-    +'<label>Kompost (oda/çeşit)</label><input type="text" id="ind_kompost" placeholder="örn. A-5" value="'+esc(_indKompost||"")+'" onchange="_indKompost=this.value">'
-    +'<label>Makine Operatörü</label><select id="ind_makine" onchange="indMakineChange(this.value)">'+personelOpts(getPersonelList().filter(function(p){return !indBaskaYerdeSecili(p.ad,"makine");}), _indMakine||"")+'</select>'
-    +'<div style="font-weight:700; margin-top:12px;">🪢 Halat Ekibi</div>'
-    +'<div id="ind_halat_kutu">'+indChipHTML("halat")+'</div>'
-    +'<div style="font-weight:700; margin-top:12px;">1️⃣ 1. İndirme Ekibi</div>'
-    +'<div id="ind_ekip1_kutu">'+indChipHTML("ekip1")+'</div>'
-    +'<div style="font-weight:700; margin-top:12px;">2️⃣ 2. İndirme Ekibi</div>'
-    +'<div id="ind_ekip2_kutu">'+indChipHTML("ekip2")+'</div>'
-    +'<div class="row" style="margin-top:12px;"><button class="btn" onclick="kopostPlanWhatsapp()">📋 WhatsApp\'a Kopyala</button>'
-    +'<button class="btn" onclick="kompostPlanWhatsappAc()">📲 WhatsApp\'ta Aç</button></div></div>';
-
-  h+='<div class="card"><div class="sec-title" style="margin-top:0;">Excel / CSV\'den içe aktar</div>'
-    +'<div class="muted" style="margin-bottom:8px;">Başlıklı plan tablosu da olur (<b>kompost firması · tarih · oda no</b>); tekrarlı başlıklar ve boş satırlar atlanır. Tarih = firma çıkış tarihi.</div>'
-    +'<label>Excel (.xlsx) veya CSV dosyası</label>'
-    +'<input type="file" id="pl_file" accept=".xlsx,.xls,.csv" onchange="planImportFile(this)">'
-    +'<label style="margin-top:10px;">veya Excel\'den kopyala-yapıştır</label>'
-    +'<textarea id="pl_paste" rows="4" placeholder="özdal&#9;07.07.2026&#9;a-5&#10;ersanlar&#9;09.07.2026&#9;a-6" style="width:100%; box-sizing:border-box;"></textarea>'
-    +'<button class="btn" style="margin-top:8px;" onclick="planImportPaste()">Yapıştırılanı ekle</button></div>';
-
-  var bekle=plan.filter(function(x){return !x.done;});
-  var gecmis=plan.filter(function(x){return x.done;});
-  if(bekle.length){
-    h+='<div class="sec-title">Planlı gelişler ('+bekle.length+')</div><div class="card" style="padding:8px;"><div style="overflow-x:auto;"><table><thead><tr><th>Çıkış</th><th>Oda</th><th>Firma</th><th>Durum</th><th></th></tr></thead><tbody>';
-    bekle.forEach(function(x){
-      if(x.id===planEditId){
-        h+='<tr><td colspan="5" style="padding:8px; background:var(--green-soft);">'
-          +'<label>Çıkış tarihi</label><input type="date" id="pe_cikis" value="'+esc(x.cikis)+'">'
-          +'<label>Oda</label><select id="pe_oda">'+odaOptions(x.oda)+'</select>'
-          +'<label>Firma</label><select id="pe_firma" onchange="firmaPick(\'pe_firma\')">'+firmaOptions(x.firma)+'</select>'
-          +'<div class="row" style="margin-top:8px;"><button class="btn small" onclick="savePlanEdit(\''+x.id+'\')">Kaydet</button>'
-          +'<button class="btn ghost small" onclick="cancelPlanEdit()">Vazgeç</button></div></td></tr>';
-        return;
-      }
-      var dg=daysBetween(today,x.cikis);
-      var durum = dg<0?'<span class="red">geçti</span>':(dg===0?'<b>bugün</b>':dg+" gün");
-      h+='<tr><td class="red">'+fmtDate(x.cikis)+'</td><td><b>'+esc(x.oda||"—")+'</b></td><td class="note">'+esc(x.firma||"")+'</td><td>'+durum+'</td>'
-        +'<td style="white-space:nowrap;"><button class="btn small" onclick="editPlan(\''+x.id+'\')">✎</button> '
-        +'<button class="btn ghost small" onclick="ertelePlan(\''+x.id+'\',1)">+1g</button> '
-        +'<button class="btn small" onclick="planToOda(\''+x.id+'\')">Oda</button> '
-        +'<button class="del-x" onclick="delPlan(\''+x.id+'\')">×</button></td></tr>';
-    });
-    h+='</tbody></table></div></div>';
-  } else {
-    h+='<div class="empty" style="padding:20px;">Planlı geliş yok. Yukarıdan ekle.</div>';
+    h+='<div class="card"><div class="sec-title" style="margin-top:0;">📅 Yaklaşan İşler</div>'
+      +yaklasanIslerHTML(active)
+      +'</div>';
   }
-  if(gecmis.length){
-    h+='<div class="sec-title">Oda açılanlar ('+gecmis.length+')</div><div class="card" style="padding:8px;"><div style="overflow-x:auto;"><table><thead><tr><th>Çıkış</th><th>Oda</th><th>Firma</th><th></th></tr></thead><tbody>';
-    gecmis.forEach(function(x){
-      h+='<tr><td class="red">'+fmtDate(x.cikis)+'</td><td>'+esc(x.oda||"—")+'</td><td class="note">'+esc(x.firma||"")+'</td><td><button class="del-x" onclick="delPlan(\''+x.id+'\')">×</button></td></tr>';
-    });
-    h+='</tbody></table></div></div>';
+  
+  if(_planKategori==="kompost"){
+    h+='<div class="card"><div class="sec-title" style="margin-top:0;">Yeni plan satırı</div>'
+      +'<div class="muted" style="margin-bottom:8px;">Tarih = firma çıkış tarihidir; oda gelişi de aynı tarihtir. Ziraat mühendisi 2 gün önceden hatırlatılır.</div>'
+      +'<label>Çıkış tarihi (firmadan)</label><input type="date" id="pl_cikis">'
+      +'<label>Oda</label><select id="pl_oda">'+odaOptions("")+'</select>'
+      +'<label>Kompost firması</label><select id="pl_firma" onchange="firmaPick(\'pl_firma\')">'+firmaOptions("")+'</select>'
+      +'<div class="row" style="margin-top:12px;"><button class="btn" onclick="addPlan()">Plana ekle</button></div></div>'
+      
+      +'<div class="card"><div class="sec-title" style="margin-top:0;">📋 Kompost İndirme Planı</div>'
+      +'<div class="muted" style="margin-bottom:8px;">WhatsApp grubuna göndermek üzere ekip planını hazırla. İsimlere dokunarak seç/kaldır.</div>'
+      +'<label>Tarih</label><input type="date" id="ind_tarih" value="'+esc(_indTarih||"")+'" onchange="_indTarih=this.value">'
+      +'<label>Kompost (oda/çeşit)</label><input type="text" id="ind_kompost" placeholder="örn. A-5" value="'+esc(_indKompost||"")+'" onchange="_indKompost=this.value">'
+      +'<label>Makine Operatörü</label><select id="ind_makine" onchange="indMakineChange(this.value)">'+personelOpts(getPersonelList().filter(function(p){return !indBaskaYerdeSecili(p.ad,"makine");}), _indMakine||"")+'</select>'
+      +'<div style="font-weight:700; margin-top:12px;">🪢 Halat Ekibi</div>'
+      +'<div id="ind_halat_kutu">'+indChipHTML("halat")+'</div>'
+      +'<div style="font-weight:700; margin-top:12px;">1️⃣ 1. İndirme Ekibi</div>'
+      +'<div id="ind_ekip1_kutu">'+indChipHTML("ekip1")+'</div>'
+      +'<div style="font-weight:700; margin-top:12px;">2️⃣ 2. İndirme Ekibi</div>'
+      +'<div id="ind_ekip2_kutu">'+indChipHTML("ekip2")+'</div>'
+      +'<div class="row" style="margin-top:12px;"><button class="btn" onclick="kopostPlanWhatsapp()">📋 WhatsApp\'a Kopyala</button>'
+      +'<button class="btn" onclick="kompostPlanWhatsappAc()">📲 WhatsApp\'ta Aç</button></div></div>';
+
+    h+='<div class="card"><div class="sec-title" style="margin-top:0;">Excel / CSV\'den içe aktar</div>'
+      +'<div class="muted" style="margin-bottom:8px;">Başlıklı plan tablosu da olur (<b>kompost firması · tarih · oda no</b>); tekrarlı başlıklar ve boş satırlar atlanır. Tarih = firma çıkış tarihi.</div>'
+      +'<label>Excel (.xlsx) veya CSV dosyası</label>'
+      +'<input type="file" id="pl_file" accept=".xlsx,.xls,.csv" onchange="planImportFile(this)">'
+      +'<label style="margin-top:10px;">veya Excel\'den kopyala-yapıştır</label>'
+      +'<textarea id="pl_paste" rows="4" placeholder="özdal&#9;07.07.2026&#9;a-5&#10;ersanlar&#9;09.07.2026&#9;a-6" style="width:100%; box-sizing:border-box;"></textarea>'
+      +'<button class="btn" style="margin-top:8px;" onclick="planImportPaste()">Yapıştırılanı ekle</button></div>';
+
+    var bekle=plan.filter(function(x){return !x.done;});
+    var gecmis=plan.filter(function(x){return x.done;});
+    if(bekle.length){
+      h+='<div class="sec-title">Planlı gelişler ('+bekle.length+')</div><div class="card" style="padding:8px;"><div style="overflow-x:auto;"><table><thead><tr><th>Çıkış</th><th>Oda</th><th>Firma</th><th>Durum</th><th></th></tr></thead><tbody>';
+      bekle.forEach(function(x){
+        if(x.id===planEditId){
+          h+='<tr><td colspan="5" style="padding:8px; background:var(--green-soft);">'
+            +'<label>Çıkış tarihi</label><input type="date" id="pe_cikis" value="'+esc(x.cikis)+'">'
+            +'<label>Oda</label><select id="pe_oda">'+odaOptions(x.oda)+'</select>'
+            +'<label>Firma</label><select id="pe_firma" onchange="firmaPick(\'pe_firma\')">'+firmaOptions(x.firma)+'</select>'
+            +'<div class="row" style="margin-top:8px;"><button class="btn small" onclick="savePlanEdit(\''+x.id+'\')">Kaydet</button>'
+            +'<button class="btn ghost small" onclick="cancelPlanEdit()">Vazgeç</button></div></td></tr>';
+          return;
+        }
+        var dg=daysBetween(today,x.cikis);
+        var durum = dg<0?'<span class="red">geçti</span>':(dg===0?'<b>bugün</b>':dg+" gün");
+        h+='<tr><td class="red">'+fmtDate(x.cikis)+'</td><td><b>'+esc(x.oda||"—")+'</b></td><td class="note">'+esc(x.firma||"")+'</td><td>'+durum+'</td>'
+          +'<td style="white-space:nowrap;"><button class="btn small" onclick="editPlan(\''+x.id+'\')">✎</button> '
+          +'<button class="btn ghost small" onclick="ertelePlan(\''+x.id+'\',1)">+1g</button> '
+          +'<button class="btn small" onclick="planToOda(\''+x.id+'\')">Oda</button> '
+          +'<button class="del-x" onclick="delPlan(\''+x.id+'\')">×</button></td></tr>';
+      });
+      h+='</tbody></table></div></div>';
+    } else {
+      h+='<div class="empty" style="padding:20px;">Planlı geliş yok. Yukarıdan ekle.</div>';
+    }
+    if(gecmis.length){
+      h+='<div class="sec-title">Oda açılanlar ('+gecmis.length+')</div><div class="card" style="padding:8px;"><div style="overflow-x:auto;"><table><thead><tr><th>Çıkış</th><th>Oda</th><th>Firma</th><th></th></tr></thead><tbody>';
+      gecmis.forEach(function(x){
+        h+='<tr><td class="red">'+fmtDate(x.cikis)+'</td><td>'+esc(x.oda||"—")+'</td><td class="note">'+esc(x.firma||"")+'</td><td><button class="del-x" onclick="delPlan(\''+x.id+'\')">×</button></td></tr>';
+      });
+      h+='</tbody></table></div></div>';
+    }
   }
+  
+  if(_planKategori==="kapasite"){
+    var OL=getOdaSira();
+    var doluSayi=active.length, bosSayi=OL.length-active.length;
+    h+='<div class="card"><div class="sec-title" style="margin-top:0;">📈 Genel Durum</div>'
+      +'<div style="display:flex;gap:8px;">'
+      +'<div style="flex:1;text-align:center;border:1px solid var(--line);border-radius:10px;padding:10px;"><div style="font-size:24px;font-weight:700;color:var(--green);">'+doluSayi+'</div><div class="muted" style="font-size:12px;">Aktif oda</div></div>'
+      +'<div style="flex:1;text-align:center;border:1px solid var(--line);border-radius:10px;padding:10px;"><div style="font-size:24px;font-weight:700;color:var(--gray);">'+bosSayi+'</div><div class="muted" style="font-size:12px;">Boş oda</div></div>'
+      +'<div style="flex:1;text-align:center;border:1px solid var(--line);border-radius:10px;padding:10px;"><div style="font-size:24px;font-weight:700;">'+OL.length+'</div><div class="muted" style="font-size:12px;">Toplam</div></div>'
+      +'</div></div>';
+    
+    h+='<div class="card"><div class="sec-title" style="margin-top:0;">🏭 Oda Doluluk Planı</div>'
+      +odaDolulukPlaniHTML(active, OL)
+      +'</div>';
+  }
+  
   h+='<button class="btn ghost" style="width:100%; margin-top:10px;" onclick="go(\'list\')">‹ Geri</button>';
   el("app").innerHTML=h;
 }
@@ -6989,6 +7543,9 @@ function renderArsiv(){
   el("app").innerHTML=h;
 }
 /* ---------- Odalar (yönetim + dizin) ---------- */
+function getOdaGorunum(){ try{ return localStorage.getItem("utp_odaGorunum")||"tablo"; }catch(e){ return "tablo"; } }
+function setOdaGorunum(m){ try{ localStorage.setItem("utp_odaGorunum", m); }catch(e){ console.warn("oda görünüm kaydedilemedi", e); } }
+function odaGorunumDegistir(){ setOdaGorunum(getOdaGorunum()==="tablo"?"kart":"tablo"); render(); }
 function renderOdalar(){
   el("hdrTitle").textContent="Odalar";
   var d=loadData();
@@ -7009,6 +7566,12 @@ function renderOdalar(){
   });
   var ciftler=Object.keys(grup).filter(function(k){return grup[k].length>1;});
   var h='';
+  
+  var activeCycles=(d.cycles||[]).filter(function(c){return !c.bosaltimTarihi;});
+  h+='<div class="card"><div class="sec-title" style="margin-top:0;">📊 Oda Aşama Özeti</div>'
+    +odaAsamaOzetiHTML(activeCycles, OL)
+    +'</div>';
+  
   if(ciftler.length>0){
     h+='<div class="card" style="border:1.5px solid var(--red);background:#fdf3f3;">'
       +'<div class="sec-title" style="margin-top:0;color:var(--red);">⚠️ Çift kayıt: '+ciftler.length+' odada birden fazla açık döngü var</div>'
@@ -7029,27 +7592,61 @@ function renderOdalar(){
     h+='</div>';
   }
   
-  h+='<div class="card"><div class="sec-title" style="margin-top:0;">Oda dizini ('+OL.length+')</div>'
-    +'<div class="muted" style="margin-bottom:8px;">Odaya dokun: doluysa döngü detayına, boşsa yeni döngü başlatmaya götürür. Her odanın m²\'si sabittir; döngü açılınca otomatik gelir.</div>';
-  OL.forEach(function(o){
-    var c=byOda[normalizeOda(o)];
-    var dolu=!!c;
-    var m2=odaM2Get(o);
-    h+='<div class="card" style="padding:11px 14px;margin-bottom:8px;">'
-      +'<div class="tap" style="display:flex;justify-content:space-between;align-items:center;" onclick="'
-      +(dolu?('go(\'detail\',\''+c.id+'\')'):('openForm(null,\''+esc(o)+'\')'))+'">'
-      +'<div><b style="font-size:17px;">'+esc(o)+'</b>'+(m2?(' <span class="muted" style="font-size:13px;">· '+m2+' m²</span>'):'')+'<br><span class="muted" style="font-size:13px;">'
-      +(dolu?('Dolu · '+(c.tur?c.tur+'. tur':'')+' · geliş '+fmtDate(c.gelisTarihi)):'Boş')+'</span></div>'
-      +'<span class="badge '+(dolu?'b-teal':'b-gray')+'">'+(dolu?'DOLU':'BOŞ')+'</span></div>';
-    if(can("manage")){
-      h+='<div style="display:flex; gap:6px; align-items:center; margin-top:8px; padding-top:8px; border-top:1px solid #eee;">'
-        +'<span class="muted" style="font-size:13px;">Sabit m²:</span>'
-        +'<input type="number" inputmode="decimal" step="0.1" value="'+(m2!==null?esc(String(m2)):"")+'" placeholder="örn. 252" onchange="odaM2Set(\''+esc(o).replace(/'/g,"\\'")+'\',this.value)" style="width:100px; padding:5px;">'
-        +'<span class="muted" style="font-size:12px;">m²</span></div>';
+  h+='<div class="card"><div class="sec-title" style="margin-top:0;display:flex;justify-content:space-between;align-items:center;">'
+    +'<span>Oda dizini ('+OL.length+')</span>'
+    +'<button class="btn ghost small" onclick="odaGorunumDegistir()">'+(getOdaGorunum()==="tablo"?"🗂️ Kart görünümü":"📊 Tablo görünümü")+'</button>'
+    +'</div>';
+  
+  if(getOdaGorunum()==="tablo"){
+    /* TABLO GÖRÜNÜMÜ — sadece dolu odalar (panoHTML zaten böyle tasarlanmış).
+       F, Oda, Gün, Puan, Derece, Bugün/Yarın işlem tek bakışta. */
+    var doluCycles=OL.map(function(o){ return byOda[normalizeOda(o)]; }).filter(Boolean);
+    if(doluCycles.length){
+      h+=panoHTML(doluCycles);
+    } else {
+      h+='<div class="muted" style="padding:8px 0;">Dolu oda yok.</div>';
+    }
+    /* Boş odalar tabloda görünmez (panoHTML sadece dolu odaları listeler) —
+       yeni döngü başlatmak için burada hızlı erişim butonları. */
+    var bosOdalar=OL.filter(function(o){ return !byOda[normalizeOda(o)]; });
+    if(bosOdalar.length){
+      h+='<div class="sec-title" style="margin-top:14px;">Boş odalar ('+bosOdalar.length+') — dokun, yeni döngü başlat</div>'
+        +'<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(60px,1fr));gap:8px;">';
+      bosOdalar.forEach(function(o){
+        h+='<button class="card tap" style="padding:12px 8px;text-align:center;cursor:pointer;border:2px dashed var(--gray);font-weight:600;" onclick="openForm(null,\''+esc(o).replace(/'/g,"\\'")+'\')">'+esc(o)+'</button>';
+      });
+      h+='</div>';
     }
     h+='</div>';
-  });
-  h+='</div>';
+  } else {
+    /* KART GÖRÜNÜMÜ — tüm odalar (dolu+boş) + m² ayarı, önceki hâliyle aynı. */
+    h+='<div class="muted" style="margin-bottom:8px;">Odaya dokun: doluysa döngü detayına, boşsa yeni döngü başlatmaya götürür. Her odanın m²\'si sabittir; döngü açılınca otomatik gelir.</div>';
+    OL.forEach(function(o){
+      var c=byOda[normalizeOda(o)];
+      var dolu=!!c;
+      var m2=odaM2Get(o);
+      h+='<div class="card" style="padding:11px 14px;margin-bottom:8px;">'
+        +'<div class="tap" style="display:flex;justify-content:space-between;align-items:center;" onclick="'
+        +(dolu?('go(\'detail\',\''+c.id+'\')'):('openForm(null,\''+esc(o)+'\')'))+'">'
+        +'<div><b style="font-size:17px;">'+esc(o)+'</b>'+(m2?(' <span class="muted" style="font-size:13px;">· '+m2+' m²</span>'):'')+'<br><span class="muted" style="font-size:13px;">'
+        +(dolu?('Dolu · '+(c.tur?c.tur+'. tur':'')+' · geliş '+fmtDate(c.gelisTarihi)):'Boş')+'</span></div>'
+        +'<span class="badge '+(dolu?'b-teal':'b-gray')+'">'+(dolu?'DOLU':'BOŞ')+'</span></div>';
+      if(can("manage")){
+        h+='<div style="display:flex; gap:6px; align-items:center; margin-top:8px; padding-top:8px; border-top:1px solid #eee;">'
+          +'<span class="muted" style="font-size:13px;">Sabit m²:</span>'
+          +'<input type="number" inputmode="decimal" step="0.1" value="'+(m2!==null?esc(String(m2)):"")+'" placeholder="örn. 252" onchange="odaM2Set(\''+esc(o).replace(/'/g,"\\'")+'\',this.value)" style="width:100px; padding:5px;">'
+          +'<span class="muted" style="font-size:12px;">m²</span></div>';
+      }
+      h+='</div>';
+    });
+    h+='</div>';
+  }
+  
+  h+='<div class="card"><div class="sec-title" style="margin-top:0;">🧭 Protokol Özeti</div>'
+    +'<div class="muted" style="margin-bottom:6px;">Her dolu odanın son yapılan ve sıradaki protokol adımı (kilometre taşları — sulama/ilaçlama hariç).</div>'
+    +odaProtokolOzetListesiHTML(activeCycles)
+    +'</div>';
+  
   if(can("manage")){
     h+='<div class="card"><div class="muted">Oda ekleme/silme artık <b>Ayarlar → Odalar</b> bölümünden yapılıyor.</div>'
       +'<button class="btn ghost small" style="margin-top:8px;" onclick="ayarKategorisineGit(\'odalar\')">⚙ Ayarlar → Odalar\'a git</button></div>';
