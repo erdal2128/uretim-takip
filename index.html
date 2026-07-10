@@ -366,7 +366,7 @@ function hasatTartiGetir(oda, tur){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v236";
+var APP_VER = "v239";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -632,6 +632,31 @@ function personelEkibiDegistir(id, yeniGrup){
   if(!can("manage")) return noPerm();
   var p=personelBul(id); if(!p) return;
   p.grup=yeniGrup; saveData(); toast("✓ "+p.ad+" → "+ekipAdi(yeniGrup)); render();
+}
+/* Oda "pasife alma" — odalar düz string dizisi olduğu için (d.settings.odaList),
+   objeye çevirmek onlarca yeri etkiler ve riskli olur. Bunun yerine AYRI, küçük
+   bir pasif-liste tutuyoruz — güvenli, geriye dönük uyumlu. Pasif oda "dolu/boş"
+   durumundan bağımsızdır; sadece "yeni döngü başlatma" akışından çıkarılır. */
+function odaPasifMi(ad){
+  var d=loadData();
+  var L=(d.settings&&Array.isArray(d.settings.pasifOdalar))?d.settings.pasifOdalar:[];
+  return L.indexOf(ad)>=0;
+}
+function odaPasifToggle(ad){
+  if(!can("manage")) return noPerm();
+  var d=loadData(); if(!d.settings) d.settings={};
+  if(!Array.isArray(d.settings.pasifOdalar)) d.settings.pasifOdalar=[];
+  var i=d.settings.pasifOdalar.indexOf(ad);
+  var simdiPasif;
+  if(i>=0){ d.settings.pasifOdalar.splice(i,1); simdiPasif=false; }
+  else { d.settings.pasifOdalar.push(ad); simdiPasif=true; }
+  saveData(); logAudit(simdiPasif?"oda pasife alındı":"oda aktif yapıldı", ad); toast(simdiPasif?("Pasife alındı: "+ad):("Aktif: "+ad)); render();
+}
+function personelPasifToggle(id){
+  if(!can("manage")) return noPerm();
+  var p=personelBul(id); if(!p) return;
+  p.aktif = (p.aktif===false) ? true : false;
+  saveData(); logAudit(p.aktif?"personel aktif yapıldı":"personel pasife alındı", p.ad); toast(p.aktif?("Aktif: "+p.ad):("Pasife alındı: "+p.ad)); render();
 }
 function personelSil(id){
   if(!can("manage")) return noPerm();
@@ -2145,6 +2170,7 @@ function render(){
       else if(view.name==="gorevler"){ renderGorevlerSekme(); safeCalled=true; }
       else if(view.name==="compare"){ renderCompare(view.id); safeCalled=true; }
       else if(view.name==="recete"){ renderRecete(); safeCalled=true; }
+      else if(view.name==="records"){ renderKayitlar(); safeCalled=true; }
       else if(view.name==="audit"){ renderAudit(); safeCalled=true; }
       else if(view.name==="arsiv"){ renderArsiv(); safeCalled=true; }
       else if(view.name==="yedekleme"){ renderYedekleme(); safeCalled=true; }
@@ -3193,6 +3219,29 @@ function getTodaysTasks(){
     });
   });
   
+  /* Protokol takvimi — sıradaki olay-tipi adım bugün/gecikmişse listeye girer.
+     Planlama'nın hesapladığı AYNI fonksiyon (siradakiProtokolAdimi), Odalar'daki
+     Protokol Özeti ile aynı veri kaynağı (SSOT). Tamamlama toggleTask üzerinden —
+     tiftik/toprak/tırmık kendi detay kutusunu açar, diğerleri direkt işaretlenir. */
+  d.cycles.filter(function(c){return !c.bosaltimTarihi;}).forEach(function(c){
+    var sd=siradakiProtokolAdimi(c);
+    if(sd && sd.t<=bugun){
+      tasks.push({
+        tipo:"protokol",
+        odaId:c.id,
+        oda:c.oda,
+        islem:sd.txt,
+        atama:"",
+        tarih:sd.t,
+        gelisTarihi:c.gelisTarihi||"",
+        geciken:(sd.t<bugun),
+        done:false,
+        id:sd.idx,
+        cyclicId:c.id
+      });
+    }
+  });
+  
   /* Sıralama:
      1) Geciken işler her zaman en üstte (en eski gecikme önce)
      2) Normal işler: odanın kompost geliş tarihine göre YENİDEN ESKİYE
@@ -3403,7 +3452,7 @@ function renderBugun(){
         +'<div>'
         +'<div style="font-weight:600;">'+esc(t.oda||"Genel")+(t.islem||t.baslik?' — '+esc(t.islem||t.baslik):'')+'</div>'
         +'<div style="font-size:11px;margin-top:2px;'+(gec?'color:var(--red);font-weight:600;':'color:var(--muted);')+'">'
-        +(gec?('⚠️ '+gecGun+' gün gecikti · '):'')+esc(t.atama||"Atanmamış")
+        +(gec?('⚠️ '+gecGun+' gün gecikti · '):'')+esc(t.atama||(t.tipo==="protokol"?"Protokol adımı":"Atanmamış"))
         +'</div>'
         +'</div>'
         +'</div>'
@@ -3532,6 +3581,11 @@ function gorevTamamla(id, tipo, cyclicId){
     var gorevler=getGorevler()||[];
     var g=gorevler.find(function(x){return x.id===id;});
     if(g){ g.done=true; g.doneAt=simdi; saveData(); logAudit("genel görev tamamlandı", g.baslik); render(); }
+  } else if(tipo==="protokol"){
+    /* toggleTask kendi render()/toast'ını yönetir (tiftik/toprak/tırmık için
+       detay kutusu açar) — burada tekrar toast basmadan direkt dön. */
+    toggleTask(cyclicId, parseInt(id,10));
+    return;
   }
   toast("✓ Tamamlandı");
 }
@@ -7474,6 +7528,230 @@ function logAudit(action, detail){
     saveData();
   }catch(e){ console.warn("işlem kaydı yazılamadı", e); }
 }
+/* ============ KAYITLAR — geçmiş görüntüleme, veri girişi yok ============
+   5 alt bölüm, segment control (Planlama'daki desenle aynı — tutarlılık).
+   Herkes görebilir (sadece izleme, düzenleme yok). "Kim yaptı" sınırı:
+   günlük tur kayıtlarında kişi hiç tutulmuyor; audit log sadece cihaz/rol
+   biliyor; protokol adımlarında (v234+) serbest metin personel var. Bu
+   sınırı olduğu gibi gösteriyoruz, uydurmuyoruz. */
+var _kayitKategori="islem"; /* islem | degisiklik | tur | ariza | foto */
+var _kayitArama="";
+function kayitKategoriDegistir(k){ _kayitKategori=k; _kayitArama=""; window.scrollTo(0,0); render(); }
+function kayitAramaGuncelle(v){ _kayitArama=v; render(); }
+
+/* Audit log'u saha (üretim) / yönetim (idari) olarak ikiye ayırır — Bugün
+   ekranındaki Son İşlemler filtresiyle AYNI, test edilmiş mantık (SSOT). */
+var KAYIT_SAHA_ANAHTAR=["günlük","ölçüm","sulama","ilaçlama","işlem","görev","hızlı","toplu","hastalık","arıza","kontrol notu"];
+var KAYIT_YONETIM_ZORUNLU=["reçete","oluşturuldu","bilgisi güncellendi"];
+function kayitSahaMi(action){
+  var a=(action||"").toLowerCase();
+  if(KAYIT_YONETIM_ZORUNLU.some(function(k){return a.indexOf(k)>=0;})) return false;
+  return KAYIT_SAHA_ANAHTAR.some(function(k){return a.indexOf(k)>=0;});
+}
+
+function renderKayitlar(){
+  el("hdrTitle").textContent="Kayıtlar";
+  var KATS=[
+    {key:"islem",ic:"📋",ad:"İşlem"},
+    {key:"degisiklik",ic:"✏️",ad:"Değişiklik"},
+    {key:"tur",ic:"🚶",ad:"Tur"},
+    {key:"ariza",ic:"🔧",ad:"Arıza"},
+    {key:"foto",ic:"📷",ad:"Foto"}
+  ];
+  var h='<div style="display:flex;gap:4px;margin-bottom:12px;overflow-x:auto;">';
+  KATS.forEach(function(k){
+    var aktif=(_kayitKategori===k.key);
+    h+='<button class="btn '+(aktif?'':'ghost')+'" style="padding:9px 6px;font-size:12px;white-space:nowrap;" onclick="kayitKategoriDegistir(\''+k.key+'\')">'+k.ic+' '+k.ad+'</button>';
+  });
+  h+='</div>';
+
+  h+='<div class="card" style="padding:8px 10px;margin-bottom:10px;">'
+    +'<input type="text" placeholder="🔍 Ara: oda, kişi, işlem..." value="'+esc(_kayitArama)+'" oninput="kayitAramaGuncelle(this.value)" style="border:none;padding:6px 4px;">'
+    +'</div>';
+
+  if(_kayitKategori==="islem") h+=kayitIslemGecmisiHTML();
+  else if(_kayitKategori==="degisiklik") h+=kayitDegisiklikGecmisiHTML();
+  else if(_kayitKategori==="tur") h+=kayitTurGecmisiHTML();
+  else if(_kayitKategori==="ariza") h+=kayitArizaGecmisiHTML();
+  else if(_kayitKategori==="foto") h+=kayitFotoGecmisiHTML();
+
+  el("app").innerHTML=h;
+}
+
+/* 1. İŞLEM GEÇMİŞİ — audit log'un saha/üretim kısmı. */
+function kayitIslemGecmisiHTML(){
+  var d=loadData();
+  var log=(d.settings&&d.settings.audit)?d.settings.audit.slice().reverse():[];
+  var saha=log.filter(function(e){ return kayitSahaMi(e.action); });
+  if(_kayitArama.trim()){
+    var q=_kayitArama.trim().toLowerCase();
+    saha=saha.filter(function(e){
+      return (e.action||"").toLowerCase().indexOf(q)>=0
+        || (e.detail||"").toLowerCase().indexOf(q)>=0
+        || (e.by||"").toLowerCase().indexOf(q)>=0;
+    });
+  }
+  var h='<div class="card"><div class="sec-title" style="margin-top:0;">📋 İşlem Geçmişi ('+saha.length+')</div>'
+    +'<div class="muted" style="margin-bottom:8px;">Üretimle ilgili yapılan işlemler — sulama, görev, tur kaydı, arıza bildirimi vb. "Kim yaptı" sadece cihaz/rol bazında bilinir, kişi ismi sistemde tutulmuyor.</div>';
+  if(!saha.length){ h+='<div class="muted" style="padding:12px 0;">Kayıt yok.</div>'; }
+  else {
+    saha.slice(0,300).forEach(function(e){
+      h+='<div style="padding:8px 0;border-bottom:1px solid var(--line);">'
+        +'<div style="display:flex;justify-content:space-between;gap:8px;">'
+        +'<span style="font-weight:600;font-size:13.5px;">'+esc(e.action)+'</span>'
+        +'<span class="muted" style="font-size:11.5px;white-space:nowrap;">'+fmtDateTime(e.at)+'</span>'
+        +'</div>'
+        +(e.detail?('<div style="font-size:12.5px;color:var(--muted);margin-top:2px;">'+esc(e.detail)+'</div>'):'')
+        +'<div style="font-size:11px;color:var(--muted);margin-top:2px;">'+esc(e.role||"")+'</div>'
+        +'</div>';
+    });
+    if(saha.length>300) h+='<div class="muted" style="padding:8px 0;">İlk 300 kayıt gösteriliyor — daha eskisi için arama/filtre daralt.</div>';
+  }
+  h+='</div>';
+  return h;
+}
+
+/* 2. DEĞİŞİKLİK GEÇMİŞİ — audit log'un yönetim/idari kısmı. */
+function kayitDegisiklikGecmisiHTML(){
+  var d=loadData();
+  var log=(d.settings&&d.settings.audit)?d.settings.audit.slice().reverse():[];
+  var yonetim=log.filter(function(e){ return !kayitSahaMi(e.action); });
+  if(_kayitArama.trim()){
+    var q=_kayitArama.trim().toLowerCase();
+    yonetim=yonetim.filter(function(e){
+      return (e.action||"").toLowerCase().indexOf(q)>=0
+        || (e.detail||"").toLowerCase().indexOf(q)>=0
+        || (e.by||"").toLowerCase().indexOf(q)>=0;
+    });
+  }
+  var h='<div class="card"><div class="sec-title" style="margin-top:0;">✏️ Değişiklik Geçmişi ('+yonetim.length+')</div>'
+    +'<div class="muted" style="margin-bottom:8px;">Sistem/idari değişiklikler — oda düzenleme, personel/firma ekleme, şifre değişimi, arşivleme vb.</div>';
+  if(!yonetim.length){ h+='<div class="muted" style="padding:12px 0;">Kayıt yok.</div>'; }
+  else {
+    yonetim.slice(0,300).forEach(function(e){
+      h+='<div style="padding:8px 0;border-bottom:1px solid var(--line);">'
+        +'<div style="display:flex;justify-content:space-between;gap:8px;">'
+        +'<span style="font-weight:600;font-size:13.5px;">'+esc(e.action)+'</span>'
+        +'<span class="muted" style="font-size:11.5px;white-space:nowrap;">'+fmtDateTime(e.at)+'</span>'
+        +'</div>'
+        +(e.detail?('<div style="font-size:12.5px;color:var(--muted);margin-top:2px;">'+esc(e.detail)+'</div>'):'')
+        +'<div style="font-size:11px;color:var(--muted);margin-top:2px;">'+esc(e.role||"")+'</div>'
+        +'</div>';
+    });
+    if(yonetim.length>300) h+='<div class="muted" style="padding:8px 0;">İlk 300 kayıt gösteriliyor.</div>';
+  }
+  h+='</div>';
+  return h;
+}
+
+/* 3. GÜNLÜK TUR GEÇMİŞİ — aktif + arşivlenmiş odaların tüm günlük kayıtları. */
+function kayitTurGecmisiHTML(){
+  var d=loadData();
+  var tumCycle=(d.cycles||[]).concat(getArsiv());
+  var rows=[];
+  tumCycle.forEach(function(c){
+    (c.gunluk||[]).forEach(function(g){
+      rows.push({oda:c.oda, cid:c.id, tarih:g.tarih, kompostC:g.kompostC, odaC:g.odaC, sulama:g.sulama, su:g.su, amonyak:g.amonyak, nem:g.nem});
+    });
+  });
+  rows.sort(function(a,b){ return cmpDate(b.tarih,a.tarih); });
+  if(_kayitArama.trim()){
+    var q=_kayitArama.trim().toLowerCase();
+    rows=rows.filter(function(r){
+      return (r.oda||"").toLowerCase().indexOf(q)>=0 || (r.sulama||"").toLowerCase().indexOf(q)>=0;
+    });
+  }
+  var h='<div class="card"><div class="sec-title" style="margin-top:0;">🚶 Günlük Tur Geçmişi ('+rows.length+')</div>'
+    +'<div class="muted" style="margin-bottom:8px;">Tüm odaların geçmiş günlük ölçüm kayıtları. Kişi bilgisi tutulmuyor.</div>';
+  if(!rows.length){ h+='<div class="muted" style="padding:12px 0;">Kayıt yok.</div>'; }
+  else {
+    rows.slice(0,300).forEach(function(r){
+      var not=(r.sulama||"").trim();
+      h+='<div style="padding:8px 0;border-bottom:1px solid var(--line);">'
+        +'<div style="display:flex;justify-content:space-between;gap:8px;">'
+        +'<span style="font-weight:700;font-size:13.5px;">'+esc(r.oda)+'</span>'
+        +'<span class="muted" style="font-size:11.5px;">'+fmtDate(r.tarih)+'</span>'
+        +'</div>'
+        +'<div style="font-size:12.5px;color:var(--muted);margin-top:2px;">'
+        +(r.kompostC!==""&&r.kompostC!=null?('Komp: '+r.kompostC+'° '):'')
+        +(r.odaC!==""&&r.odaC!=null?('· Oda: '+r.odaC+'° '):'')
+        +(r.amonyak==="Var"?'· ⚠️ amonyak ':'')
+        +'</div>'
+        +(not?('<div style="font-size:12.5px;margin-top:2px;">'+esc(not)+'</div>'):'')
+        +'</div>';
+    });
+    if(rows.length>300) h+='<div class="muted" style="padding:8px 0;">İlk 300 kayıt — daha eskisi için ara.</div>';
+  }
+  h+='</div>';
+  return h;
+}
+
+/* 4. ARIZA GEÇMİŞİ — tamamlanmış (çözülmüş) arızalar. */
+function kayitArizaGecmisiHTML(){
+  var tum=getArizalar().filter(function(a){return a.durum==="tamir";});
+  tum.sort(function(a,b){ return (b.tamirTarihi||"")<(a.tamirTarihi||"")?-1:1; });
+  if(_kayitArama.trim()){
+    var q=_kayitArama.trim().toLowerCase();
+    tum=tum.filter(function(a){
+      return (a.oda||"").toLowerCase().indexOf(q)>=0
+        || (a.baslik||"").toLowerCase().indexOf(q)>=0
+        || (a.tamirEden||"").toLowerCase().indexOf(q)>=0;
+    });
+  }
+  var h='<div class="card"><div class="sec-title" style="margin-top:0;">🔧 Arıza Geçmişi ('+tum.length+')</div>'
+    +'<div class="muted" style="margin-bottom:8px;">Çözülmüş arızalar. Açık arızalar için Arızalar sekmesine bak.</div>';
+  if(!tum.length){ h+='<div class="muted" style="padding:12px 0;">Çözülmüş arıza kaydı yok.</div>'; }
+  else {
+    tum.forEach(function(a){
+      var sure = (a.tarih && a.tamirTarihi) ? daysBetween(a.tarih.substring(0,10), a.tamirTarihi.substring(0,10)) : null;
+      h+='<div style="padding:8px 0;border-bottom:1px solid var(--line);">'
+        +'<div style="display:flex;justify-content:space-between;gap:8px;">'
+        +'<span style="font-weight:700;font-size:13.5px;">'+esc(a.oda||"—")+' — '+esc(a.baslik)+'</span>'
+        +'</div>'
+        +'<div style="font-size:12px;color:var(--muted);margin-top:2px;">Açılış: '+fmtDateTime(a.tarih)+' · Kapanış: '+fmtDateTime(a.tamirTarihi)+(sure!=null?(' · '+sure+' gün'):'')+'</div>'
+        +(a.tamirNot?('<div style="font-size:12.5px;margin-top:2px;">'+esc(a.tamirNot)+'</div>'):'')
+        +(a.tamirEden?('<div style="font-size:11px;color:var(--muted);margin-top:2px;">Çözen: '+esc(a.tamirEden)+'</div>'):'')
+        +'</div>';
+    });
+  }
+  h+='</div>';
+  return h;
+}
+
+/* 5. FOTOĞRAF GEÇMİŞİ — YALNIZCA arıza fotoğrafları, YALNIZCA bu cihazda
+   (localStorage, buluta senkron değil). Kapsamlı bir foto arşivi DEĞİL —
+   bunu açıkça belirtiyoruz, yanıltıcı olmasın. */
+function kayitFotoGecmisiHTML(){
+  var tum=getArizalar().slice();
+  var fotolu=[];
+  tum.forEach(function(a){
+    var foto=loadArizaFoto(a.id);
+    if(foto) fotolu.push({ariza:a, foto:foto});
+  });
+  fotolu.sort(function(x,y){ return (y.ariza.tarih||"")<(x.ariza.tarih||"")?-1:1; });
+  if(_kayitArama.trim()){
+    var q=_kayitArama.trim().toLowerCase();
+    fotolu=fotolu.filter(function(x){
+      return (x.ariza.oda||"").toLowerCase().indexOf(q)>=0 || (x.ariza.baslik||"").toLowerCase().indexOf(q)>=0;
+    });
+  }
+  var h='<div class="card"><div class="sec-title" style="margin-top:0;">📷 Fotoğraf Geçmişi ('+fotolu.length+')</div>'
+    +'<div class="muted" style="margin-bottom:8px;">⚠️ Sadece arıza fotoğrafları, sadece <b>bu cihazda</b> çekilenler görünür — buluta senkronlanmıyor. Başka bir cihazdan çekilen fotoğraf burada görünmez.</div>';
+  if(!fotolu.length){ h+='<div class="muted" style="padding:12px 0;">Bu cihazda kayıtlı fotoğraf yok.</div>'; }
+  else {
+    h+='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(100px,1fr));gap:8px;">';
+    fotolu.forEach(function(x){
+      h+='<div class="tap" style="cursor:pointer;" onclick="go(\'arizalar\')">'
+        +'<img src="'+x.foto+'" style="width:100%;aspect-ratio:1;object-fit:cover;border-radius:8px;border:1px solid var(--line);">'
+        +'<div style="font-size:11px;color:var(--muted);margin-top:2px;">'+esc(x.ariza.oda||"")+' · '+fmtDate((x.ariza.tarih||"").substring(0,10))+'</div>'
+        +'</div>';
+    });
+    h+='</div>';
+  }
+  h+='</div>';
+  return h;
+}
+
 function renderAudit(){
   if(!can("manage")){ go("bugun"); return; }
   el("hdrTitle").textContent="İşlem Kaydı";
@@ -7607,8 +7885,12 @@ function renderOdalar(){
       h+='<div class="muted" style="padding:8px 0;">Dolu oda yok.</div>';
     }
     /* Boş odalar tabloda görünmez (panoHTML sadece dolu odaları listeler) —
-       yeni döngü başlatmak için burada hızlı erişim butonları. */
-    var bosOdalar=OL.filter(function(o){ return !byOda[normalizeOda(o)]; });
+       yeni döngü başlatmak için burada hızlı erişim butonları. Pasif odalar
+       (Ayarlar > Odalar'dan işaretlenmiş) bu listede görünmez — yanlışlıkla
+       yeni döngü başlatılmasın diye. Ayrıca not olarak gösterilir. */
+    var bosOdalarTum=OL.filter(function(o){ return !byOda[normalizeOda(o)]; });
+    var bosOdalar=bosOdalarTum.filter(function(o){ return !odaPasifMi(o); });
+    var pasifBosOdalar=bosOdalarTum.filter(function(o){ return odaPasifMi(o); });
     if(bosOdalar.length){
       h+='<div class="sec-title" style="margin-top:14px;">Boş odalar ('+bosOdalar.length+') — dokun, yeni döngü başlat</div>'
         +'<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(60px,1fr));gap:8px;">';
@@ -7616,6 +7898,9 @@ function renderOdalar(){
         h+='<button class="card tap" style="padding:12px 8px;text-align:center;cursor:pointer;border:2px dashed var(--gray);font-weight:600;" onclick="openForm(null,\''+esc(o).replace(/'/g,"\\'")+'\')">'+esc(o)+'</button>';
       });
       h+='</div>';
+    }
+    if(pasifBosOdalar.length){
+      h+='<div class="muted" style="margin-top:10px;font-size:12px;">Pasif odalar (yeni döngü başlatılmaz): '+pasifBosOdalar.map(esc).join(', ')+'</div>';
     }
     h+='</div>';
   } else {
@@ -7879,6 +8164,118 @@ function uretimOgrenmesiHTML(){
       : r.bulgular.map(function(b){ return '<div style="padding:6px 0;border-bottom:1px solid #eee;"><div style="font-weight:700;font-size:14px;">'+esc(b.baslik)+'</div><div style="font-size:13px;margin-top:2px;">'+b.metin+'</div></div>'; }).join(''));
   return sectionCard('📊 Üretim Öğrenmesi (geçmiş döngü istatistikleri)', body);
 }
+/* ============ YENİ RAPORLAR (doküman: Hasat, Protokol Uygunluğu, Ortalama Süre) ============ */
+
+/* Ortalama üretim süresi — geliş→boşaltım, tamamlanmış döngüler üzerinden. */
+function ortalamaUretimSuresiHTML(){
+  var all=tumTamamlananDongu();
+  var sureler=all.map(function(c){
+    var d=daysBetween(c.gelisTarihi, c.bosaltimTarihi);
+    return (d!=null && d>0) ? d : null;
+  }).filter(function(x){return x!=null;});
+  var body;
+  if(sureler.length<2){
+    body='<div class="muted">Yeterli tamamlanmış döngü yok (en az 2 gerekir).</div>';
+  } else {
+    var ort=sureler.reduce(function(a,b){return a+b;},0)/sureler.length;
+    var min=Math.min.apply(null,sureler), max=Math.max.apply(null,sureler);
+    body='<div style="display:flex;gap:8px;flex-wrap:wrap;">'
+      +'<div style="flex:1;min-width:84px;text-align:center;border:1px solid var(--line);border-radius:10px;padding:8px;"><div class="muted" style="font-size:12px;">Ortalama</div><div style="font-size:20px;font-weight:700;">'+ort.toFixed(0)+'<span style="font-size:11px;"> gün</span></div></div>'
+      +'<div style="flex:1;min-width:84px;text-align:center;border:1px solid var(--line);border-radius:10px;padding:8px;"><div class="muted" style="font-size:12px;">En kısa</div><div style="font-size:20px;font-weight:700;">'+min+'<span style="font-size:11px;"> gün</span></div></div>'
+      +'<div style="flex:1;min-width:84px;text-align:center;border:1px solid var(--line);border-radius:10px;padding:8px;"><div class="muted" style="font-size:12px;">En uzun</div><div style="font-size:20px;font-weight:700;">'+max+'<span style="font-size:11px;"> gün</span></div></div>'
+      +'</div>'
+      +'<div class="muted" style="margin-top:8px;">'+sureler.length+' tamamlanmış döngü üzerinden.</div>';
+  }
+  return sectionCard('⏱️ Ortalama Üretim Süresi', body);
+}
+/* Hasat raporu — GEÇMİŞE DÖNÜK gerçek kayıtlar (tahmin değil). Günlük/haftalık/
+   aylık toplam + oda bazında (son 30 gün) + tamamlanmış döngülerde ortalama verim. */
+function hasatRaporuHTML(){
+  var d=loadData();
+  var S=getSet();
+  var today=todayISO();
+  var haftaBasi=addDays(today,-6), ayBasi=addDays(today,-29);
+  var gunlukKasa=0, haftalikKasa=0, aylikKasa=0;
+  var odaToplam={}; /* son 30 gün, oda bazında */
+  (d.cycles||[]).forEach(function(c){
+    (c.hasat||[]).forEach(function(h){
+      var k=numParse(h.kasa)||0;
+      if(h.tarih===today) gunlukKasa+=k;
+      if(h.tarih>=haftaBasi) haftalikKasa+=k;
+      if(h.tarih>=ayBasi){ aylikKasa+=k; odaToplam[c.oda]=(odaToplam[c.oda]||0)+k; }
+    });
+  });
+  function box(lbl,val,unit){ return '<div style="flex:1;min-width:84px;text-align:center;border:1px solid var(--line);border-radius:10px;padding:8px;"><div class="muted" style="font-size:12px;">'+lbl+'</div><div style="font-size:19px;font-weight:700;">'+val+(unit?'<span style="font-size:11px;"> '+unit+'</span>':'')+'</div></div>'; }
+  var body='<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;">'
+    +box("Bugün",gunlukKasa,"kasa")+box("Son 7 gün",haftalikKasa,"kasa")+box("Son 30 gün",aylikKasa,"kasa")
+    +box("Bugün",(gunlukKasa*S.kasaAgirlik).toFixed(0),"kg")+box("Son 30 gün",(aylikKasa*S.kasaAgirlik).toFixed(0),"kg")
+    +'</div>';
+
+  var odaKeys=Object.keys(odaToplam).sort(function(a,b){return odaToplam[b]-odaToplam[a];});
+  if(odaKeys.length){
+    body+='<div class="muted" style="margin-bottom:4px;">Oda bazında (son 30 gün):</div>';
+    odaKeys.forEach(function(o){
+      body+='<div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid #eee;font-size:13px;"><span><b>'+esc(o)+'</b></span><span class="note">'+odaToplam[o]+' kasa ('+(odaToplam[o]*S.kasaAgirlik).toFixed(0)+' kg)</span></div>';
+    });
+  }
+
+  var tamam=tumTamamlananDongu();
+  var verimler=tamam.map(function(c){return verimOzet(c).kgTon;}).filter(function(x){return x!=null;});
+  if(verimler.length){
+    var ortVerim=verimler.reduce(function(a,b){return a+b;},0)/verimler.length;
+    body+='<div class="muted" style="margin-top:10px;">Tamamlanmış '+verimler.length+' döngüde ortalama verim: <b>'+ortVerim.toFixed(0)+' kg/ton</b></div>';
+  }
+  if(!odaKeys.length && !gunlukKasa && !haftalikKasa && !aylikKasa){
+    body='<div class="muted">Son 30 günde kayıtlı hasat yok.</div>'+body;
+  }
+  return sectionCard('🌾 Hasat Raporu (geçmişe dönük)', body);
+}
+/* Protokol Uygunluğu — firma bazlı + oda bazlı. "Başarı" = erken + zamanında +
+   geç-ama-haklı-sebepli (c.erteleSebep="biyolojik" — sarım/gelişme yavaşsa puan
+   kırılmaz, odaPerformans() ile AYNI mantık). Sadece FİİLEN YAPILMIŞ adımlar
+   değerlendirilir; henüz sırası gelmemiş adımlar rapora girmez. */
+function protokolUygunlukHTML(){
+  var d=loadData();
+  var firmaStats={}, odaStats={};
+  function bosSayac(){ return {erken:0, zamaninda:0, gecSebep:0, gecSebepsiz:0, toplam:0}; }
+  (d.cycles||[]).forEach(function(c){
+    getProtokol().forEach(function(s,idx){
+      if(s.silindi || s.tip!=="olay") return;
+      var beklenen=protokolTarih(c,s); if(!beklenen) return;
+      var gercek=adimYapilmaTarihi(c,idx,s); if(!gercek) return;
+      var firma=c.kompostFirma||"Bilinmiyor", oda=c.oda||"Bilinmiyor";
+      if(!firmaStats[firma]) firmaStats[firma]=bosSayac();
+      if(!odaStats[oda]) odaStats[oda]=bosSayac();
+      var fS=firmaStats[firma], oS=odaStats[oda];
+      fS.toplam++; oS.toplam++;
+      if(gercek<beklenen){ fS.erken++; oS.erken++; }
+      else if(gercek===beklenen){ fS.zamaninda++; oS.zamaninda++; }
+      else {
+        var sebep=c.erteleSebep && c.erteleSebep["p"+idx];
+        if(sebep==="biyolojik"){ fS.gecSebep++; oS.gecSebep++; }
+        else { fS.gecSebepsiz++; oS.gecSebepsiz++; }
+      }
+    });
+  });
+  function tabloYaz(stats, baslik){
+    var keys=Object.keys(stats);
+    if(!keys.length) return '';
+    var h='<div class="muted" style="margin-top:10px;margin-bottom:4px;">'+baslik+'</div>';
+    keys.sort(function(a,b){return stats[b].toplam-stats[a].toplam;}).forEach(function(k){
+      var x=stats[k];
+      var basari = x.toplam>0 ? Math.round(((x.erken+x.zamaninda+x.gecSebep)/x.toplam)*100) : 0;
+      h+='<div style="padding:7px 0;border-bottom:1px solid #eee;">'
+        +'<div style="display:flex;justify-content:space-between;"><b>'+esc(k)+'</b><span style="font-weight:700;'+(basari<80?'color:var(--red);':'color:var(--green);')+'">%'+basari+'</span></div>'
+        +'<div style="font-size:12px;color:var(--muted);margin-top:2px;">'
+        +x.erken+' erken · '+x.zamaninda+' zamanında · '+x.gecSebep+' geç (haklı sebep) · '+x.gecSebepsiz+' geç (sebepsiz)'
+        +'</div></div>';
+    });
+    return h;
+  }
+  var body=tabloYaz(firmaStats,'Firma bazında')+tabloYaz(odaStats,'Oda bazında');
+  if(!body) body='<div class="muted">Henüz değerlendirilecek tamamlanmış protokol adımı yok.</div>';
+  return sectionCard('📋 Protokol Uygunluğu', body);
+}
 function renderRaporlar(){
   el("hdrTitle").textContent="Raporlar";
   var d=loadData();
@@ -7887,6 +8284,9 @@ function renderRaporlar(){
     +'<div class="muted" style="margin-bottom:8px;">Veri anahtarı gerekmez, cihazda çalışır. Anormal sıcaklık, gecikme ve verim farkı gibi kalıpları tarar.</div>'
     +akilliAnalizHTML(aktif)
     +'</div>';
+  h+=hasatRaporuHTML();
+  h+=protokolUygunlukHTML();
+  h+=ortalamaUretimSuresiHTML();
   h+=uretimOgrenmesiHTML();
   h+=dusukVerimliDongulerHTML();
   h+='<div class="card"><div class="sec-title" style="margin-top:0;">Dışa aktar</div>'
@@ -8150,12 +8550,14 @@ function renderAyarlar(){
   var ekipler=getEkipler();
   function personelSatir(p){
     var confirming=(_confirmDeletePersonel===p.id);
+    var pasif=(p.aktif===false);
     var tasiSecenek='<select style="width:auto; display:inline-block; padding:2px 4px; font-size:12px; margin-right:6px;" onchange="personelEkibiDegistir(\''+p.id+'\', this.value)">'
       +ekipler.map(function(ek){ return '<option value="'+ek.id+'"'+(p.grup===ek.id?' selected':'')+'>'+esc(ek.ad)+'</option>'; }).join('')
       +'</select>';
-    return '<div style="display:flex;justify-content:space-between;align-items:center;padding:5px 2px;border-bottom:1px solid #eee;"><span>'+esc(p.ad)+'</span>'
+    return '<div style="display:flex;justify-content:space-between;align-items:center;padding:5px 2px;border-bottom:1px solid #eee;'+(pasif?'opacity:.5;':'')+'"><span>'+esc(p.ad)+(pasif?' <span class="muted" style="font-size:11px;">(pasif)</span>':'')+'</span>'
       +(can("manage")
         ? ('<span style="display:flex;align-items:center;">'+tasiSecenek
+            +'<button class="btn ghost small" style="padding:2px 8px;margin-right:4px;" onclick="personelPasifToggle(\''+p.id+'\')">'+(pasif?'Aktif yap':'Pasife al')+'</button>'
             +(confirming
               ? ('<button class="del-x" style="background:#c0291f;color:#fff;" onclick="personelSil(\''+p.id+'\')">Emin misin? Sil</button> <button class="btn ghost small" onclick="_confirmDeletePersonel=null; render();">Vazgeç</button>')
               : ('<button class="del-x" onclick="personelSil(\''+p.id+'\')">Sil ×</button>'))
@@ -8286,6 +8688,20 @@ function renderAyarlar(){
     h+='<button class="btn ghost small" style="margin-top:10px;" onclick="odaSiraReset()">Varsayılana dön</button>';
   } else {
     h+='<div class="muted">'+OS.map(esc).join(" · ")+'</div>';
+  }
+  h+='</div>';
+  }
+  if(_ayarKategori==="odalar"){
+  h+='<div class="card"><div class="sec-title" style="margin-top:0;">Oda durumu (aktif/pasif)</div>'
+    +'<div class="muted" style="margin-bottom:8px;">Pasife alınan oda "boş odalar" hızlı-başlatma listesinden çıkar (yanlışlıkla yeni döngü başlatılmasın diye) ama oda dizininde görünmeye devam eder.</div>';
+  if(can("manage")){
+    getOdaSira().forEach(function(o){
+      var pasif=odaPasifMi(o);
+      h+='<div style="display:flex;justify-content:space-between;align-items:center;padding:5px 2px;border-bottom:1px solid #eee;'+(pasif?'opacity:.5;':'')+'">'
+        +'<span>'+esc(o)+(pasif?' <span class="muted" style="font-size:11px;">(pasif)</span>':'')+'</span>'
+        +'<button class="btn ghost small" onclick="odaPasifToggle(\''+esc(o).replace(/'/g,"\\'")+'\')">'+(pasif?'Aktif yap':'Pasife al')+'</button>'
+        +'</div>';
+    });
   }
   h+='</div>';
   }
@@ -8532,8 +8948,13 @@ function renderAyarlar(){
   if(_ayarKategori==="diger"){
   h+='<div class="card"><div class="sec-title" style="margin-top:0;">Diğer</div>'
     +'<button class="btn ghost" style="width:100%; margin-bottom:8px;" onclick="go(\'yedekleme\')">💾 Yedekleme (dışa/içe aktar)</button>'
-    +(can("manage")?'<button class="btn ghost" style="width:100%;" onclick="go(\'audit\')">📋 Denetim kaydı (kim ne değiştirdi)</button>':'')
+    +(can("manage")?'<button class="btn ghost" style="width:100%;" onclick="go(\'records\')">📋 Denetim kaydı (Kayıtlar sekmesinde)</button>':'')
     +'</div>';
+  h+='<div class="card"><div class="sec-title" style="margin-top:0;">ℹ️ Hakkında</div>'
+    +'<div style="font-size:13px;line-height:1.8;">'
+    +'<div>Uygulama versiyonu: <b>'+APP_VER+'</b></div>'
+    +'<div class="muted">Dirican Mantar Üretim Takip</div>'
+    +'</div></div>';
   }
   el("app").innerHTML=backBtn + h;
 }
