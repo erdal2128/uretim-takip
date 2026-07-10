@@ -3134,21 +3134,23 @@ function getTourPendingRooms(){
 }
 
 /* Helper: Son SAHA işlemleri — günlük tur kayıtlarından üretilir.
-   Her kayıt: oda + yapılan işlem (sulama/serim/tiftik) + su miktarı.
-   Kaynak audit değil, doğrudan girilen veridir (SSOT). */
+   Aynı mantık bugunIslemHTML() ile tutarlı (SSOT): su SADECE sayısal
+   olarak >0 ise gösterilir ("0" veya boş asla yazılmaz). Hem sulama
+   (mühendisin girdiği su/ilaç) hem islemNot (protokol adımı özeti,
+   örn. "tiftik", "toprak çekimi yapıldı") dahil edilir. */
 function getRecentActions(){
   var d=loadData();
   var kayitlar=[];
   (d.cycles||[]).filter(function(c){return !c.bosaltimTarihi;}).forEach(function(c){
     (c.gunluk||[]).forEach(function(g){
-      /* Sadece fiili bir iş yapılmış kayıtları al: sulama/işlem metni veya su var */
       var sulama=(g.sulama||"").trim();
-      var su=(g.su||"").toString().trim();
-      if(!sulama && !su) return; /* sadece ölçüm girilmiş, iş yok — atla */
-      /* Metni kur: "toprak serimi 1000 lt su" gibi */
+      var suVar=(numParse(g.su)>0);
+      var islemNot=(g.islemNot||"").trim();
+      if(!sulama && !suVar && !islemNot) return; /* fiili iş yok — atla */
       var parca=[];
-      if(sulama) parca.push(sulama);
-      if(su && !/lt|litre/i.test(sulama)) parca.push(su+" lt su");
+      if(suVar) parca.push(g.su+" lt su"+(sulama?(" + "+sulama):""));
+      else if(sulama) parca.push(sulama);
+      if(islemNot) parca.push(islemNot);
       kayitlar.push({
         oda:c.oda,
         tarih:g.tarih,
