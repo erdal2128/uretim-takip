@@ -366,7 +366,7 @@ function hasatTartiGetir(oda, tur){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v258";
+var APP_VER = "v261";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -3060,6 +3060,52 @@ function planIndirmeToggle(planId,btn,val){
   saveData(); render();
 }
 
+/* Yarın için SADE görev listesi — Bugünkü Görevler ile aynı ruhta ama
+   aksiyon butonu yok (henüz yapılamaz, sadece önizleme). yarinHTML()'in
+   karmaşık onay/değiştir/WhatsApp apparatus'u (eski Görevler ekranından
+   kalma) burada YOK — sadece "oda — işlem" sade listesi. */
+function getTomorrowTasks(){
+  var d=loadData(), yarin=addDays(todayISO(),1);
+  var tasks=[];
+  d.cycles.filter(function(c){return !c.bosaltimTarihi;}).forEach(function(c){
+    (c.odaGorevleri||[]).filter(function(og){return !og.done && og.tarih===yarin;}).forEach(function(og){
+      tasks.push({oda:c.oda, islem:og.is, tipo:"oda"});
+    });
+  });
+  (getGorevler()||[]).filter(function(g){return !g.done && g.tarih===yarin;}).forEach(function(g){
+    tasks.push({oda:"", islem:g.baslik, tipo:"genel"});
+  });
+  d.cycles.filter(function(c){return !c.bosaltimTarihi;}).forEach(function(c){
+    var sd=siradakiProtokolAdimi(c);
+    if(sd && sd.t===yarin){ tasks.push({oda:c.oda, islem:sd.txt, tipo:"protokol"}); }
+  });
+  d.cycles.filter(function(c){return !c.bosaltimTarihi;}).forEach(function(c){
+    var oneri=protokolOneri(c,yarin);
+    if(oneri) tasks.push({oda:c.oda, islem:oneri, tipo:"sulama"});
+  });
+  /* Oda adına göre grupla, odasız (genel) en sona */
+  tasks.sort(function(a,b){
+    if(!!a.oda!==!!b.oda) return a.oda?-1:1;
+    return (a.oda||"")<(b.oda||"")?-1:1;
+  });
+  return tasks;
+}
+function yarinSadeHTML(){
+  var yarin=addDays(todayISO(),1);
+  var tasks=getTomorrowTasks();
+  var h='<div class="sec-title" style="margin-top:18px;">🌅 Yarın Yapılacaklar ('+tasks.length+') — '+fmtDate(yarin)+' '+gunAdi(yarin)+'</div>';
+  if(!tasks.length){
+    return h+'<div class="card" style="background:var(--green-soft);border:1px solid var(--green);padding:12px 14px;font-size:13px;color:var(--green-dark);">✅ Yarın için planlı iş yok</div>';
+  }
+  h+='<div class="card" style="padding:0;">';
+  tasks.forEach(function(t){
+    h+='<div style="padding:10px 14px;border-bottom:1px solid var(--line);font-size:13.5px;">'
+      +(t.oda?('<b>'+esc(t.oda)+'</b> — '):'')+esc(t.islem)
+      +'</div>';
+  });
+  h+='</div>';
+  return h;
+}
 function yarinHTML(){
   var d=loadData(); var tomorrow=addDays(todayISO(),1); var items=[];
   d.cycles.filter(function(c){return !c.bosaltimTarihi;}).forEach(function(c){
@@ -3357,9 +3403,10 @@ function getTodaysTasks(){
   var d=loadData(), bugun=todayISO();
   var tasks=[];
   
-  /* Oda-bazlı görevler (odaGorevleri) */
+  /* Oda-bazlı görevler (odaGorevleri) — bitenler de dahil, done:true ile işaretli
+     (gizlenmiyor, çizili gösteriliyor — "ne yapıldı ne kaldı" tek bakışta görülsün). */
   d.cycles.filter(function(c){return !c.bosaltimTarihi;}).forEach(function(c){
-    (c.odaGorevleri||[]).filter(function(og){return !og.done && og.tarih<=bugun;}).forEach(function(og){
+    (c.odaGorevleri||[]).filter(function(og){return og.tarih<=bugun;}).forEach(function(og){
       tasks.push({
         tipo:"oda",
         odaId:c.id,
@@ -3368,32 +3415,34 @@ function getTodaysTasks(){
         atama:og.atama,
         tarih:og.tarih,
         gelisTarihi:c.gelisTarihi||"",
-        geciken:(og.tarih<bugun),
-        done:false,
+        geciken:(!og.done && og.tarih<bugun),
+        done:!!og.done,
         id:og.id,
         cyclicId:c.id
       });
     });
   });
   
-  /* Genel görevler (gorevler) — bugün + geciken */
-  (getGorevler()||[]).filter(function(g){return !g.done && g.tarih<=bugun;}).forEach(function(g){
+  /* Genel görevler (gorevler) — bugün + geciken + bitenler */
+  (getGorevler()||[]).filter(function(g){return g.tarih<=bugun;}).forEach(function(g){
     tasks.push({
       tipo:"genel",
       baslik:g.baslik,
       atama:g.atama,
       tarih:g.tarih,
       gelisTarihi:"",
-      geciken:(g.tarih<bugun),
+      geciken:(!g.done && g.tarih<bugun),
       id:g.id,
-      done:false
+      done:!!g.done
     });
   });
   
   /* Protokol takvimi — sıradaki olay-tipi adım bugün/gecikmişse listeye girer.
      Planlama'nın hesapladığı AYNI fonksiyon (siradakiProtokolAdimi), Odalar'daki
      Protokol Özeti ile aynı veri kaynağı (SSOT). Tamamlama toggleTask üzerinden —
-     tiftik/toprak/tırmık kendi detay kutusunu açar, diğerleri direkt işaretlenir. */
+     tiftik/toprak/tırmık kendi detay kutusunu açar, diğerleri direkt işaretlenir.
+     Bugün TAMAMLANMIŞ bir olay-tipi adım varsa (sonYapilanOlayAdimi), o da
+     listeye çizili/✓ olarak eklenir — "bugün ne yapıldı" görünsün. */
   d.cycles.filter(function(c){return !c.bosaltimTarihi;}).forEach(function(c){
     var sd=siradakiProtokolAdimi(c);
     if(sd && sd.t<=bugun){
@@ -3411,13 +3460,55 @@ function getTodaysTasks(){
         cyclicId:c.id
       });
     }
+    var son=sonYapilanOlayAdimi(c);
+    if(son && son.tarih===bugun){
+      tasks.push({
+        tipo:"protokol",
+        odaId:c.id,
+        oda:c.oda,
+        islem:son.txt,
+        atama:"",
+        tarih:son.tarih,
+        gelisTarihi:c.gelisTarihi||"",
+        geciken:false,
+        done:true,
+        id:son.idx,
+        cyclicId:c.id
+      });
+    }
+  });
+  
+  /* Sulama/ilaç — bugünün protokol önerisi. Checkbox ile "tamamlanmaz" (Tur'dan
+     girilir), o yüzden buton yerine "Tur'a git" linki gösterilir. Bugünkü günlük
+     kayıtta zaten sulama/su girilmişse "yapıldı" sayılır — gizlenmez, çizili
+     görünür (gerçekte ne uygulandığı orada okunur). */
+  d.cycles.filter(function(c){return !c.bosaltimTarihi;}).forEach(function(c){
+    var oneri=protokolOneri(c,bugun);
+    if(!oneri) return;
+    var gun=(c.gunluk||[]).find(function(g){return g.tarih===bugun;});
+    var yapildiMi=!!(gun && ((gun.sulama||"").trim() || numParse(gun.su)>0));
+    tasks.push({
+      tipo:"sulama",
+      odaId:c.id,
+      oda:c.oda,
+      islem:yapildiMi?((gun.su?gun.su+" lt su":"")+(gun.sulama?(" "+gun.sulama):"")).trim()||oneri:oneri,
+      atama:"",
+      tarih:bugun,
+      gelisTarihi:c.gelisTarihi||"",
+      geciken:false,
+      done:yapildiMi,
+      id:c.id,
+      cyclicId:c.id
+    });
   });
   
   /* Sıralama:
-     1) Geciken işler her zaman en üstte (en eski gecikme önce)
-     2) Normal işler: odanın kompost geliş tarihine göre YENİDEN ESKİYE
+     1) Bitmemiş her zaman bitenlerden önce (bitenler referans için en altta)
+     2) Geciken işler en üstte (en eski gecikme önce)
+     3) Normal işler: odanın kompost geliş tarihine göre YENİDEN ESKİYE
         (en son gelen kompostun odası en üstte). Aynı oda birlikte gruplanır. */
   tasks.sort(function(a,b){
+    if(a.done!==b.done) return a.done?1:-1;   /* biten en sona */
     /* Geciken > normal */
     if(a.geciken!==b.geciken) return a.geciken?-1:1;
     if(a.geciken && b.geciken){
@@ -3482,7 +3573,14 @@ function getRecentActions(){
     (c.gunluk||[]).forEach(function(g){
       var sulama=(g.sulama||"").trim();
       var suVar=(numParse(g.su)>0);
-      var islemNot=(g.islemNot||"").trim();
+      /* "X için plan Y olarak güncellendi — gerekçe: ..." notları PLANLAMA'dır,
+         fiili üretim/sulama işlemi değil — Son İşlemler'den çıkarılır. */
+      var islemNotHam=(g.islemNot||"").trim();
+      var islemNot=islemNotHam
+        ? islemNotHam.split(" · ").map(function(x){return x.trim();}).filter(function(x){
+            return x && !/^.+ için plan /.test(x);
+          }).join(" · ")
+        : "";
       if(!sulama && !suVar && !islemNot) return; /* fiili iş yok — atla */
       var parca=[];
       if(suVar) parca.push(g.su+" lt su"+(sulama?(" + "+sulama):""));
@@ -3607,27 +3705,33 @@ function renderBugun(){
   /* 3. BUGÜNÜN İŞLERİ (tek liste — geciken üstte kırmızı, sonra en yeni komposttan) */
   /* 3. BUGÜNÜN İŞLERİ — başlık her zaman görünür */
   var gecikenSay=tasks.filter(function(t){return t.geciken;}).length;
-  h+='<div class="sec-title" style="margin-top:18px;">📋 Bugünkü Görevler ('+tasks.length+')'
+  var bekleyenSay=tasks.filter(function(t){return !t.done;}).length;
+  var bitenSay=tasks.filter(function(t){return t.done;}).length;
+  h+='<div class="sec-title" style="margin-top:18px;">📋 Bugünkü Görevler ('+bekleyenSay+' bekliyor'+(bitenSay>0?(' · '+bitenSay+' tamamlandı'):'')+')'
     +(gecikenSay>0?' <span style="color:var(--red);font-weight:600;">· '+gecikenSay+' geciken</span>':'')
     +'</div>';
   if(tasks.length>0){
     h+='<div class="card" style="padding:0;">';
     tasks.forEach(function(t, idx){
       var gec=t.geciken;
+      var done=t.done;
       /* Gecikme gün sayısı */
       var gecGun=gec?daysBetween(t.tarih,bugun):0;
       h+='<div style="padding:12px 14px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;'
-        +(gec?'border-left:4px solid var(--red);background:#fdf3f3;':'border-left:4px solid transparent;')+'">'
+        +(done?'opacity:.55;':(gec?'border-left:4px solid var(--red);background:#fdf3f3;':'border-left:4px solid transparent;'))+'">'
         +'<div style="flex:1;display:flex;align-items:center;gap:10px;">'
-        +'<div style="background:'+(gec?'var(--red)':'var(--green-soft)')+';color:'+(gec?'#fff':'var(--green)')+';width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:600;font-size:11px;flex-shrink:0;">'+(idx+1)+'</div>'
+        +'<div style="background:'+(done?'var(--green)':(gec?'var(--red)':'var(--green-soft)'))+';color:'+(done?'#fff':(gec?'#fff':'var(--green)'))+';width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:600;font-size:11px;flex-shrink:0;">'+(done?'✓':(idx+1))+'</div>'
         +'<div>'
-        +'<div style="font-weight:600;">'+esc(t.oda||"Genel")+(t.islem||t.baslik?' — '+esc(t.islem||t.baslik):'')+'</div>'
-        +'<div style="font-size:11px;margin-top:2px;'+(gec?'color:var(--red);font-weight:600;':'color:var(--muted);')+'">'
-        +(gec?('⚠️ '+gecGun+' gün gecikti · '):'')+esc(t.atama||(t.tipo==="protokol"?"Protokol adımı":"Atanmamış"))
+        +'<div style="font-weight:600;'+(done?'text-decoration:line-through;':'')+'">'+esc(t.oda||"Genel")+(t.islem||t.baslik?' — '+esc(t.islem||t.baslik):'')+'</div>'
+        +'<div style="font-size:11px;margin-top:2px;'+(done?'color:var(--green);':(gec?'color:var(--red);font-weight:600;':'color:var(--muted);'))+'">'
+        +(done?'✓ Yapıldı':((gec?('⚠️ '+gecGun+' gün gecikti · '):'')+esc(t.atama||(t.tipo==="protokol"?"Protokol adımı":(t.tipo==="sulama"?"Sulama/İlaç":"Atanmamış")))))
         +'</div>'
         +'</div>'
         +'</div>'
-        +'<button class="btn small" style="padding:8px 14px;font-size:13px;background:var(--green);color:#fff;border:none;border-radius:8px;flex-shrink:0;" onclick="gorevTamamla(\''+t.id+'\',\''+t.tipo+'\',\''+t.cyclicId+'\')">✓</button>'
+        +(done?''
+          :(t.tipo==="sulama"
+            ?'<button class="btn small ghost" style="padding:8px 12px;font-size:12px;flex-shrink:0;" onclick="turOdadaAc(\''+t.cyclicId+'\')">🚶 Tur\'a git</button>'
+            :'<button class="btn small" style="padding:8px 14px;font-size:13px;background:var(--green);color:#fff;border:none;border-radius:8px;flex-shrink:0;" onclick="gorevTamamla(\''+t.id+'\',\''+t.tipo+'\',\''+t.cyclicId+'\')">✓</button>'))
         +'</div>';
     });
     h+='</div>'
@@ -3638,10 +3742,10 @@ function renderBugun(){
     h+='<div class="card" style="background:var(--green-soft);border:1px solid var(--green);padding:12px 14px;font-size:13px;color:var(--green-dark);">✅ Bugün için bekleyen görev yok</div>';
   }
   
-  /* 3b. YARINKI GÖREVLER — zaten var olan yarinHTML() (Görevler sekmesinde
-     kullanılıyordu, aynen buraya da bağlandı — kod tekrarı yok). Boşsa hiç
-     görünmez (kendi iç mantığı öyle). */
-  h += yarinHTML();
+  /* 3b. YARINKI GÖREVLER — sade liste (protokol + sulama + genel görevler,
+     aksiyon butonu yok, sadece önizleme). Eski karmaşık yarinHTML() (onay/
+     değiştir/WhatsApp) hâlâ Görevler ekranında duruyor, buradan kaldırıldı. */
+  h += yarinSadeHTML();
   
   /* 4. TUR KAYDI BEKLEYENLERİ (QUICK ACCESS) — başlık her zaman görünür */
   h+='<div class="sec-title" style="margin-top:18px;">🚶 Günlük Tur Bekleyen Odalar ('+tourPending.length+')</div>';
