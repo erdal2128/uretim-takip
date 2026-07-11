@@ -366,7 +366,7 @@ function hasatTartiGetir(oda, tur){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v239";
+var APP_VER = "v244";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -811,7 +811,7 @@ var PROTOKOL = [
   {ref:"gelis", gun:7,  tip:"olay", sahip:"ekip", rol:"tiftik", txt:"Tiftik yapılır"},
   {ref:"gelis", gun:6,  tip:"ilac", sahip:"ziraat", txt:"500 lt su + 250 ml Serenade", tekrarBitisRef:"toprak", tekrarBitisGun:-2, not:"Poşet açıldıktan toprak −2'ye kadar HER GÜN"},
   {ref:"gelis", gun:7,  tip:"uyari", sure:2, sonucSecenekleri:["Ateşlenmedi","Ateşlendi, müdahale edildi"], txt:"7.–8. gün: kompostta ateşlenme — kompost 28-30°ye fırlayabilir, ziraat mühendisi kontrol etsin"},
-  {ref:"toprak", gun:-2, tip:"ilac", sahip:"ziraat", txt:"Toprak −2: sulama + Vivando (1 gün boşluk — sarım yukarı vursun)"},
+  {ref:"toprak", gun:-2, tip:"ilac", sahip:"ziraat", txt:"1000 lt su + 100 ml Vivando (1 gün boşluk — sarım yukarı vursun)"},
   {ref:"toprak", gun:0,  tip:"olay", sahip:"ekip", rol:"toprak", txt:"Toprak serilir"},
   {ref:"toprak", gun:0,  tip:"olay", sahip:"ekip", txt:"Oda yıkanır (toprak sonrası)"},
   {ref:"toprak", gun:0,  tip:"su",   sahip:"ziraat", txt:"1000 lt su (ilaçsız, neme göre artabilir)"},
@@ -829,6 +829,14 @@ var PROTOKOL = [
   {ref:"hava", gun:9,  tip:"ilac", sahip:"ziraat", txt:"Bezelye boyutu: oda 18°, kompost 20-21° · 1000 lt su + kalsiyum"},
   {ref:"hava", gun:10, tip:"ilac", sahip:"ziraat", txt:"Ceviz boyutu: son su · 1000 lt su + sodyum"},
   {ref:"hava", gun:11, tip:"olay", sahip:"ziraat", sure:5, rol:"hasat", txt:"Hasat başlar — 1.g sodyum → 2-3 seyreltme → 4-5 pik → 6 sıfırlama+kök temizliği+2000 lt su (2. 1000 lt'ye hidrojen peroksit). Hasat günü oda 17° (personel girer). Sıfırlama günü kompost 23°'ye çıkar, sonra her gün −1°; +2 gün 1000+1000 lt su (2.1000 lt gübre). CO₂: 1.flaş 2100-2400, 2.flaş 3000-3300. Ağırlıklı 2 flaş; kompost iyiyse 3. Boşaltım son flaşın sıfırlamasından sonra."},
+  /* Flaş seviyesi — her biri kendi gerçekleşen tarihiyle onaylanır, zincir
+     otomatik kayar (sabit takvim değil, gerçek üretim akışı takip edilir). */
+  {ref:"hasat", gun:0, tip:"olay", sahip:"ekip", rol:"flas1", txt:"1. Flaş"},
+  {ref:"flas1", gun:5, tip:"olay", sahip:"ekip", rol:"flas1bitis", txt:"1. Flaş Bitişi (sıfırlama)"},
+  {ref:"flas1bitis", gun:0, tip:"olay", sahip:"ziraat", rol:"flasarasi", txt:"Flaş Arası başlar"},
+  {ref:"flasarasi", gun:6, tip:"olay", sahip:"ekip", rol:"flas2", txt:"2. Flaş"},
+  {ref:"flas2", gun:5, tip:"olay", sahip:"ekip", rol:"flas2bitis", txt:"2. Flaş Bitişi (sıfırlama)"},
+  {ref:"flas2bitis", gun:1, tip:"olay", sahip:"ekip", rol:"bosaltma", txt:"Oda Boşaltma"},
   {ref:"gelis", gun:0,  tip:"olay", sahip:"ekip", rol:"kompostindirme", txt:"Kompost indirme"}
 ];
 var PROTOKOL_SURUM = 6; /* v6: Üretim zinciri yeniden kuruldu — Kompost indirme (gelis+0, YENİ) → Poşet (indirmeden+6, artık geliş yerine indirmeye bağlı) → Tiftik (gelis+7, bağımsız) → Toprak (offToprak, bağımsız) → Tırmık (toprak+7) → Hava (artık tırmık+3, eskiden toprak+10 sabitti) → Hasat (artık hava+11, eskiden toprak+20 sabitti). Poşet/tiftik gecikmesi sonrakini ETKİLEMEZ; kompost indirme/toprak/tırmık/hava gecikmesi bir SONRAKİ adımı ETKİLER (otomatik kayar). */
@@ -1144,9 +1152,15 @@ function adimTamamla(c, idx, opts){
 
   /* Rol'e göre özel tarih alanı — rapor/PDF/performans bunları okur, senkron şart.
      "kompostindirme" hariç: onun gerçek verisi Kompost İndirme Planı formundan
-     (c.kompostIndirme) gelir, burada ayrıca yazmıyoruz — SSOT tek kaynakta kalsın. */
+     (c.kompostIndirme) gelir, burada ayrıca yazmıyoruz — SSOT tek kaynakta kalsın.
+     "bosaltma": c.bosaltimTarihi UYGULAMANIN HER YERİNDE "aktif mi" kontrolü için
+     kullanılan KANONİK alan — bu adım tamamlanınca onu da senkron tutuyoruz, aksi
+     halde oda hem "boşaltıldı" (protokolde) hem "hâlâ aktif" (her yerde) görünür.
+     Flaş adımları (flas1/flas1bitis/flasarasi/flas2/flas2bitis) ayrı üst-seviye
+     alana ihtiyaç duymaz, c.adimDetay zaten SSOT olarak yeterli. */
   if(alanKey==="hava"){ if(!c.havaBaslangic) c.havaBaslangic=tarih; }
-  else if(alanKey && alanKey!=="poset" && alanKey!=="hasat" && alanKey!=="kompostindirme"){ c[alanKey+"Tarihi"]=tarih; }
+  else if(alanKey==="bosaltma"){ if(!c.bosaltimTarihi) c.bosaltimTarihi=tarih; }
+  else if(alanKey && ["poset","hasat","kompostindirme","flas1","flas1bitis","flasarasi","flas2","flas2bitis","bosaltma"].indexOf(alanKey)<0){ c[alanKey+"Tarihi"]=tarih; }
 
   /* Geçmişe dönük tarih + not + (tiftik/toprak/tırmık DIŞINDAKİ adımlar için)
      kim yaptı / doğru mu — bunlar rapor okumadığı için buraya YAZILABİLİR,
@@ -1173,7 +1187,8 @@ function adimGeriAl(c, idx){
   if(st){
     var alanKey = st.rol || protokolAdimAlanKey(st.txt);
     if(alanKey==="hava"){ c.havaBaslangic=""; }
-    else if(alanKey && alanKey!=="poset" && alanKey!=="hasat" && alanKey!=="kompostindirme"){ c[alanKey+"Tarihi"]=""; }
+    else if(alanKey==="bosaltma"){ c.bosaltimTarihi=""; }
+    else if(alanKey && ["poset","hasat","kompostindirme","flas1","flas1bitis","flasarasi","flas2","flas2bitis","bosaltma"].indexOf(alanKey)<0){ c[alanKey+"Tarihi"]=""; }
   }
   if(c.adimDetay) delete c.adimDetay["p"+idx];
   touchCycle(c);
@@ -1346,6 +1361,37 @@ function siradakiProtokolAdimi(c){
 /* Günlük Tur'da "Yarın X yapılsın" — mevcut Ertele mekanizmasını TERS yönde kullanır
    (Ertele +gün ekler, bu -gün ekleyerek tarihi öne çeker). Yeni bir veri modeli gerekmez,
    aynı c.ertele alanı okunur; Görevler listesi ve puanlama otomatik olarak günceli görür. */
+/* PLANLANAN TARİH — henüz yapılmamış bir adımın hedef tarihini DOĞRUDAN
+   istenen güne taşır (sadece yarın veya +1 gün değil, herhangi bir tarih).
+   c.ertele["p"+idx] zaten var olan zincir-mekanizmasını kullanır — yeni bir
+   alan icat edilmedi, sadece "yarına çek/ertele"nin daha esnek hâli. Seçilen
+   tarih yeni PLAN olur, sonraki adımlar (gerçekleşince) buna göre kayar. */
+function planTarihiDegistirAc(cid, idx){
+  var wm=el("warnModal"); if(!wm) return;
+  var c=loadData().cycles.find(function(x){return x.id===cid;}); if(!c) return;
+  var s=getProtokol()[idx]; if(!s) return;
+  var base=protokolTarih(c,s); if(!base) return;
+  var mevcutErt=(c.ertele && c.ertele["p"+idx])?c.ertele["p"+idx]:0;
+  var mevcutTarih=addDays(base,mevcutErt);
+  wm.innerHTML='<div class="modal-bg" onclick="if(event.target===this) closeWarnBox();"><div class="modal">'
+    +'<div style="font-weight:700;font-size:17px;margin-bottom:4px;">'+esc(s.txt)+' — planlanan tarih</div>'
+    +'<div class="muted" style="font-size:12px;margin-bottom:8px;">Şu an planlanan: '+fmtDate(mevcutTarih)+'. Yeni bir tarih seç — bu, adım henüz yapılmadan önce planı değiştirir (gerçekleşen tarih değil).</div>'
+    +'<label>Yeni planlanan tarih</label><input type="date" id="ptd_tarih" value="'+mevcutTarih+'">'
+    +'<div class="row" style="margin-top:14px;"><button class="btn" onclick="planTarihiKaydet(\''+cid+'\','+idx+')">Kaydet</button>'
+    +'<button class="btn ghost" onclick="closeWarnBox()">Vazgeç</button></div>'
+    +'</div></div>';
+}
+function planTarihiKaydet(cid, idx){
+  if(!can("edit")) return noPerm();
+  var c=loadData().cycles.find(function(x){return x.id===cid;}); if(!c) return;
+  var s=getProtokol()[idx]; if(!s) return;
+  var base=protokolTarih(c,s); if(!base) return;
+  var yeniTarih=(el("ptd_tarih")&&el("ptd_tarih").value)||todayISO();
+  if(!c.ertele) c.ertele={};
+  c.ertele["p"+idx]=daysBetween(base, yeniTarih);
+  gunlukGorevNotEkle(c, esc(s.txt)+" için plan "+fmtDate(yeniTarih)+" olarak güncellendi");
+  touchCycle(c); saveData(); closeWarnBox(); toast("Plan güncellendi: "+fmtDate(yeniTarih)); render();
+}
 function protokolYarinaCek(cid, idx){
   if(!can("edit")) return noPerm();
   var c=loadData().cycles.find(function(x){return x.id===cid;}); if(!c) return;
@@ -2252,6 +2298,11 @@ function gunlukKontrolMesaji(c, tarih, sulamaVarMi){
     var pg=posetGun(c);
     msgs.push({tip:"blockSulama", metin:esc(c.oda||"")+": poşet henüz açılmadı"+(pg?(" (beklenen: "+fmtDate(pg)+")"):"")+" — sulama/su bu tarihte girilemez."});
   }
+  /* SULAMA YASAĞI: Tırmık tamamlandıktan Havaya Başlama gerçekleşene kadar
+     hiçbir sulama görevi girilmemeli — kompost bu dönemde su almamalı. */
+  if(sulamaVarMi && c.tirmikTarihi && tarih>=c.tirmikTarihi && (!c.havaBaslangic || tarih<c.havaBaslangic)){
+    msgs.push({tip:"blockSulama", metin:esc(c.oda||"")+": Bu üretim aşamasında sulama yapılmamalıdır (Tırmık sonrası, Havaya Başlama'ya kadar)."});
+  }
   return msgs;
 }
 function showWarnBox(title, lines){
@@ -2364,6 +2415,21 @@ function panoEditSave(id){
     toast(n?"Kaydedildi":"Değişiklik yok");
   }
   go("bugun");
+}
+/* Kısa gün adı — planlama içeren tarihlerin yanına (kompost teslim, protokol
+   sıradaki adım vb). Pazar özellikle vurgulanır ("Pazarı bilelim, önlem alalım"). */
+var GUN_KISA=["Paz","Pzt","Sal","Çar","Per","Cum","Cmt"]; /* getUTCDay(): 0=Pazar */
+function gunKisa(iso){
+  if(!iso) return "";
+  var p=(""+iso).split("-"); if(p.length<3) return "";
+  var d=new Date(Date.UTC(+p[0],+p[1]-1,+p[2]));
+  if(isNaN(d.getTime())) return "";
+  return GUN_KISA[d.getUTCDay()];
+}
+function gunKisaHTML(iso){
+  var g=gunKisa(iso); if(!g) return "";
+  var pazar=(g==="Paz");
+  return ' <span style="font-size:10.5px;'+(pazar?'color:var(--red);font-weight:700;':'color:var(--muted);')+'">'+g+'</span>';
 }
 function gunAdi(iso){ if(!iso) return ""; var p=(""+iso).split("-"); if(p.length<3) return ""; var d=new Date(Date.UTC(+p[0],+p[1]-1,+p[2])); if(isNaN(d.getTime())) return ""; var g=["Pazar","Pazartesi","Salı","Çarşamba","Perşembe","Cuma","Cumartesi"]; return g[d.getUTCDay()]; }
 function sonGunluk(c){ if(c.gunluk&&c.gunluk.length){ var a=c.gunluk.slice().sort(function(x,y){return cmpDate(x.tarih,y.tarih);}); return a[a.length-1]; } return null; }
@@ -3124,12 +3190,12 @@ function getCriticalAlerts(){
     }
     if(gun){
       var t=numParse(gun.kompostC);
-      if(t!==null && (t>28 || t<16)){
+      if(t!==null && (t>KOMPOST_KRITIK_UST || t<KOMPOST_KRITIK_ALT)){
         alerts.push({
           tipo:"temp",
           odaId:c.id,
           oda:c.oda,
-          msg:"Sıcaklık "+t+"°C — "+((t>28)?"Çok yüksek, takip et":"Düşük, kontrol et"),
+          msg:"Sıcaklık "+t+"°C — "+((t>KOMPOST_KRITIK_UST)?"Çok yüksek, takip et":"Düşük, kontrol et"),
           severity:2,
           tarih:gun.tarih
         });
@@ -3138,7 +3204,7 @@ function getCriticalAlerts(){
   });
   
   /* Açık arıza */
-  (d.arizalar||[]).filter(function(a){return !a.bitistarihi;}).forEach(function(a){
+  (d.arizalar||[]).filter(function(a){return a.durum==="acik";}).forEach(function(a){
     alerts.push({
       tipo:"ariza",
       arizaId:a.id,
@@ -6715,7 +6781,8 @@ function uretimTakvimiHTML(active){
       if(!tarih) return '<td class="note">—</td>';
       var renk = durum==="yapildi"?"var(--green)":(durum==="gecikti"?"var(--red)":"var(--muted)");
       var isim = durum==="yapildi"?"✓ ":(durum==="gecikti"?"⚠️ ":"");
-      return '<td style="color:'+renk+';white-space:nowrap;">'+isim+fmtDate(tarih).substring(0,5)+'</td>';
+      var pazarMi=(gunKisa(tarih)==="Paz");
+      return '<td style="color:'+renk+';white-space:nowrap;">'+isim+fmtDate(tarih).substring(0,5)+(pazarMi?' <span style="color:var(--red);font-weight:700;font-size:10px;" title="Pazar">P</span>':'')+'</td>';
     }
     h+='<tr onclick="odaTakvimAcKapa(\''+c.id+'\')" style="cursor:pointer;">'
       +'<td><b>'+esc(c.oda)+'</b></td>'
@@ -6943,7 +7010,7 @@ function odaProtokolOzetSatiriHTML(c){
 
   /* Son yapılan — küçük, ikincil satır */
   if(son){
-    h+='<div style="font-size:12px;color:var(--muted);margin-top:2px;">Son yapılan: '+esc(son.txt)+' — '+fmtDate(son.tarih)
+    h+='<div style="font-size:12px;color:var(--muted);margin-top:2px;">Son yapılan: '+esc(son.txt)+' — '+fmtDate(son.tarih)+gunKisaHTML(son.tarih)
       +(can("edit")?' <span onclick="adimDuzenleAc(\''+c.id+'\','+son.idx+')" style="text-decoration:underline;cursor:pointer;">düzelt</span>':'')
       +(can("edit")?' · <span onclick="gecmisIslemleriGosterAc(\''+c.id+'\')" style="text-decoration:underline;cursor:pointer;">diğer geçmiş işlemler</span>':'')
       +'</div>';
@@ -6959,7 +7026,7 @@ function odaProtokolOzetSatiriHTML(c){
     h+='<div style="border-top:1px solid var(--line);margin-top:8px;padding-top:8px;">'
       +'<div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.03em;">Sıradaki İş</div>'
       +'<div style="font-weight:700;font-size:16px;margin-top:2px;">'+esc(sd.txt)+'</div>'
-      +'<div style="font-size:12.5px;color:var(--muted);margin-top:3px;">📅 Planlanan: <b>'+fmtDate(sd.t)+'</b></div>';
+      +'<div style="font-size:12.5px;color:var(--muted);margin-top:3px;">📅 Planlanan: <b>'+fmtDate(sd.t)+'</b>'+gunKisaHTML(sd.t)+'</div>';
 
     h+='<div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.03em;margin-top:8px;">Durum</div>';
     if(gecikmisVeyaBugun && can("edit")){
@@ -6974,12 +7041,13 @@ function odaProtokolOzetSatiriHTML(c){
     }
 
     if(can("edit")){
-      h+='<div style="display:flex;gap:8px;margin-top:10px;">';
+      h+='<div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;">';
       if(gecikmisVeyaBugun){
         h+='<button class="btn ghost small" style="flex:1;" onclick="protokolGorevErtele(\''+c.id+'\','+sd.idx+',\'diger\')">Ertele (1 gün)</button>';
       } else {
         h+='<button class="btn small" style="flex:1;" onclick="'+onaylaFonk+'">Erken Yap</button>';
       }
+      h+='<button class="btn ghost small" style="flex:1;" onclick="planTarihiDegistirAc(\''+c.id+'\','+sd.idx+')">📅 Tarihi değiştir</button>';
       h+='</div>';
     }
     h+='</div>';
@@ -7165,7 +7233,7 @@ function renderPlan(){
         }
         var dg=daysBetween(today,x.cikis);
         var durum = dg<0?'<span class="red">geçti</span>':(dg===0?'<b>bugün</b>':dg+" gün");
-        h+='<tr><td class="red">'+fmtDate(x.cikis)+'</td><td><b>'+esc(x.oda||"—")+'</b></td><td class="note">'+esc(x.firma||"")+'</td><td>'+durum+'</td>'
+        h+='<tr><td class="red">'+fmtDate(x.cikis)+gunKisaHTML(x.cikis)+'</td><td><b>'+esc(x.oda||"—")+'</b></td><td class="note">'+esc(x.firma||"")+'</td><td>'+durum+'</td>'
           +'<td style="white-space:nowrap;"><button class="btn small" onclick="editPlan(\''+x.id+'\')">✎</button> '
           +'<button class="btn ghost small" onclick="ertelePlan(\''+x.id+'\',1)">+1g</button> '
           +'<button class="btn small" onclick="planToOda(\''+x.id+'\')">Oda</button> '
@@ -7178,7 +7246,7 @@ function renderPlan(){
     if(gecmis.length){
       h+='<div class="sec-title">Oda açılanlar ('+gecmis.length+')</div><div class="card" style="padding:8px;"><div style="overflow-x:auto;"><table><thead><tr><th>Çıkış</th><th>Oda</th><th>Firma</th><th></th></tr></thead><tbody>';
       gecmis.forEach(function(x){
-        h+='<tr><td class="red">'+fmtDate(x.cikis)+'</td><td>'+esc(x.oda||"—")+'</td><td class="note">'+esc(x.firma||"")+'</td><td><button class="del-x" onclick="delPlan(\''+x.id+'\')">×</button></td></tr>';
+        h+='<tr><td class="red">'+fmtDate(x.cikis)+gunKisaHTML(x.cikis)+'</td><td>'+esc(x.oda||"—")+'</td><td class="note">'+esc(x.firma||"")+'</td><td><button class="del-x" onclick="delPlan(\''+x.id+'\')">×</button></td></tr>';
       });
       h+='</tbody></table></div></div>';
     }
