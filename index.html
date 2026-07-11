@@ -366,7 +366,7 @@ function hasatTartiGetir(oda, tur){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v263";
+var APP_VER = "v268";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -2136,9 +2136,14 @@ function hasatTakvimHTML(c){
   return h;
 }
 function beklenenTakvim(c){
-  /* SSOT: Her aşama için protokol adımını bul ve protokolTarih() ile hesapla.
-     Bu sayede c.ertele (Planla'da yapılan manuel ertelemeler) otomatik yansır.
-     Daha önce offTiftik/offToprak vb. hardkodlı ayarlar kullanıyordu ve c.ertele'yi görmüyordu. */
+  /* SSOT: Her aşama için protokol adımını bul ve protokolTarih() ile hesapla,
+     SONRA adımın KENDİ ertelemesini (c.ertele["p"+idx]) ayrıca ekle.
+     ÖNEMLİ: protokolTarih() bir adımın SADECE referans verdiği (bir önceki)
+     adımın ertelemesini zincirden taşır — kendi ertelemesini eklemez. Kendi
+     ertelemesini eklemek uygulamanın her yerinde (siradakiProtokolAdimi,
+     planTarihiDegistirAc vb.) AYRI bir adım olarak yapılıyor — burada da aynı
+     desen kullanılmalı, aksi halde "📅 Planla" ile değiştirilen tarih (örn.
+     Toprak) bu takvimde yansımaz (KRİTİK BUG, düzeltildi). */
   var roles = ['tiftik', 'toprak', 'tirmik', 'hava', 'hasat'];
   var names = {tiftik:'Tiftik', toprak:'Toprak', tirmik:'Tırmık', hava:'Hava', hasat:'1. Hasat'};
   var gerçekler = {tiftik:c.tiftikTarihi, toprak:c.toprakTarihi, tirmik:c.tirmikTarihi, hava:c.havaBaslangic, hasat:null};
@@ -2149,7 +2154,11 @@ function beklenenTakvim(c){
     var beklenen = null;
     if(idx >= 0){
       var step = getProtokol()[idx];
-      beklenen = protokolTarih(c, step);  /* c.ertele içinde otomatik dikkate alınır */
+      var base = protokolTarih(c, step);
+      if(base){
+        var ert = (c.ertele && c.ertele["p"+idx]) || 0;
+        beklenen = ert ? addDays(base, ert) : base;
+      }
     }
     result.push({
       ad: names[rol],
@@ -3244,6 +3253,21 @@ function yarinPlanlanan(c){
   getProtokol().forEach(function(st,idx){
     if(st.silindi) return;
     if(st.tip==="uyari") return;
+    
+    /* TEKRARLI KURAL (örn. "Poşet açıldıktan toprak-2'ye kadar HER GÜN Serenade"):
+       tek bir "t" tarihi yok, bir ARALIK var (protokolAdimAraligi). "Yarın" o
+       aralığın içine düşüyorsa, bu da yarının planlanan işi olarak gösterilmeli.
+       Bu kontrol EKSİKTİ — tekrarlı kurallar hiçbir zaman "Yarın işlem" kolonunda
+       görünmüyordu (KRİTİK BUG, düzeltildi). */
+    if(st.tekrarBitisRef){
+      var ar=protokolAdimAraligi(c,st);
+      if(ar && cmpDate(tomorrow,ar.baslangic)>=0 && cmpDate(tomorrow,ar.bitis)<=0){
+        var dgR=degisik("p"+idx);
+        list.push({txt:dgR||st.txt, orijinal:st.txt, degisti:!!dgR, key:"p"+idx, onayli:onayliMi("p"+idx)});
+      }
+      return;
+    }
+    
     var base=protokolTarih(c,st); if(!base) return;
     /* SADECE "olay" tipi adımlarda kendi ertele'si eklenir — protokolTarih()
        bu tipler için kasıtlı olarak kendi ertele'sini dışarıda bırakır (çağıran
@@ -3416,10 +3440,19 @@ function getTodaysTasks(){
   var d=loadData(), bugun=todayISO();
   var tasks=[];
   
-  /* Oda-bazlı görevler (odaGorevleri) — bitenler de dahil, done:true ile işaretli
-     (gizlenmiyor, çizili gösteriliyor — "ne yapıldı ne kaldı" tek bakışta görülsün). */
+  /* Oda-bazlı görevler (odaGorevleri) — BEKLEYEN (done:false) her zaman görünür
+     (tarih<=bugun ise, geciken dahil). TAMAMLANMIŞ (done:true) SADECE bugün
+     tamamlandıysa görünür (doneAt===bugun) — aksi halde geçmişte tamamlanmış
+     HER görev sonsuza dek "Bugünkü Görevler"de kalırdı (KRİTİK BUG, düzeltildi). */
   d.cycles.filter(function(c){return !c.bosaltimTarihi;}).forEach(function(c){
-    (c.odaGorevleri||[]).filter(function(og){return og.tarih<=bugun;}).forEach(function(og){
+    (c.odaGorevleri||[]).filter(function(og){
+      if(og.tarih>bugun) return false;
+      if(og.done){
+        var doneGun = og.doneAt ? og.doneAt.slice(0,10) : og.tarih;
+        return doneGun===bugun;
+      }
+      return true;
+    }).forEach(function(og){
       tasks.push({
         tipo:"oda",
         odaId:c.id,
@@ -3436,8 +3469,16 @@ function getTodaysTasks(){
     });
   });
   
-  /* Genel görevler (gorevler) — bugün + geciken + bitenler */
-  (getGorevler()||[]).filter(function(g){return g.tarih<=bugun;}).forEach(function(g){
+  /* Genel görevler (gorevler) — AYNI mantık: bekleyen her zaman, tamamlanmış
+     SADECE bugün tamamlandıysa görünür (doneAt===bugun). */
+  (getGorevler()||[]).filter(function(g){
+    if(g.tarih>bugun) return false;
+    if(g.done){
+      var doneGun = g.doneAt ? g.doneAt.slice(0,10) : g.tarih;
+      return doneGun===bugun;
+    }
+    return true;
+  }).forEach(function(g){
     tasks.push({
       tipo:"genel",
       baslik:g.baslik,
@@ -3616,8 +3657,11 @@ function getRecentActions(){
 function getDayProgress(){
   var d=loadData(), bugun=todayISO();
   
-  /* KALAN: getTodaysTasks zaten bugünkü + geciken, tamamlanmamış işleri verir (tek kaynak) */
-  var kalan=getTodaysTasks().length;
+  /* KALAN: getTodaysTasks() hem bekleyen HEM (bugün) tamamlanan görevleri içerir
+     (liste ekranında ikisi de gösterilir — tamamlananlar çizili). "Kalan" sayacı
+     için SADECE done:false olanlar sayılmalı — aksi halde tamamlanan görevler de
+     "kalan"a dahil olur (KRİTİK BUG, düzeltildi: eskiden .length tüm listeyi sayıyordu). */
+  var kalan=getTodaysTasks().filter(function(t){return !t.done;}).length;
   
   /* TAMAMLANAN: SADECE bugün tamamlanmış işler.
      doneAt (ISO timestamp) bugüne aitse sayılır. Eski kayıtlarda doneAt yoksa,
@@ -3796,6 +3840,7 @@ function renderBugun(){
   el("app").innerHTML=h
     +'<div style="position:fixed;bottom:130px;right:16px;display:flex;gap:8px;flex-direction:column;z-index:39;">'
     +'<button class="fab" style="padding:14px 18px;font-size:16px;min-width:50px;" onclick="openForm(null)" title="Yeni kompost girişi / döngü">+ Kompost Girişi</button>'
+    +'<button class="fab" style="padding:14px 18px;font-size:16px;min-width:50px;background:#8a5a1f;" onclick="go(\'gorevler\')" title="Genel görev ekle (koridor yıkama, branda yıkama, vb.)">+ Görev</button>'
     +'<button class="fab" style="padding:14px 18px;font-size:16px;min-width:50px;background:var(--teal);" onclick="go(\'arizalar\')" title="Arıza ekle">🔧</button>'
     +'</div>'
     +'<div class="muted" style="text-align:center;padding:2px 0 6px;">Üretim Takip '+APP_VER+'</div>';
@@ -9571,7 +9616,15 @@ function protokolOneri(c, iso){
        o aşamaya gelmediğinden sulamayı gizle. */
     if(sulamaRefSeviye > odaAsamaSeviye) return;
     
-    out.push(adimGosterMetni(c, idx, s, iso));
+    var metin = adimGosterMetni(c, idx, s, iso);
+    /* Placeholder/sentinel metin kontrolü: kullanıcı protokole "bu gün hiçbir
+       şey verilmeyecek" anlamında "boş" gibi bir yer tutucu metin girmiş
+       olabilir (örn. Toprak+2 satırı). Bu, GERÇEK bir sulama/ilaç önerisi
+       DEĞİLDİR — göreve çevrilmemeli, aksi halde "A-1 — boş" gibi anlamsız
+       görevler oluşur. */
+    var PLACEHOLDER_RE = /^(boş|yok|hiç ?bir ?şey|hiçbir şey verilmeyecek|-|—)$/i;
+    if(PLACEHOLDER_RE.test((metin||"").trim())) return;
+    out.push(metin);
   });
   return out.join(" + ");
 }
