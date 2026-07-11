@@ -366,7 +366,7 @@ function hasatTartiGetir(oda, tur){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v261";
+var APP_VER = "v262";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -2136,15 +2136,28 @@ function hasatTakvimHTML(c){
   return h;
 }
 function beklenenTakvim(c){
-  var S=getSet(c); var g=c.gelisTarihi, t=c.toprakTarihi;
-  function exp(fromToprak){ if(t) return addDays(t, fromToprak); if(g) return addDays(g, S.offToprak+fromToprak); return null; }
-  return [
-    {ad:"Tiftik",   beklenen: g?addDays(g,S.offTiftik):null, ger:c.tiftikTarihi},
-    {ad:"Toprak",   beklenen: g?addDays(g,S.offToprak):null, ger:c.toprakTarihi},
-    {ad:"Tırmık",   beklenen: exp(S.offTirmik),  ger:c.tirmikTarihi},
-    {ad:"Hava",     beklenen: exp(S.offHava), ger:c.havaBaslangic},
-    {ad:"1. Hasat", beklenen: exp(S.offHasat), ger:null}
-  ];
+  /* SSOT: Her aşama için protokol adımını bul ve protokolTarih() ile hesapla.
+     Bu sayede c.ertele (Planla'da yapılan manuel ertelemeler) otomatik yansır.
+     Daha önce offTiftik/offToprak vb. hardkodlı ayarlar kullanıyordu ve c.ertele'yi görmüyordu. */
+  var roles = ['tiftik', 'toprak', 'tirmik', 'hava', 'hasat'];
+  var names = {tiftik:'Tiftik', toprak:'Toprak', tirmik:'Tırmık', hava:'Hava', hasat:'1. Hasat'};
+  var gerçekler = {tiftik:c.tiftikTarihi, toprak:c.toprakTarihi, tirmik:c.tirmikTarihi, hava:c.havaBaslangic, hasat:null};
+  
+  var result = [];
+  roles.forEach(function(rol){
+    var idx = protokolRolIdx(rol);
+    var beklenen = null;
+    if(idx >= 0){
+      var step = getProtokol()[idx];
+      beklenen = protokolTarih(c, step);  /* c.ertele içinde otomatik dikkate alınır */
+    }
+    result.push({
+      ad: names[rol],
+      beklenen: beklenen,
+      ger: gerçekler[rol]
+    });
+  });
+  return result;
 }
 function esc(s){ return (s===null||s===undefined)?"":(""+s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
 /* ---------- Ortak kart yardımcıları (kod tekrarını azaltmak için) ----------
@@ -9519,6 +9532,11 @@ function protokolAdimAraligi(c, step){
 }
 function protokolOneri(c, iso){
   var out=[];
+  /* Oda şu an hangi aşamada? Sulama/ilaç önerisi SADECE oda o aşamada veya
+     daha sonraki aşamadaysa gösterilsin. Örn: Toprak aşamasındayken "Hava+3 su"
+     önerisi gelmemeli — çünkü henüz Hava aşamasına gelmedi. */
+  var odaAsamasi = stageOf(c).t; /* "Toprak dönemi", "1. Misel gelişim", vb */
+  
   getProtokol().forEach(function(s,idx){
     if(s.silindi || (s.tip!=="ilac" && s.tip!=="su")) return;
     if(s.tekrarBitisRef){
@@ -9527,12 +9545,33 @@ function protokolOneri(c, iso){
       return;
     }
     var dt=protokolTarih(c,s); if(!dt) return;
-    /* NOT: Burada c.ertele["p"+idx] TEKRAR eklenmez — protokolTarih() zaten
-       referans zincirinden (örn. toprak ertelendiyse) doğru tarihi çözüyor.
-       Eskiden burada ikinci kez ekleniyordu; bu, o adımın kendi index'inde
-       (asla olmaması gereken ama kalıntı olabilecek) bir ertele değeri varsa
-       tarihi YANLIŞLIKLA bir daha kaydırıyordu (örn. 13 yerine 12 çıkması). */
-    if(dt===iso) out.push(adimGosterMetni(c, idx, s, iso)); /* mühendis 600 dediyse 600 gelir */
+    
+    /* YALNIZCA bugün için sulama/ilaç — eski tarihlerde değil */
+    if(dt!==iso) return;
+    
+    /* Aşama kontrolü: Sulama/ilaç ref'ı oda'nın bulunduğu aşamaya uygun mu?
+       Toprak dönemindeyken → ref:"toprak" sulamalar ✓
+       Hava dönemindeyken → ref:"hava" sulamalar ✓
+       Ama Toprak dönemindeyken ref:"hava" sulamalar gösterilmemeli ✗ */
+    var refAsamaPiramidi = {
+      gelis:0, poset:1, tiftik:2, toprak:3, tirmik:4, hava:5, hasat:6
+    };
+    var sulamaRefSeviye = refAsamaPiramidi[s.ref] || -1;
+    var odaAsamaSeviye = odaAsamasi.includes("Kuluçka") ? 0
+      : odaAsamasi.includes("Toprak dönemi") ? 3
+      : odaAsamasi.includes("1. Misel") ? 4
+      : odaAsamasi.includes("2. Misel") ? 5
+      : odaAsamasi.includes("Pimleme") ? 5
+      : odaAsamasi.includes("Bezelye") ? 5
+      : odaAsamasi.includes("Ceviz") ? 5
+      : odaAsamasi.includes("Hasat") ? 6
+      : -1;
+    
+    /* Sulama ref'ı oda'nın aşamasından SONRASINA referans veriyorsa, henüz
+       o aşamaya gelmediğinden sulamayı gizle. */
+    if(sulamaRefSeviye > odaAsamaSeviye) return;
+    
+    out.push(adimGosterMetni(c, idx, s, iso));
   });
   return out.join(" + ");
 }
