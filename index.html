@@ -366,7 +366,7 @@ function hasatTartiGetir(oda, tur){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v256";
+var APP_VER = "v258";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -5985,10 +5985,19 @@ function restoreJSON(file){
       var obj = JSON.parse(r.result);
       if(!obj.cycles) throw new Error("geçersiz");
       memData = {cycles:obj.cycles, settings:obj.settings||{}, gorevler:obj.gorevler||[]};
+      /* KRİTİK: Kullanıcı elle bir dosya seçip "bunu kullan" dedi — bu, buluttaki
+         güncel hali bekleme güvenlik kilidinden (fbPushSettings içindeki
+         _settingsFirstSyncDone) daha yetkilidir. Kilit henüz açılmamışsa (örn.
+         sayfa yeni açıldıysa, bulut ilk senkron gelmeden) saveData() sessizce
+         hiçbir şey göndermez — veri sadece cihazda kalır, buluta hiç gitmez, ve
+         başka bir cihaz açıldığında hâlâ eski buluttaki veri görünür. Bu yüzden
+         restore'da kilidi açıkça geçersiz kılıyoruz: kullanıcının seçimi, "henüz
+         bulutu görmedik" temkinliliğinden önceliklidir. */
+      _settingsFirstSyncDone = true;
       saveData();
       if(obj.photos){ Object.keys(obj.photos).forEach(function(id){ saveImgs(id, obj.photos[id]); }); }
       if(obj.formPhotos){ Object.keys(obj.formPhotos).forEach(function(id){ saveFormImgs(id, obj.formPhotos[id]); }); }
-      toast("Geri yüklendi"); go("bugun");
+      toast("Geri yüklendi — buluta gönderiliyor..."); go("bugun");
     }catch(e){ toast("Dosya okunamadı"); }
   };
   r.readAsText(file);
@@ -8572,6 +8581,7 @@ function autoBackupGeriYukle(day){
   if(!confirm("Cihazdaki mevcut veri, "+(day?fmtDate(day):fmtDateTime(entry.ts))+" tarihli otomatik yedekle değiştirilecek. Emin misin?")) return;
   /* Arşiv de dahil — eskiden burada unutuluyordu, geri yükleme "yarım" kalıyordu */
   memData={cycles:(entry.data&&entry.data.cycles)||[], settings:(entry.data&&entry.data.settings)||{}, gorevler:(entry.data&&entry.data.gorevler)||[], arsiv:(entry.data&&entry.data.arsiv)||[]};
+  _settingsFirstSyncDone = true; /* elle geri yükleme — buluta göndermeyi engelleyen kilidi aç, bkz. restoreJSON */
   saveData(); toast("Otomatik yedekten geri yüklendi"); go("bugun");
 }
 /* ---------- Bulut yedeği: manuel tetikleme, listeleme, geri yükleme ---------- */
@@ -8622,6 +8632,7 @@ function cloudYedektenGeriYukle(slotNum){
     var av=aktifSnap.data().veri||{};
     var ar=arsivSnap.exists ? (arsivSnap.data().veri||{}) : {};
     memData={cycles:av.cycles||[], settings:av.settings||{}, gorevler:av.gorevler||[], arsiv:ar.arsiv||[]};
+    _settingsFirstSyncDone = true; /* elle geri yükleme — buluta göndermeyi engelleyen kilidi aç, bkz. restoreJSON */
     saveData(); toast("☁️ Bulut yedeğinden geri yüklendi"); go("bugun");
   }).catch(function(e){ console.warn("bulut yedek okunamadı", e); toast("Bulut yedeği okunamadı — internet bağlantını kontrol et"); });
 }
@@ -8667,6 +8678,52 @@ function bozukErteleTemizle(){
     if(c && c.ertele) delete c.ertele[b.key];
   });
   saveData(); logAudit("bozuk sulama plan verisi temizlendi", bulunan.length+" kayıt"); toast(bulunan.length+" kayıt temizlendi"); render();
+}
+/* BAKIM: v253 öncesi, her "Planla" işlemi eskiyi silmeden yeni not ekliyordu
+   ("Tırmık için plan X · Tırmık için plan Y · ..."). v253 bunu düzeltti (artık
+   aynı adım için sadece SONUNCUSU tutulur) ama GEÇMİŞTE birikmiş notlar
+   otomatik temizlenmez. Bu araç, aynı "X için plan" önekiyle birden fazla kez
+   tekrarlanan notları bulup sadece en sonuncusunu bırakır — "için plan"
+   olmayan diğer notlara (örn. "yapıldı" tamamlama kayıtları) dokunmaz. */
+function tekrarliPlanNotlariTara(){
+  var d=loadData();
+  var bulunan=[];
+  (d.cycles||[]).forEach(function(c){
+    (c.gunluk||[]).forEach(function(g){
+      var v=g.islemNot; if(!v) return;
+      var parcalar=(""+v).split(" · ").map(function(x){return x.trim();}).filter(Boolean);
+      var gruplar={};
+      parcalar.forEach(function(p,i){
+        var m=/^(.+?) için plan /.exec(p);
+        if(m){ (gruplar[m[1]]=gruplar[m[1]]||[]).push(i); }
+      });
+      if(Object.keys(gruplar).some(function(k){return gruplar[k].length>1;})){
+        bulunan.push({cid:c.id, oda:c.oda, tarih:g.tarih});
+      }
+    });
+  });
+  return bulunan;
+}
+function tekrarliPlanNotlariTemizle(){
+  if(!can("manage")) return noPerm();
+  var bulunan=tekrarliPlanNotlariTara();
+  if(!bulunan.length){ toast("Temiz — tekrarlayan plan notu yok"); return; }
+  var ozet=bulunan.slice(0,3).map(function(b){return b.oda+" ("+fmtDate(b.tarih)+")";}).join(", ");
+  if(!confirm(bulunan.length+" gündeki tekrarlayan plan notları tek satıra indirilecek ("+ozet+(bulunan.length>3?", ...":"")+"). Devam edilsin mi?")) return;
+  var d=loadData();
+  bulunan.forEach(function(b){
+    var c=d.cycles.find(function(x){return x.id===b.cid;}); if(!c) return;
+    var g=(c.gunluk||[]).find(function(x){return x.tarih===b.tarih;}); if(!g || !g.islemNot) return;
+    var parcalar=(""+g.islemNot).split(" · ").map(function(x){return x.trim();}).filter(Boolean);
+    var sonIdx={};
+    parcalar.forEach(function(p,i){ var m=/^(.+?) için plan /.exec(p); if(m) sonIdx[m[1]]=i; });
+    var yeni=parcalar.filter(function(p,i){
+      var m=/^(.+?) için plan /.exec(p);
+      return !m || sonIdx[m[1]]===i; /* "için plan" değilse hep kalır; öyleyse sadece en son görüleni */
+    });
+    g.islemNot=yeni.join(" · ");
+  });
+  saveData(); logAudit("tekrarlayan plan notları temizlendi", bulunan.length+" kayıt"); toast(bulunan.length+" kayıt temizlendi"); render();
 }
 var AYAR_KATEGORILERI=[
   {key:"gorevler", ic:"📋", ad:"Görevler (4 Bölüm)", alt:"Üretim, Kontrol, Mühendis Protokolü + Diğer Görevler"},
@@ -9159,6 +9216,7 @@ function renderAyarlar(){
     +'<button class="btn ghost" style="width:100%; margin-bottom:8px;" onclick="go(\'yedekleme\')">💾 Yedekleme (dışa/içe aktar)</button>'
     +(can("manage")?'<button class="btn ghost" style="width:100%;margin-bottom:8px;" onclick="go(\'records\')">📋 Denetim kaydı (Kayıtlar sekmesinde)</button>':'')
     +(can("manage")?'<button class="btn ghost" style="width:100%;" onclick="bozukErteleTemizle()">🧹 Bozuk sulama plan verisini tara ve temizle</button>':'')
+    +(can("manage")?'<button class="btn ghost" style="width:100%;margin-top:8px;" onclick="tekrarliPlanNotlariTemizle()">🧹 Tekrarlayan plan notlarını tara ve temizle</button>':'')
     +'</div>';
   h+='<div class="card"><div class="sec-title" style="margin-top:0;">ℹ️ Hakkında</div>'
     +'<div style="font-size:13px;line-height:1.8;">'
