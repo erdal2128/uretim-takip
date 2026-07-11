@@ -366,7 +366,7 @@ function hasatTartiGetir(oda, tur){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v268";
+var APP_VER = "v270";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -3837,12 +3837,25 @@ function renderBugun(){
   
   h+='<div style="height:20px;"></div>';
   
+  /* ELDİVEN/NEM DOSTU FAB: 3 buton her zaman açık üst üste durunca hem sıkışık
+     hem yanlışlıkla altındaki göreve/karta biniyordu. Şimdi TEK büyük yuvarlak
+     "+" butonu — dokununca büyük, aralıklı, etiketli 3 seçenek açılıyor (basit
+     olduğu kadar nemli/eldivenli elle isabetli dokunmayı da kolaylaştırır). */
+  var fabAcik = !!window._bugunFabAcik;
+  var fabHTML = '<div style="position:fixed;bottom:90px;right:16px;z-index:41;display:flex;flex-direction:column;align-items:flex-end;gap:12px;">';
+  if(fabAcik){
+    fabHTML += '<div style="display:flex;flex-direction:column;gap:10px;align-items:flex-end;">'
+      +'<button style="display:flex;align-items:center;gap:10px;background:#fff;border:2px solid var(--green);color:var(--green-dark);border-radius:30px;padding:14px 20px;font-size:16px;font-weight:700;box-shadow:0 4px 14px rgba(0,0,0,.22);min-height:56px;" onclick="window._bugunFabAcik=false;openForm(null);"><span style="font-size:22px;">🍄</span>Kompost Girişi</button>'
+      +'<button style="display:flex;align-items:center;gap:10px;background:#fff;border:2px solid #8a5a1f;color:#8a5a1f;border-radius:30px;padding:14px 20px;font-size:16px;font-weight:700;box-shadow:0 4px 14px rgba(0,0,0,.22);min-height:56px;" onclick="window._bugunFabAcik=false;go(\'gorevler\');"><span style="font-size:22px;">📋</span>Görev Ekle</button>'
+      +'<button style="display:flex;align-items:center;gap:10px;background:#fff;border:2px solid var(--teal);color:var(--teal);border-radius:30px;padding:14px 20px;font-size:16px;font-weight:700;box-shadow:0 4px 14px rgba(0,0,0,.22);min-height:56px;" onclick="window._bugunFabAcik=false;go(\'arizalar\');"><span style="font-size:22px;">🔧</span>Arıza Bildir</button>'
+      +'</div>';
+  }
+  fabHTML += '<button onclick="window._bugunFabAcik=!window._bugunFabAcik;render();" style="width:64px;height:64px;border-radius:50%;background:'+(fabAcik?'#555':'var(--green)')+';color:#fff;border:none;font-size:30px;font-weight:400;box-shadow:0 4px 14px rgba(0,0,0,.28);display:flex;align-items:center;justify-content:center;line-height:1;">'+(fabAcik?'×':'+')+'</button>'
+    +'</div>';
+  if(fabAcik) fabHTML += '<div onclick="window._bugunFabAcik=false;render();" style="position:fixed;inset:0;z-index:38;background:rgba(0,0,0,.15);"></div>';
+  
   el("app").innerHTML=h
-    +'<div style="position:fixed;bottom:130px;right:16px;display:flex;gap:8px;flex-direction:column;z-index:39;">'
-    +'<button class="fab" style="padding:14px 18px;font-size:16px;min-width:50px;" onclick="openForm(null)" title="Yeni kompost girişi / döngü">+ Kompost Girişi</button>'
-    +'<button class="fab" style="padding:14px 18px;font-size:16px;min-width:50px;background:#8a5a1f;" onclick="go(\'gorevler\')" title="Genel görev ekle (koridor yıkama, branda yıkama, vb.)">+ Görev</button>'
-    +'<button class="fab" style="padding:14px 18px;font-size:16px;min-width:50px;background:var(--teal);" onclick="go(\'arizalar\')" title="Arıza ekle">🔧</button>'
-    +'</div>'
+    +fabHTML
     +'<div class="muted" style="text-align:center;padding:2px 0 6px;">Üretim Takip '+APP_VER+'</div>';
   }catch(e){
     console.error("renderBugun error:", e);
@@ -9285,14 +9298,29 @@ function renderAyarlar(){
     MP_sirali.forEach(function(x){
       var s=x.s, idx=x.idx;
       var refLbl = s.ref==="gelis"?"Geliş":"Toprak";
+      var tekrarVarMi = !!s.tekrarBitisRef;
       h+='<div style="padding:8px 0;border-bottom:1px solid #eee;">'
-        +'<div style="font-size:12px;color:#888;">'+refLbl+' '+(s.gun>=0?"+":"")+s.gun+'. gün</div>'
+        +'<div style="font-size:12px;color:#888;">'+refLbl+' '+(s.gun>=0?"+":"")+s.gun+'. gün'
+        +(tekrarVarMi?' · <span style="color:#1d7a3c;font-weight:600;">🔁 HER GÜN → '+({gelis:"geliş",poset:"poşet kesimi",tiftik:"tiftik",toprak:"toprak serimi",tirmik:"tırmık",hava:"hava"}[s.tekrarBitisRef]||s.tekrarBitisRef)+' '+(s.tekrarBitisGun>=0?"+":"")+s.tekrarBitisGun+"'e kadar</span>":'')
+        +'</div>'
         +'<input type="text" id="pr_txt_'+idx+'" value="'+esc(s.txt)+'" style="width:100%;margin:3px 0;font-size:13px;">'
         +'<div style="display:flex;gap:6px;align-items:center;">'
         +'<span style="font-size:12px;color:#888;">Gün:</span><input type="number" id="pr_gun_'+idx+'" value="'+s.gun+'" style="width:60px;padding:3px;">'
         +'<button class="btn small" style="margin-left:auto;" onclick="protokolSatirKaydet('+idx+')">Kaydet</button>'
         +'<button class="del-x" onclick="protokolSatirSil('+idx+')">Sil ×</button>'
-        +'</div></div>';
+        +'</div>'
+        +'<div class="chk" style="margin-top:6px;"><input type="checkbox" id="pr_tekrar_chk_'+idx+'" '+(tekrarVarMi?"checked":"")+' onchange="el(\'pr_tekrar_alan_'+idx+'\').style.display=this.checked?\'flex\':\'none\';">'
+        +'<label style="font-size:12.5px;">Tek gün değil, HER GÜN tekrarlansın</label></div>'
+        +'<div id="pr_tekrar_alan_'+idx+'" style="display:'+(tekrarVarMi?"flex":"none")+'; gap:6px; margin-top:4px;">'
+        +'<select id="pr_tekrar_ref_'+idx+'" style="flex:1;">'
+        +['gelis','poset','tiftik','toprak','tirmik','hava'].map(function(r){
+            var lbl={gelis:"...Geliş gününe kadar",poset:"...Poşet kesimine kadar",tiftik:"...Tiftiğe kadar",toprak:"...Toprak serimine kadar",tirmik:"...Tırmığa kadar",hava:"...Hava başlangıcına kadar"}[r];
+            return '<option value="'+r+'"'+((s.tekrarBitisRef||"toprak")===r?" selected":"")+'>'+lbl+'</option>';
+          }).join('')
+        +'</select>'
+        +'<input type="number" id="pr_tekrar_gun_'+idx+'" value="'+(tekrarVarMi?s.tekrarBitisGun:0)+'" placeholder="±gün (örn. -2)" style="width:110px;">'
+        +'</div>'
+        +'</div>';
     });
     h+='<div style="margin-top:12px; padding-top:10px; border-top:2px solid #eee;">'
       +'<b>+ Yeni ilaçlama ekle</b>'
@@ -9421,6 +9449,23 @@ function protokolSatirKaydet(idx){
   var rl=el("pr_rol_"+idx); if(rl) P[idx].rol=rl.value||"";
   var scEl=el("pr_sonuc_"+idx);
   if(scEl){ P[idx].sonucSecenekleri = scEl.value.split(",").map(function(x){return x.trim();}).filter(Boolean); }
+  /* Tekrarlı sulama/ilaç kuralı (Mühendis Protokolü satırları): "HER GÜN
+     tekrarlansın" kutusu işaretliyse tekrarBitisRef/tekrarBitisGun kaydedilir,
+     değilse (daha önce varsa) TEMİZLENİR. Bu alan eskiden mevcut satırlarda
+     hiç düzenlenemiyordu — sadece yeni eklenirken ayarlanabiliyordu. Bir kez
+     eksik kaydedilmiş satırlar bu formdan artık düzeltilebilir. */
+  var trChk=el("pr_tekrar_chk_"+idx);
+  if(trChk){
+    if(trChk.checked){
+      var trRef=el("pr_tekrar_ref_"+idx); var trGun=el("pr_tekrar_gun_"+idx);
+      var trGunV=trGun?parseInt(trGun.value,10):0;
+      P[idx].tekrarBitisRef=trRef?trRef.value:"toprak";
+      P[idx].tekrarBitisGun=isNaN(trGunV)?0:trGunV;
+    } else {
+      delete P[idx].tekrarBitisRef;
+      delete P[idx].tekrarBitisGun;
+    }
+  }
   d.settings.protokolOzellestirildi=true;
   saveData(); toast("Kaydedildi"); render();
 }
