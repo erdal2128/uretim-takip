@@ -1,4 +1,4 @@
-const CACHE = "uretim-takip-cache-v271";
+const CACHE = "uretim-takip-cache-v272";
 const CORE_ASSETS = ["./", "./index.html"];
 
 self.addEventListener("install", function(e){

@@ -366,7 +366,7 @@ function hasatTartiGetir(oda, tur){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v271";
+var APP_VER = "v272";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -2169,6 +2169,13 @@ function beklenenTakvim(c){
   return result;
 }
 function esc(s){ return (s===null||s===undefined)?"":(""+s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
+/* Bir protokol adımının "ref" alanını (gelis/poset/tiftik/toprak/tirmik/hava)
+   okunur Türkçe etikete çevirir. ÖNEMLİ: eskiden sadece "gelis"↔"Toprak" ayrımı
+   yapılıyordu — Poşet/Tiftik/Tırmık/Hava seçilse bile ekranda hep "Toprak"
+   yazıyordu (kullanıcı Poşet seçip "neden Toprak yazıyor" diye şaşırıyordu).
+   Artık TÜM referans tipleri doğru gösteriliyor. */
+var REF_ETIKET_TAM={gelis:"Geliş", poset:"Poşet", tiftik:"Tiftik", toprak:"Toprak", tirmik:"Tırmık", hava:"Hava"};
+function refEtiketi(ref){ return REF_ETIKET_TAM[ref] || ref || "Toprak"; }
 /* ---------- Ortak kart yardımcıları (kod tekrarını azaltmak için) ----------
    Not: dosyanın tamamı tek seferde bu kalıba geçirilmedi — büyük, çalışan bir
    dosyayı riske atmamak için sadece yeni eklenen kartlarda kullanılıyor.
@@ -9171,7 +9178,7 @@ function renderAyarlar(){
     var ROL_ETIKET={"":"— rol yok —", poset:"🔓 Poşet", tiftik:"🌾 Tiftik", toprak:"🟫 Toprak", tirmik:"🔨 Tırmık", hasat:"🧺 Hasat"};
     UP_sirali.forEach(function(x){
       var s=x.s, idx=x.idx;
-      var refLbl = s.ref==="gelis"?"Geliş":"Toprak";
+      var refLbl = refEtiketi(s.ref);
       h+='<div style="padding:8px 0;border-bottom:1px solid #eee;">'
         +'<div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">'
         +'<input type="number" id="pr_gun_'+idx+'" value="'+s.gun+'" title="'+refLbl+' + kaç gün" style="width:44px;padding:3px;flex:none;font-weight:700;color:#888;">'
@@ -9216,7 +9223,7 @@ function renderAyarlar(){
     var KP_sirali=PR.map(function(s,idx){return {s:s, idx:idx};}).filter(function(x){return !x.s.silindi && x.s.tip==="uyari";}).sort(function(a,b){return protokolSiraAnahtari(a.s)-protokolSiraAnahtari(b.s);});
     KP_sirali.forEach(function(x){
       var s=x.s, idx=x.idx;
-      var refLbl = s.ref==="gelis"?"Geliş":"Toprak";
+      var refLbl = refEtiketi(s.ref);
       h+='<div style="padding:8px 0;border-bottom:1px solid #eee;">'
         +'<div style="font-size:12px;color:#888;">'+refLbl+' '+(s.gun>=0?"+":"")+s.gun+'. gün'
         +((parseInt(s.sure,10)||1)>1?(' · ⏳'+s.sure+'g gözlem penceresi'):'')+'</div>'
@@ -9313,7 +9320,7 @@ function renderAyarlar(){
     var MP_sirali=PR2.map(function(s,idx){return {s:s, idx:idx};}).filter(function(x){return !x.s.silindi && (x.s.tip==="ilac"||x.s.tip==="su");}).sort(function(a,b){return protokolSiraAnahtari(a.s)-protokolSiraAnahtari(b.s);});
     MP_sirali.forEach(function(x){
       var s=x.s, idx=x.idx;
-      var refLbl = s.ref==="gelis"?"Geliş":"Toprak";
+      var refLbl = refEtiketi(s.ref);
       var tekrarVarMi = !!s.tekrarBitisRef;
       h+='<div style="padding:8px 0;border-bottom:1px solid #eee;">'
         +'<div style="font-size:12px;color:#888;">'+refLbl+' '+(s.gun>=0?"+":"")+s.gun+'. gün'
