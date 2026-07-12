@@ -459,7 +459,7 @@ function hasatTartiGetir(oda, tur){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v303";
+var APP_VER = "v305";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -585,10 +585,31 @@ function gunlukKayitlariniBirlestir(){
   memData._gunlukBirlestirildi=true;
   if(degisti) saveData();
 }
+var _quotaWarnShown=false;
 function saveData(){
   if(!memData || typeof memData !== "object") return; /* null/bozuk veriyi asla kaydetme */
-  try{ localStorage.setItem(STORE_KEY, JSON.stringify(memData)); }
-  catch(e){ console.warn("localStorage yazılamadı (bellek dolu veya preview ortamı)", e); }
+  try{
+    localStorage.setItem(STORE_KEY, JSON.stringify(memData));
+    _quotaWarnShown=false; /* bir sonraki dolma anında tekrar uyarabilelim */
+  }catch(e){
+    console.error("localStorage yazılamadı", e);
+    /* KRİTİK: Depolama dolduğunda sessizce geçmek veri kaybına yol açar —
+       kullanıcı "kaydettim" sanır ama değişiklik sadece bellekte (memData)
+       kalır, sayfa kapanınca kaybolur. Kota dolma hatası (QuotaExceededError,
+       bazı tarayıcılarda farklı isimlerle de gelebilir) özel olarak
+       yakalanıp AÇIKÇA bildirilir — sadece console'a değil. Aynı oturumda
+       tekrar tekrar aynı uyarıyı göstermemek için bir kerelik bayrak var. */
+    var isQuota = (e && (e.name==="QuotaExceededError" || e.code===22 || e.code===1014 || /quota/i.test(e.message||"")));
+    if(isQuota && !_quotaWarnShown){
+      _quotaWarnShown=true;
+      showWarnBox("⚠️ Depolama Doldu", [
+        "Cihazın hafızası doldu — <b>son değişiklik cihaza kaydedilemedi.</b>",
+        FB.ready ? "Bulut senkronu açık — az önceki değişiklik oradan kurtarılabilir, ama emin olmak için hemen bir yedek al." : "⚠️ Bulut senkronu KAPALI — bu değişiklik kaybolmuş olabilir!",
+        "Çözüm: Ayarlar → Yedekleme'den JSON indir, sonra eski fotoğrafları (özellikle sesli/fotoğraflı kayıtları) sil.",
+        "Silme sonrası tekrar dene — bu uyarı kaybolursa kayıt başarılı demektir."
+      ]);
+    }
+  }
   fbPushDirty();
   fbPushDirtyGorev();
   fbPushSettings();
@@ -3513,7 +3534,7 @@ function bugunOzetiHTML(active){
     +statBox(hazirBosaltim,"boşaltmaya hazır")
     +statBox(bugunIslem,"bugün işlem")
     +'</div>';
-  if(enRiskliOda) h+='<div style="font-size:14px;">En riskli oda: <b>'+esc(enRiskliOda)+'</b> ('+enDusukPuan+'/100) <button class="btn ghost small" style="padding:2px 10px;margin-left:4px;" onclick="openDetail(findCycleByOda(\''+esc(enRiskliOda)+'\'))">›</button></div>';
+  if(enRiskliOda) h+='<div style="font-size:14px;">En riskli oda: <b>'+esc(enRiskliOda)+'</b> ('+enDusukPuan+'/100) <button class="btn ghost small" style="padding:2px 10px;margin-left:4px;" onclick="openDetail(findCycleByOda(\''+esc(enRiskliOda).replace(/'/g,"\\'")+'\'))">›</button></div>';
   if(sorun) h+='<div class="muted" style="font-size:13px;margin-top:4px;">Son 7 günde en sık: '+esc(sorun.action)+' ('+sorun.sayi+' kez)</div>';
   h+='<div style="margin-top:8px; padding-top:8px; border-top:1px solid #e3ede3;"><button class="btn ghost small" onclick="go(\'gunsonu\')">🌙 Gün Sonu Özeti — bugün + yarının planı ›</button></div>';
   h+='</div>';
@@ -4794,7 +4815,7 @@ function renderDetail(id){
     + '<button class="btn sec small" onclick="openForm(\''+c.id+'\')">Bilgileri düzenle</button>'
     + '<button class="btn ghost small" onclick="exportCycleCSV(\''+c.id+'\')">Excel (CSV)</button>'
     + '<button class="btn ghost small" onclick="printForm(\''+c.id+'\')">PDF / Yazdır</button>'
-    + '<button class="btn ghost small" onclick="go(\'compare\',\''+c.oda+'\')">Bu odayı kıyasla</button>'
+    + '<button class="btn ghost small" onclick="go(\'compare\',\''+esc(c.oda).replace(/'/g,"\\'")+'\')">Bu odayı kıyasla</button>'
     + (can("manage")?'<button class="btn ghost small" onclick="arsivle(\''+c.id+'\')">📦 Arşivle</button>':'')
     + '</div></div>';
 
@@ -5777,7 +5798,7 @@ function indChipHTML(grup){
   var uygun = getPersonelList().filter(function(p){ return !indBaskaYerdeSecili(p.ad, grup); });
   uygun.forEach(function(p){
     var on=secili.indexOf(p.ad)>=0;
-    h+='<button type="button" onclick="indChipToggle(\''+grup+'\',\''+esc(p.ad)+'\')" '
+    h+='<button type="button" onclick="indChipToggle(\''+grup+'\',\''+esc(p.ad).replace(/'/g,"\\'")+'\')" '
       +'style="display:inline-block; margin:3px; padding:6px 12px; border-radius:16px; border:1.5px solid var(--green); font-size:14px; min-height:36px; cursor:pointer; '
       +(on?'background:var(--green); color:#fff;':'background:#fff; color:var(--green);')+'">'+esc(p.ad)+'</button>';
   });
@@ -6880,7 +6901,18 @@ function backupBanner(){
 /* ---------- Fotoğraflar (cihazda, ayrı saklanır) ---------- */
 function imgKey(id){ return "utp_img_"+id; }
 function loadImgs(id){ try{ return JSON.parse(localStorage.getItem(imgKey(id))||"[]"); }catch(e){ return []; } }
-function saveImgs(id,arr){ try{ localStorage.setItem(imgKey(id), JSON.stringify(arr)); return true; }catch(e){ toast("Hafıza dolu — fotoğraf eklenemedi"); return false; } }
+function saveImgs(id,arr){
+  try{ localStorage.setItem(imgKey(id), JSON.stringify(arr)); return true; }
+  catch(e){
+    console.error("fotoğraf kaydedilemedi", e);
+    showWarnBox("⚠️ Depolama Doldu", [
+      "Fotoğraf cihaza kaydedilemedi — hafıza dolu.",
+      "Çözüm: Ayarlar → Yedekleme'den JSON indir (fotoğraflar dahil), sonra bu odadaki eski fotoğrafları sil.",
+      "Fotoğraf boyutu büyükse (ör. yüksek çözünürlük), daha küçük çekmeyi dene."
+    ]);
+    return false;
+  }
+}
 /* ---------- Hastalık kelime-eşleştirme kütüphanesi (kural tabanlı ipucu, kesin teşhis değil) ---------- */
 var HASTALIK_KB = [
   {kw:["yeşil küf","yesil kuf","trichoderma"], ad:"Trichoderma (yeşil küf)", oneri:"Bulaşık bölgeyi izole et; o bölgeye dokunan alet/elleri dezenfekte et; nem ve havalandırmayı gözden geçir (genelde nem/hijyen kaynaklı yayılır). Etkilenen alanı kurutmadan/dağıtmadan nazikçe kapat ve uzaklaştır."},
@@ -6935,7 +6967,18 @@ function showImageData(src){ var w=window.open("","_blank"); if(w){ w.document.w
 /* ---------- El yazısı "Oda Takip Formu" fotoğrafı (kağıt formun taranmış hâli) ---------- */
 function formImgKey(id){ return "utp_formimg_"+id; }
 function loadFormImgs(id){ try{ return JSON.parse(localStorage.getItem(formImgKey(id))||"[]"); }catch(e){ return []; } }
-function saveFormImgs(id,arr){ try{ localStorage.setItem(formImgKey(id), JSON.stringify(arr)); return true; }catch(e){ toast("Hafıza dolu — fotoğraf eklenemedi"); return false; } }
+function saveFormImgs(id,arr){
+  try{ localStorage.setItem(formImgKey(id), JSON.stringify(arr)); return true; }
+  catch(e){
+    console.error("form fotoğrafı kaydedilemedi", e);
+    showWarnBox("⚠️ Depolama Doldu", [
+      "Fotoğraf cihaza kaydedilemedi — hafıza dolu.",
+      "Çözüm: Ayarlar → Yedekleme'den JSON indir (fotoğraflar dahil), sonra eski fotoğrafları sil.",
+      "Fotoğraf boyutu büyükse (ör. yüksek çözünürlük), daha küçük çekmeyi dene."
+    ]);
+    return false;
+  }
+}
 function addFormPhoto(id, file){
   var reader=new FileReader();
   reader.onload=function(){
@@ -8977,7 +9020,7 @@ function renderRaporlar(){
     +'<div class="muted" style="margin-top:8px;">PDF butonu yeni sekmede yazdırma ekranı açar; oradan "PDF olarak kaydet" seçebilirsin.</div></div>';
   h+='<div class="card"><div class="sec-title" style="margin-top:0;">Diğer raporlar</div>'
     +'<button class="btn ghost small" onclick="go(\'plan\')">📅 Kompost Planı</button> '
-    +(aktif.length?'<button class="btn ghost small" onclick="go(\'compare\',\''+esc(aktif[0].oda)+'\')">📈 Oda Kıyaslama</button>':'')
+    +(aktif.length?'<button class="btn ghost small" onclick="go(\'compare\',\''+esc(aktif[0].oda).replace(/'/g,"\\'")+'\')">📈 Oda Kıyaslama</button>':'')
     +'<button class="btn ghost small" onclick="go(\'arsiv\')">📦 Arşiv</button></div>';
   el("app").innerHTML=h;
 }
@@ -9412,8 +9455,8 @@ function renderAyarlar(){
     h+='<div style="display:flex;justify-content:space-between;align-items:center;padding:5px 2px;border-bottom:1px solid #eee;"><span>'+esc(f)+'</span>'
       +(can("manage")
         ? (confirming
-            ? ('<span><button class="del-x" style="background:#c0291f;color:#fff;" onclick="firmaSilClick(\''+esc(f)+'\')">Emin misin? Sil</button> <button class="btn ghost small" onclick="_confirmDeleteFirma=null; render();">Vazgeç</button></span>')
-            : ('<button class="del-x" onclick="firmaSilClick(\''+esc(f)+'\')">Sil ×</button>'))
+            ? ('<span><button class="del-x" style="background:#c0291f;color:#fff;" onclick="firmaSilClick(\''+esc(f).replace(/'/g,"\\'")+'\')">Emin misin? Sil</button> <button class="btn ghost small" onclick="_confirmDeleteFirma=null; render();">Vazgeç</button></span>')
+            : ('<button class="del-x" onclick="firmaSilClick(\''+esc(f).replace(/'/g,"\\'")+'\')">Sil ×</button>'))
         : '')
       +'</div>';
   });
@@ -9478,8 +9521,8 @@ function renderAyarlar(){
       var confirming=(_confirmDeleteOda===o);
       h+='<div style="display:flex;justify-content:space-between;align-items:center;padding:5px 2px;border-bottom:1px solid #eee;"><span>'+esc(o)+'</span>'
         +(confirming
-          ? ('<span><button class="del-x" style="background:#c0291f;color:#fff;" onclick="odaSilClick(\''+esc(o)+'\')">Emin misin? Sil</button> <button class="btn ghost small" onclick="_confirmDeleteOda=null; render();">Vazgeç</button></span>')
-          : ('<button class="del-x" onclick="odaSilClick(\''+esc(o)+'\')">Sil ×</button>'))
+          ? ('<span><button class="del-x" style="background:#c0291f;color:#fff;" onclick="odaSilClick(\''+esc(o).replace(/'/g,"\\'")+'\')">Emin misin? Sil</button> <button class="btn ghost small" onclick="_confirmDeleteOda=null; render();">Vazgeç</button></span>')
+          : ('<button class="del-x" onclick="odaSilClick(\''+esc(o).replace(/'/g,"\\'")+'\')">Sil ×</button>'))
         +'</div>';
     });
     h+='</div>';
