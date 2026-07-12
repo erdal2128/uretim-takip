@@ -394,7 +394,7 @@ function hasatTartiGetir(oda, tur){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v281";
+var APP_VER = "v298";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -1398,17 +1398,39 @@ function sonYapilanOlayAdimi(c){
   return best;
 }
 function siradakiProtokolAdimi(c){
-  var best=null;
+  /* KÖK MİMARİ DÜZELTME: eskiden bu fonksiyon adaylar arasından en ERKEN
+     TARİHLİ olanı seçiyordu (t<best.t). Bu, referans zinciri bir yerde
+     bozuksa (örn. eksik/sahipsiz bir referans → tarihi yanlış/erken
+     hesaplanıyor) Poşet/Tiftik gibi ÖNCEKİ zorunlu adımlar hâlâ yapılmamışken
+     sistemin Toprak gibi SONRAKİ bir adımı "sıradaki" göstermesine yol
+     açıyordu — kullanıcı defalarca aynı hatayı bildirdi (Poşet/Tiftik atlanıp
+     Toprak'a sıçrama). Artık seçim, Ayarlar → Görevler'de TANIMLI GERÇEK İŞ
+     AKIŞI SIRASINA (protokolSiraAnahtari — tüm referans zincirini kompost
+     indirme→poşet→tiftik/toprak→tırmık→hava→hasat şeklinde çözer) göre
+     yapılıyor: yapılmamış adımlar arasında SIRA numarası en KÜÇÜK olan asla
+     atlanmaz, tarih sadece görüntüleme/gecikme hesabı için kullanılır. */
+  var adaylar=[];
   getProtokol().forEach(function(s,idx){
     if(s.silindi) return;
     if(s.tip==="uyari" || s.tip==="ilac" || s.tip==="su") return;
     var done=adimGercektenYapildiMi(c, idx, s); if(done) return;
-    var base=protokolTarih(c,s); if(!base) return;
-    var ert=(c.ertele && c.ertele["p"+idx])?c.ertele["p"+idx]:0;
-    var t=ert?addDays(base,ert):base;
-    if(!best || t<best.t){ best={idx:idx, t:t, txt:adimGosterMetni(c, idx, s, t)}; }
+    adaylar.push({idx:idx, s:s, sira:protokolSiraAnahtari(s)});
   });
-  return best;
+  if(!adaylar.length) return null;
+  adaylar.sort(function(a,b){ return a.sira-b.sira; });
+  var secilen=adaylar[0];
+  var base=protokolTarih(c,secilen.s);
+  var t;
+  if(base){
+    var ert=(c.ertele && c.ertele["p"+secilen.idx])?c.ertele["p"+secilen.idx]:0;
+    t=ert?addDays(base,ert):base;
+  } else {
+    /* Tarih hesaplanamıyor (referans hâlâ sahipsiz) — sessizce atlamak yerine
+       bugünün tarihiyle göster, en azından adım kaybolmasın ve kullanıcı
+       Ayarlar'da referansı düzeltmesi gerektiğini fark etsin. */
+    t=todayISO();
+  }
+  return {idx:secilen.idx, t:t, txt:adimGosterMetni(c, secilen.idx, secilen.s, t)};
 }
 /* Günlük Tur'da "Yarın X yapılsın" — mevcut Ertele mekanizmasını TERS yönde kullanır
    (Ertele +gün ekler, bu -gün ekleyerek tarihi öne çeker). Yeni bir veri modeli gerekmez,
@@ -1643,7 +1665,30 @@ function aktifSartliKurallar(c){
   var out=[];
   getSartliKurallar().forEach(function(k){
     var r=sartliKuralUygunMu(c,k);
-    if(r) out.push({kural:k, hedefIdx:r.idx, hedefTxt:r.s.txt});
+    if(r){
+      /* HANGİ ÖNCEKİ ADIMLAR ATLANIYOR: bu kural hedefi (örn. "Toprak serimi")
+         doğrudan öneriyor — ama Poşet/Tiftik gibi ondan ÖNCE gelmesi gereken
+         adımlar henüz yapılmamışsa, bu SESSİZCE atlanıyordu. Artık böyle bir
+         durumda "Sıradaki işlem" olarak kuralın hedefi DEĞİL, GERÇEKTEN
+         sıradaki (en erken, henüz yapılmamış) adım gösteriliyor — kural
+         sadece bağlam/gerekçe olarak kalıyor, aksiyon (metin + Planla)
+         gerçek sırayı takip ediyor. Acil durumda kuralın asıl hedefini açmak
+         istersen, o hâlâ "atlanan" listesinde görünür, oradan elle açabilirsin. */
+      var hedefSira=protokolSiraAnahtari(r.s);
+      var atlanan=[]; var enErken=null;
+      getProtokol().forEach(function(s2,idx2){
+        if(s2.silindi || s2.tip!=="olay" || idx2===r.idx) return;
+        if(adimGercektenYapildiMi(c, idx2, s2)) return;
+        var sira2=protokolSiraAnahtari(s2);
+        if(sira2 < hedefSira){
+          atlanan.push(s2.txt);
+          if(!enErken || sira2<enErken.sira) enErken={idx:idx2, s:s2, sira:sira2};
+        }
+      });
+      var gosterIdx = enErken ? enErken.idx : r.idx;
+      var gosterTxt = enErken ? enErken.s.txt : r.s.txt;
+      out.push({kural:k, hedefIdx:gosterIdx, hedefTxt:gosterTxt, atlanan:atlanan, kuralHedefTxt:r.s.txt});
+    }
   });
   return out;
 }
@@ -1734,12 +1779,34 @@ function kontrolKararSec(cid, idx, secim){
   touchCycle(c); saveData(); toast("Kaydedildi: "+secim); render();
 }
 function turSiradakiAdimHTML(c){
-  /* NOT: "Sıradaki adım" checkbox/buton bloğu buradan Odalar sekmesindeki
-     "Protokol Özeti"ne taşındı (odaProtokolOzetSatiriHTML) — aynı toggleTask/
-     protokolYarinaCek fonksiyonlarını kullanıyor, veri yazımı değişmedi. */
   var h="";
-  var sartlar=aktifSartliKurallar(c);
+  /* GENEL SIRADAKİ İŞLEM: eskiden bu bilgi SADECE Odalar > Protokol Özeti'nde
+     görünüyordu, Günlük Tur ekranında hiç yoktu — sadece bir Şartlı Kural
+     tetiklenirse bir kart çıkıyordu (o da koşula bağlıydı, her zaman değil).
+     Kullanıcı tur sırasında "bu odada sırada ne var" bilgisini HER ZAMAN
+     (koşula bağlı olmadan) burada da görmek istedi. Aynı SSOT fonksiyonunu
+     (siradakiProtokolAdimi) kullanıyor — Odalar'daki ile birebir aynı sonucu
+     verir, veri kaynağı ikilenmiyor. */
+  try{
+    var sd=siradakiProtokolAdimi(c);
+    if(sd){
+      var sdErt=(c.ertele&&c.ertele["p"+sd.idx])?c.ertele["p"+sd.idx]:0;
+      var sdTarih=sd.t; /* siradakiProtokolAdimi zaten ertele'yi t içine katıyor */
+      h += '<div style="margin-top:8px; padding:8px; background:#eef6ff; border:1px solid #b9d7f5; border-radius:8px;">'
+        + '<div style="font-size:12px; font-weight:700; color:#1d4ed8;">📋 Sıradaki işlem</div>'
+        + '<div style="font-size:13.5px;margin-top:3px;"><b>'+esc(sd.txt)+'</b></div>'
+        + '<div style="font-size:12px;color:var(--muted);">Planlanan: '+fmtDate(sdTarih)+(sdTarih<todayISO()?' <span style="color:#c0291f;font-weight:600;">(gecikti)</span>':'')+'</div>'
+        + (can("edit")?('<button class="btn small" style="margin-top:6px;" onclick="planTarihiDegistirAc(\''+c.id+'\','+sd.idx+')">📅 Planla</button>'):'')
+        + '</div>';
+    }
+  }catch(err){ console.error("Sıradaki işlem hesaplanamadı:", err); }
+  /* NOT: Aşağıdaki Şartlı Kurallar bloğu ayrıca, KOŞULA bağlı özel durumlar
+     için (örn. "kompost sarımı zayıfsa erken aç") — yukarıdaki genel bloktan
+     BAĞIMSIZ çalışır, ikisi birlikte görünebilir. */
+  var sartlar=[];
+  try{ sartlar=aktifSartliKurallar(c)||[]; }catch(err){ console.error("aktifSartliKurallar hata verdi:", err); }
   sartlar.forEach(function(sr){
+    try{
     var k=sr.kural;
     var olcumTxt="";
     if(k.otoAlan){
@@ -1758,9 +1825,18 @@ function turSiradakiAdimHTML(c){
       + '<div style="font-size:13px; font-weight:600; color:#8a5a1f;">⚠️ '+esc(k.aciklama)+'</div>'
       + olcumTxt
       + '<div style="font-size:12.5px;margin-top:6px;">Sıradaki işlem: <b>'+esc(sr.hedefTxt)+'</b></div>'
+      + (sr.atlanan && sr.atlanan.length?('<div style="font-size:11.5px;color:var(--muted);margin-top:2px;">(Bu kuralın asıl hedefi "'+esc(sr.kuralHedefTxt)+'" idi, ama önce '+sr.atlanan.map(esc).join(", ")+' yapılmalı — sıradaki gerçek adım gösteriliyor)</div>'):'')
       + (planliTarih?('<div style="font-size:12.5px;color:var(--muted);">Planlanan: '+fmtDate(planliTarih)+'</div>'):'')
       + (can("edit")?('<button class="btn small" style="margin-top:6px;" onclick="planTarihiDegistirAc(\''+c.id+'\','+sr.hedefIdx+')">📅 Planla</button>'):'')
       + '</div>';
+    }catch(err){
+      console.error("Şartlı kural kartı hesaplanamadı:", err);
+      h += '<div style="margin-top:8px; padding:8px; background:#fff6e5; border:1px solid #e8c874; border-radius:8px;">'
+        + '<div style="font-size:13px; font-weight:600; color:#8a5a1f;">⚠️ '+esc(sr.kural.aciklama)+'</div>'
+        + '<div style="font-size:12.5px;margin-top:6px;">Sıradaki işlem: <b>'+esc(sr.kural.hedefTxt)+'</b></div>'
+        + (can("edit")?('<button class="btn small" style="margin-top:6px;" onclick="planTarihiDegistirAc(\''+c.id+'\','+sr.hedefIdx+')">📅 Planla</button>'):'')
+        + '</div>';
+    }
   });
   h += kontrolGozlemKartlariHTML(c);
   /* Yarın planlananlar — mühendis onayı. Protokol öngörüsü KIRMIZI gelir;
@@ -2214,7 +2290,86 @@ function esc(s){ return (s===null||s===undefined)?"":(""+s).replace(/&/g,"&amp;"
    yazıyordu (kullanıcı Poşet seçip "neden Toprak yazıyor" diye şaşırıyordu).
    Artık TÜM referans tipleri doğru gösteriliyor. */
 var REF_ETIKET_TAM={gelis:"Geliş", poset:"Poşet", tiftik:"Tiftik", toprak:"Toprak", tirmik:"Tırmık", hava:"Hava"};
-function refEtiketi(ref){ return REF_ETIKET_TAM[ref] || ref || "Toprak"; }
+function refEtiketi(ref){
+  var oz=getOzelRoller().find(function(r){return r.v===ref;});
+  if(oz) return oz.l;
+  return REF_ETIKET_TAM[ref] || ref || "Toprak";
+}
+/* Referans noktası seçim listesi — bir protokol satırının "hangi olaydan kaç
+   gün sonra/önce" olduğunu tanımlar. Kullanıcı bunu dropdown'dan seçer,
+   sistem hesaplamayı (protokolTarih/protokolReferansTarihi) buna göre yapar.
+   7 sabit (built-in) referansın yanında, kullanıcı KENDİ referans noktalarını
+   da ekleyebilir (örn. "Misket atma", "1. Pin") — d.settings.ozelRoller'da
+   saklanır. Arka uçta ekstra kod gerekmez: protokolReferansTarihi() zaten
+   herhangi bir "rol" etiketli satırı (built-in ya da özel fark etmez)
+   protokolRolIdx() ile buluyor. */
+var REF_SECENEKLERI=[
+  {v:"gelis", l:"Geliş"},
+  {v:"kompostindirme", l:"Kompost indirme"},
+  {v:"poset", l:"Poşet kesimi"},
+  {v:"tiftik", l:"Tiftik"},
+  {v:"toprak", l:"Toprak serimi"},
+  {v:"tirmik", l:"Tırmık"},
+  {v:"hava", l:"Hava"}
+];
+function getOzelRoller(){
+  var d=loadData();
+  return (d.settings && Array.isArray(d.settings.ozelRoller)) ? d.settings.ozelRoller : [];
+}
+function tumReferanslar(){ return REF_SECENEKLERI.concat(getOzelRoller()); }
+/* Yeni bir özel referans noktası (rol) tanımlar — ad girilir, sistem içi bir
+   anahtar (v) otomatik üretilir (Türkçe karakterler sadeleştirilir, boşluklar
+   alt çizgiye çevrilir). Built-in isimlerle veya mevcut özel bir isimle
+   çakışırsa uyarır. Sadece İSMİ kaydeder — hangi tarihte olacağını belirlemek
+   için kullanıcının ayrıca bir "olay" satırına bu rolü ATAMASI gerekir (Rol
+   dropdown'ından), aksi halde referans tarihi hesaplanamaz (henüz kimse o
+   tarihi tanımlamamış demektir). */
+function ozelRolEkle(ad, baseRef, baseGun){
+  if(!can("manage")) return noPerm();
+  ad=(ad||"").trim();
+  if(!ad){ toast("Referans noktası adı gir"); return; }
+  var anahtar=ad.toLocaleLowerCase("tr").replace(/ç/g,"c").replace(/ğ/g,"g").replace(/ı/g,"i").replace(/ö/g,"o").replace(/ş/g,"s").replace(/ü/g,"u").replace(/[^a-z0-9]+/g,"_").replace(/^_+|_+$/g,"");
+  if(!anahtar){ toast("Geçerli bir isim gir"); return; }
+  if(REF_SECENEKLERI.some(function(r){return r.v===anahtar;})){ toast("Bu isim zaten sistemde var (yerleşik referans)"); return; }
+  var d=loadData(); if(!d.settings) d.settings={};
+  if(!Array.isArray(d.settings.ozelRoller)) d.settings.ozelRoller=[];
+  if(d.settings.ozelRoller.some(function(r){return r.v===anahtar;})){ toast("Bu referans zaten eklenmiş"); return; }
+  d.settings.ozelRoller.push({v:anahtar, l:ad});
+  /* ARTIK ANCHOR SATIRI DA OTOMATİK OLUŞTURULUYOR: eskiden sadece isim
+     ekleniyordu, kullanıcı ayrıca bir "olay" satırı bulup ona Rol atamak
+     zorundaydı — bulamayınca/unutunca referans "sahipsiz" kalıyordu (tarihi
+     hesaplanamıyor, sıralama bozuluyordu — tam da "1. Flaş" hatasının sebebi).
+     Artık ref+gün burada verilirse, bu referansı TANIMLAYAN bir "olay" satırı
+     otomatik eklenir ve Rol'ü doğrudan bu yeni referansa atanır — tek adımda
+     hem isim hem tarih tanımlanmış olur. */
+  ensureProtokol();
+  var yeniAnchor={ref:baseRef||"gelis", gun:parseInt(baseGun,10)||0, tip:"olay", sahip:"ziraat", txt:ad, rol:anahtar};
+  d.settings.protokol.push(yeniAnchor);
+  d.settings.protokolOzellestirildi=true;
+  saveData(); toast("✓ \""+ad+"\" eklendi ve tarihi tanımlandı — hazır"); render();
+}
+function ozelRolSil(anahtar){
+  if(!can("manage")) return noPerm();
+  var d=loadData(); if(!d.settings || !Array.isArray(d.settings.ozelRoller)) return;
+  var kullaniliyor = (d.settings.protokol||[]).some(function(s){ return !s.silindi && (s.rol===anahtar || s.ref===anahtar || s.tekrarBitisRef===anahtar); });
+  if(kullaniliyor && !confirm("Bu referans hâlâ bazı satırlarda kullanılıyor. Silersen o satırların tarihi hesaplanamaz hale gelebilir. Yine de sil?")) return;
+  d.settings.ozelRoller = d.settings.ozelRoller.filter(function(r){return r.v!==anahtar;});
+  saveData(); toast("Referans silindi"); render();
+}
+function refDropdownHTML(id, mevcutRef){
+  return '<select id="'+id+'" style="width:auto;min-height:auto;padding:5px 4px;flex:none;font-size:12px;">'
+    +tumReferanslar().map(function(r){ return '<option value="'+r.v+'"'+((mevcutRef||"gelis")===r.v?" selected":"")+'>'+r.l+'</option>'; }).join('')
+    +'</select>';
+}
+/* Bir referansın (ref) GERÇEKTEN bir tarihe bağlanıp bağlanmadığını kontrol
+   eder — "gelis" ve "toprak" her zaman hesaplanabilir (özel dal var), diğerleri
+   (poset/tiftik/tirmik/hava/özel referanslar) SADECE bir "olay" satırı o rolü
+   Rol olarak almışsa hesaplanabilir. Almamışsa "sahipsiz" — sıralama ve tarih
+   hesabı bozulur. Satır listelerinde ⚠️ ile göstermek için kullanılır. */
+function refSahipsizMi(ref){
+  if(!ref || ref==="gelis" || ref==="toprak") return false;
+  return protokolRolIdx(ref)<0;
+}
 /* ---------- Ortak kart yardımcıları (kod tekrarını azaltmak için) ----------
    Not: dosyanın tamamı tek seferde bu kalıba geçirilmedi — büyük, çalışan bir
    dosyayı riske atmamak için sadece yeni eklenen kartlarda kullanılıyor.
@@ -2613,7 +2768,17 @@ function bugunkuGunluk(c){
    kutuda birbirine karışmasın diye. */
 function bugunIslemHTML(bg, c){
   var satir1 = ((numParse(bg.su)>0)?('<b>'+esc(bg.su)+' lt su</b>'+(bg.sulama?' + ':'')):'')+esc(bg.sulama||"");
-  var satir2 = bg.islemNot ? ('<div style="color:#6b6b66; font-size:12.5px; margin-top:2px;">'+esc(bg.islemNot)+'</div>') : '';
+  /* "X için plan Y olarak güncellendi — gerekçe: ..." notları PLANLAMA/idari
+     kayıttır, fiili üretim işlemi DEĞİL — Son İşlemler'de zaten filtreleniyordu
+     ama burada (Bugün İşlem kolonu) filtrelenmiyordu, bu yüzden "Poşet kesimi
+     için plan 14.07 — gerekçe: belirtilmedi" gibi metinler yanlışlıkla "bugün
+     yapılan iş" gibi görünüyordu (KRİTİK BUG, düzeltildi). */
+  var islemNotTemiz = bg.islemNot
+    ? (""+bg.islemNot).split(" · ").map(function(x){return x.trim();}).filter(function(x){
+        return x && !/^.+ için plan /.test(x);
+      }).join(" · ")
+    : "";
+  var satir2 = islemNotTemiz ? ('<div style="color:#6b6b66; font-size:12.5px; margin-top:2px;">'+esc(islemNotTemiz)+'</div>') : '';
   if(satir1 || satir2) return (satir1||'<span class="muted">—</span>') + satir2;
   /* Gerçek veri (Tur'dan) henüz girilmemişse, bugünün protokol ÖNERİSİNİ (henüz
      uygulanmadı, tahmini) "Yarın işlem" kolonuyla TUTARLI şekilde kırmızı/tahmini
@@ -3601,7 +3766,7 @@ function getTodaysTasks(){
       tipo:"sulama",
       odaId:c.id,
       oda:c.oda,
-      islem:yapildiMi?((gun.su?gun.su+" lt su":"")+(gun.sulama?(" "+gun.sulama):"")).trim()||oneri:oneri,
+      islem:yapildiMi?((numParse(gun.su)>0?gun.su+" lt su":"")+(gun.sulama?(" "+gun.sulama):"")).trim()||oneri:oneri,
       atama:"",
       tarih:bugun,
       gelisTarihi:c.gelisTarihi||"",
@@ -4591,7 +4756,7 @@ function renderDetail(id){
         + '<td>'+esc(r.odaC)+'</td>'
         + '<td>'+esc(r.kompostC)+'</td>'
         + (showCo2?'<td>'+esc(co2)+'</td>':'')
-        + '<td class="note">'+gunMeta(r)+suDegeriGoster(r.su)+((numParse(r.su)>0||r.su)&&r.sulama?' · ':'')+esc(r.sulama)+(r.islemNot?('<div style="color:#8a8a82;font-size:12px;margin-top:2px;">'+esc(r.islemNot)+'</div>'):'')+'</td>'
+        + '<td class="note">'+gunMeta(r)+suDegeriGoster(r.su)+((numParse(r.su)>0)&&r.sulama?' · ':'')+esc(r.sulama)+(r.islemNot?('<div style="color:#8a8a82;font-size:12px;margin-top:2px;">'+esc(r.islemNot)+'</div>'):'')+'</td>'
         + '<td style="white-space:nowrap;"><button class="del-x" onclick="delGunluk(\''+c.id+'\','+i+')">×</button></td>'
         + '</tr>';
     });
@@ -6862,7 +7027,7 @@ function hasatTartiPrintHTML(c){
    serbest metin de olabilir ("250 ml serenade" gibi) — böyle durumda "lt su" ekleyip
    anlamsız bir birleşim oluşturmak yerine, metni olduğu gibi (etiketsiz) gösteriyoruz. */
 function suDegeriGoster(su){
-  if(!su) return "";
+  if(numParse(su)<=0) return "";
   var temizMi=/^\d+([.,]\d+)?$/.test((""+su).trim());
   return temizMi ? ('<b>'+esc(su)+' lt su</b>') : esc(su);
 }
@@ -6889,7 +7054,7 @@ function buildPrintHTML(c){
     var og=ortuGun(c,r.tarih);
     var co2=(r.co2alt||r.co2ust)?((r.co2alt||"")+"-"+(r.co2ust||"")):"";
     var ayr=gunlukSatirAyristir(r);
-    var suHucre = suDegeriGoster(r.su) + ((r.su&&ayr.sulama.length)?' · ':'') + esc(ayr.sulama.join(" · "));
+    var suHucre = suDegeriGoster(r.su) + ((numParse(r.su)>0&&ayr.sulama.length)?' · ':'') + esc(ayr.sulama.join(" · "));
     var uretimHucre=(uretimTarihMap[r.tarih]||[]).concat(ayr.uretim).join(" · ");
     rows+='<tr><td>'+fmtDate(r.tarih)+'</td><td>'+gunNo(c,r.tarih)+'</td><td>'+(og!==null?og:"")+'</td><td>'+esc(r.odaC)+'</td><td>'+esc(r.kompostC)+'</td><td>'+esc(co2)+'</td>'
       +'<td style="text-align:left">'+esc(uretimHucre)+'</td>'
@@ -8997,13 +9162,36 @@ function renderAyarlarMenu(){
   h+='</div>';
   el("app").innerHTML=h + navRow();
 }
-/* Reçete satırlarını Ayarlar'da gösterirken kronolojik sıralamak için ortak anahtar.
-   "Toprak" referanslı satırlar (örn. toprak+2) ile "Geliş" referanslı satırlar (örn. geliş+6)
-   direkt gün sayısıyla kıyaslanamaz — toprak serimi genelde gelişten ~13 gün sonra olur.
-   Bu yüzden toprak referanslı satırları geliş eksenine çevirip öyle sıralıyoruz. */
-function protokolSiraAnahtari(s){
-  var offToprak=getSet().offToprak||13;
-  return (s.ref==="toprak") ? (offToprak+(s.gun||0)) : (s.gun||0);
+/* Reçete satırlarını Ayarlar'da gösterirken kronolojik/iş akışı sırasına göre
+   sıralamak için ortak anahtar. ESKİDEN sadece "gelis" ve "toprak" referansları
+   doğru normalize ediliyordu — "poşet"e, "tiftik"e, "tırmık"a referans veren
+   satırlar (örn. Serenade: poşet+8) ham gün sayısıyla (8) sıralanıyordu, sanki
+   geliş+8'miş gibi — oysa gerçekte poşet zaten geliş+6-7 civarı olduğundan
+   gerçek sırası çok daha geriydi. Artık TÜM referans zinciri (kompost indirme →
+   poşet → tiftik/toprak → tırmık → hava → hasat) özyinelemeli olarak "geliş
+   ekseni"ne çözülüyor — döngü/sonsuz özyineleme koruması var. */
+function protokolSiraAnahtari(s, _derinlik){
+  _derinlik = _derinlik||0;
+  if(_derinlik>8) return 90000+(s.gun||0); /* döngü koruması */
+  if(!s || !s.ref || s.ref==="gelis") return (s&&s.gun)||0;
+  if(s.ref==="toprak"){
+    var offToprak=getSet().offToprak||13;
+    return offToprak+(s.gun||0);
+  }
+  /* poset/tiftik/tirmik/hava/kompostindirme/özel referanslar: o rolün KENDİ
+     satırını bul, onun ekseni + bu satırın gün farkı */
+  var refIdx=protokolRolIdx(s.ref);
+  /* SAHİPSİZ REFERANS: bu referansı (örn. özel eklenen "1. Flaş") hiçbir satır
+     henüz Rol olarak almamışsa, sistem "bu ne zaman?" bilemiyor demektir.
+     ESKİDEN bu durumda ham gün sayısıyla (örn. 5) sıralanıyordu — sanki
+     gelişten 5 gün sonraymış gibi listenin EN BAŞINA çıkıyordu, oysa gerçekte
+     çok daha geç bir aşama olabilir (örn. "1. Flaş" hasat civarı). Artık
+     sahipsiz referanslar listenin SONUNA atılıyor (90000+) — en azından
+     yanlış yere değil, göze çarpan/kontrol edilmesi gereken bir yere düşer. */
+  if(refIdx<0) return 90000+(s.gun||0);
+  var refStep=getProtokol()[refIdx];
+  if(!refStep) return 90000+(s.gun||0);
+  return protokolSiraAnahtari(refStep, _derinlik+1) + (s.gun||0);
 }
 function renderAyarlar(){
   if(!_ayarKategori){ renderAyarlarMenu(); return; }
@@ -9236,11 +9424,38 @@ function renderAyarlar(){
       +'<div class="muted" style="margin-bottom:8px;">Üretimle ilgili fiziksel işler: tiftik, tırmık, toprak serimi, poşet açma gibi. Ekibin hangi gün ne iş yapacağını burada tanımlarsın. Gün, "Geliş" veya "Toprak serimi" tarihine göre sayılır (örn. Geliş +6 = kompost geldikten 6 gün sonra).</div>';
     var UP_sirali=PR.map(function(s,idx){return {s:s, idx:idx};}).filter(function(x){return !x.s.silindi && x.s.tip==="olay";}).sort(function(a,b){return protokolSiraAnahtari(a.s)-protokolSiraAnahtari(b.s);});
     var ROL_ETIKET={"":"— rol yok —", poset:"🔓 Poşet", tiftik:"🌾 Tiftik", toprak:"🟫 Toprak", tirmik:"🔨 Tırmık", hasat:"🧺 Hasat"};
+    getOzelRoller().forEach(function(r){ ROL_ETIKET[r.v]="⭐ "+r.l; });
+    h+='</div>';
+    h+='<div class="card"><div class="sec-title" style="margin-top:0;">⭐ Özel Referans Noktaları</div>'
+      +'<div class="muted" style="margin-bottom:8px;">Başka satırların KENDİSİNİ referans alacağı dönüm noktaları — sadece 7 yerleşik olanla (Geliş/Toprak/Poşet vb.) sınırlı değilsin, "1. Flaş", "Kök temizliği", "Oda boşaltma" gibi kendi zincirini kurabilirsin. (Bir satır referans olsun istemiyorsan, buraya değil aşağıdaki "+ Yeni görev ekle"ye ekle — o zaman başka satırlar ona göre sayılamaz.)</div>';
+    var _oz=getOzelRoller();
+    if(_oz.length){
+      _oz.forEach(function(r){
+        var _sahipsiz = refSahipsizMi(r.v);
+        h+='<div style="display:flex;justify-content:space-between;align-items:center;padding:5px 2px;border-bottom:1px solid #eee;">'
+          +'<span>⭐ '+esc(r.l)+(_sahipsiz?' <span style="color:#c0291f;font-size:11px;">(tarihi tanımsız)</span>':'')+'</span>'
+          +'<button class="del-x" onclick="ozelRolSil(\''+r.v+'\')">Sil ×</button></div>';
+      });
+    } else {
+      h+='<div class="muted" style="padding:4px 2px;">Henüz özel referans eklenmedi.</div>';
+    }
+    h+='<div style="margin-top:10px;">'
+      +'<input type="text" id="oz_rol_ad" placeholder="Referans adı (örn. 1. Flaş)" style="width:100%;margin-bottom:6px;">'
+      +'<div class="muted" style="font-size:11.5px;margin-bottom:4px;">Bu referans TAM OLARAK ne zaman? (örn. Hava + 11 gün) — hem ismi hem tarihi tek adımda tanımlanır, ayrıca Rol atamana gerek kalmaz:</div>'
+      +'<div style="display:flex;gap:6px;align-items:center;">'
+      +refDropdownHTML('oz_rol_ref','hava')
+      +'<input type="number" id="oz_rol_gun" value="0" title="±gün" placeholder="±gün" style="width:64px;min-height:auto;padding:5px 4px;flex:none;">'
+      +'<button class="btn small" style="flex:none;margin-left:auto;" onclick="ozelRolEkle(el(\'oz_rol_ad\').value, el(\'oz_rol_ref\').value, el(\'oz_rol_gun\').value); el(\'oz_rol_ad\').value=\'\'; el(\'oz_rol_gun\').value=\'0\';">+ Ekle</button>'
+      +'</div></div></div>';
+    h+='<div class="card"><div class="sec-title" style="margin-top:0;">🌱 1. Üretim Protokolü (devam)</div>';
     UP_sirali.forEach(function(x){
       var s=x.s, idx=x.idx;
       var refLbl = refEtiketi(s.ref);
-      h+='<div style="padding:8px 0;border-bottom:1px solid #eee;">'
+      var sahipsiz = refSahipsizMi(s.ref);
+      h+='<div style="padding:8px 0;border-bottom:1px solid #eee;'+(sahipsiz?'background:#fdf3f2;':'')+'">'
+        +(sahipsiz?'<div style="color:#c0291f;font-size:11px;font-weight:700;margin-bottom:3px;">⚠️ "'+esc(refLbl)+'" referansı henüz hiçbir satıra Rol olarak atanmadı — tarihi hesaplanamıyor</div>':'')
         +'<div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">'
+        +refDropdownHTML('pr_ref_'+idx, s.ref)
         +'<input type="number" id="pr_gun_'+idx+'" value="'+s.gun+'" title="'+refLbl+' + kaç gün" style="width:44px;padding:3px;flex:none;font-weight:700;color:#888;">'
         +'<input type="text" id="pr_txt_'+idx+'" value="'+esc(s.txt)+'" style="flex:1;min-width:160px;padding:3px;font-size:13px;">'
         +'<span style="font-size:11px;color:#888;" title="İş kaç gün sürer? (1=aynı gün bitmeli, hasat=5)">Süre</span><input type="number" min="1" id="pr_sure_'+idx+'" value="'+(parseInt(s.sure,10)||1)+'" style="width:42px;padding:3px;flex:none;">'
@@ -9266,7 +9481,7 @@ function renderAyarlar(){
     h+='<div style="margin-top:12px; padding-top:10px; border-top:2px solid #eee;">'
       +'<b>+ Yeni görev ekle</b>'
       +'<div style="display:flex; gap:6px; margin-top:6px;">'
-      +'<select id="pg_ref" style="flex:1;"><option value="gelis">Geliş gününe göre</option><option value="toprak">Toprak serimine göre</option></select>'
+      +refDropdownHTML("pg_ref","gelis")
       +'<input type="number" id="pg_gun" placeholder="gün (örn. 6 veya -2)" style="width:120px;">'
       +'</div>'
       +'<input type="text" id="pg_txt" placeholder="işin açıklaması (örn. Poşet açılır)" style="width:100%; margin-top:6px;">'
@@ -9287,11 +9502,14 @@ function renderAyarlar(){
     KP_sirali.forEach(function(x){
       var s=x.s, idx=x.idx;
       var refLbl = refEtiketi(s.ref);
-      h+='<div style="padding:8px 0;border-bottom:1px solid #eee;">'
+      var sahipsiz = refSahipsizMi(s.ref);
+      h+='<div style="padding:8px 0;border-bottom:1px solid #eee;'+(sahipsiz?'background:#fdf3f2;':'')+'">'
+        +(sahipsiz?'<div style="color:#c0291f;font-size:11px;font-weight:700;">⚠️ "'+esc(refLbl)+'" referansı henüz hiçbir satıra Rol olarak atanmadı</div>':'')
         +'<div style="font-size:12px;color:#888;">'+refLbl+' '+(s.gun>=0?"+":"")+s.gun+'. gün'
         +((parseInt(s.sure,10)||1)>1?(' · ⏳'+s.sure+'g gözlem penceresi'):'')+'</div>'
         +'<input type="text" id="pr_txt_'+idx+'" value="'+esc(s.txt)+'" style="width:100%;margin:3px 0;font-size:13px;">'
         +'<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">'
+        +refDropdownHTML('pr_ref_'+idx, s.ref)
         +'<input type="number" id="pr_gun_'+idx+'" value="'+s.gun+'" style="width:60px;padding:3px;">'
         +'<span style="font-size:11px;color:#888;" title="Kaç gün boyunca kalıcı gözlem uyarısı olarak kalsın (örn. 7-8. gün için 2 gir)">Gözlem süresi</span><input type="number" min="1" id="pr_sure_'+idx+'" value="'+(parseInt(s.sure,10)||1)+'" style="width:42px;padding:3px;">'
         +'<button class="btn small" onclick="protokolSatirKaydet('+idx+')">Kaydet</button>'
@@ -9304,7 +9522,7 @@ function renderAyarlar(){
     h+='<div style="margin-top:12px; padding-top:10px; border-top:2px solid #eee;">'
       +'<b>+ Yeni kontrol notu ekle</b>'
       +'<div style="display:flex; gap:6px; margin-top:6px;">'
-      +'<select id="pk_ref" style="flex:1;"><option value="gelis">Geliş gününe göre</option><option value="toprak">Toprak serimine göre</option></select>'
+      +refDropdownHTML("pk_ref","gelis")
       +'<input type="number" id="pk_gun" placeholder="gün (örn. 7 veya -2)" style="width:120px;">'
       +'</div>'
       +'<input type="text" id="pk_txt" placeholder="dikkat edilecek nokta (örn. ateşlenme riski, misel kontrolü)" style="width:100%; margin-top:6px;">'
@@ -9387,40 +9605,36 @@ function renderAyarlar(){
       var s=x.s, idx=x.idx;
       var refLbl = refEtiketi(s.ref);
       var tekrarVarMi = !!s.tekrarBitisRef;
-      h+='<div style="padding:8px 0;border-bottom:1px solid #eee;">'
+      var sahipsiz = refSahipsizMi(s.ref);
+      h+='<div style="padding:8px 0;border-bottom:1px solid #eee;'+(sahipsiz?'background:#fdf3f2;':'')+'">'
+        +(sahipsiz?'<div style="color:#c0291f;font-size:11px;font-weight:700;">⚠️ "'+esc(refLbl)+'" referansı henüz hiçbir satıra Rol olarak atanmadı</div>':'')
         +'<div style="font-size:12px;color:#888;">'+refLbl+' '+(s.gun>=0?"+":"")+s.gun+'. gün'
         +(tekrarVarMi?' · <span style="color:#1d7a3c;font-weight:600;">🔁 HER GÜN → '+({gelis:"geliş",poset:"poşet kesimi",tiftik:"tiftik",toprak:"toprak serimi",tirmik:"tırmık",hava:"hava"}[s.tekrarBitisRef]||s.tekrarBitisRef)+' '+(s.tekrarBitisGun>=0?"+":"")+s.tekrarBitisGun+"'e kadar</span>":'')
         +'</div>'
         +'<input type="text" id="pr_txt_'+idx+'" value="'+esc(s.txt)+'" style="width:100%;margin:3px 0;font-size:13px;">'
-        +'<div style="display:flex;gap:6px;align-items:center;">'
-        +'<span style="font-size:12px;color:#888;">Gün:</span><input type="number" id="pr_gun_'+idx+'" value="'+s.gun+'" style="width:60px;padding:3px;">'
-        +'<button class="btn small" style="margin-left:auto;" onclick="protokolSatirKaydet('+idx+')">Kaydet</button>'
-        +'<button class="del-x" onclick="protokolSatirSil('+idx+')">Sil ×</button>'
+        +'<div style="display:flex;gap:5px;align-items:center;flex-wrap:wrap;">'
+        +refDropdownHTML('pr_ref_'+idx, s.ref)
+        +'<input type="number" id="pr_gun_'+idx+'" value="'+s.gun+'" title="gün" style="width:52px;min-height:auto;padding:5px 4px;flex:none;">'
+        +'<button class="btn small" style="margin-left:auto;min-height:auto;padding:6px 10px;flex:none;" onclick="protokolSatirKaydet('+idx+')">Kaydet</button>'
+        +'<button class="del-x" style="flex:none;" onclick="protokolSatirSil('+idx+')">Sil ×</button>'
         +'</div>'
         +'<div class="chk" style="margin-top:6px;"><input type="checkbox" id="pr_tekrar_chk_'+idx+'" '+(tekrarVarMi?"checked":"")+' onchange="el(\'pr_tekrar_alan_'+idx+'\').style.display=this.checked?\'flex\':\'none\';">'
         +'<label style="font-size:12.5px;">Tek gün değil, HER GÜN tekrarlansın</label></div>'
-        +'<div id="pr_tekrar_alan_'+idx+'" style="display:'+(tekrarVarMi?"flex":"none")+'; gap:6px; margin-top:4px;">'
-        +'<select id="pr_tekrar_ref_'+idx+'" style="flex:1;">'
+        +'<div id="pr_tekrar_alan_'+idx+'" style="display:'+(tekrarVarMi?"flex":"none")+'; gap:5px; margin-top:4px; flex-wrap:wrap; align-items:center;">'
+        +'<select id="pr_tekrar_ref_'+idx+'" style="width:auto;min-height:auto;padding:5px 4px;flex:none;font-size:12px;">'
         +['gelis','poset','tiftik','toprak','tirmik','hava'].map(function(r){
             var lbl={gelis:"...Geliş gününe kadar",poset:"...Poşet kesimine kadar",tiftik:"...Tiftiğe kadar",toprak:"...Toprak serimine kadar",tirmik:"...Tırmığa kadar",hava:"...Hava başlangıcına kadar"}[r];
             return '<option value="'+r+'"'+((s.tekrarBitisRef||"toprak")===r?" selected":"")+'>'+lbl+'</option>';
           }).join('')
         +'</select>'
-        +'<input type="number" id="pr_tekrar_gun_'+idx+'" value="'+(tekrarVarMi?s.tekrarBitisGun:0)+'" placeholder="±gün (örn. -2)" style="width:110px;">'
+        +'<input type="number" id="pr_tekrar_gun_'+idx+'" value="'+(tekrarVarMi?s.tekrarBitisGun:0)+'" title="±gün" placeholder="±gün" style="width:64px;min-height:auto;padding:5px 4px;flex:none;">'
         +'</div>'
         +'</div>';
     });
     h+='<div style="margin-top:12px; padding-top:10px; border-top:2px solid #eee;">'
       +'<b>+ Yeni ilaçlama ekle</b>'
       +'<div style="display:flex; gap:6px; margin-top:6px;">'
-      +'<select id="pi_ref" style="flex:1;">'
-      +'<option value="gelis">Geliş gününe göre</option>'
-      +'<option value="poset">Poşet kesimine göre</option>'
-      +'<option value="tiftik">Tiftiğe göre</option>'
-      +'<option value="toprak">Toprak serimine göre</option>'
-      +'<option value="tirmik">Tırmığa göre</option>'
-      +'<option value="hava">Hava başlangıcına göre</option>'
-      +'</select>'
+      +refDropdownHTML("pi_ref","gelis")
       +'<input type="number" id="pi_gun" placeholder="gün (örn. 3 veya -2)" style="width:120px;">'
       +'</div>'
       +'<div class="muted" style="font-size:11.5px; margin-top:4px;">'
@@ -9538,6 +9752,25 @@ function protokolSatirKaydet(idx){
   var sre=el("pr_sure_"+idx); if(sre){ var sv=parseInt(sre.value,10); P[idx].sure=(isNaN(sv)||sv<1)?1:sv; }
   var tk=el("pr_tekrar_"+idx); if(tk){ var tv=parseInt(tk.value,10); P[idx].tekrar=(isNaN(tv)||tv<0)?0:tv; }
   var rl=el("pr_rol_"+idx); if(rl) P[idx].rol=rl.value||"";
+  /* ÇİFT ROL ATAMASI KORUMASI: aynı Rol (örn. "2. Flaş") yanlışlıkla birden
+     fazla satıra atanmışsa, protokolRolIdx() sadece İLK bulduğunu kullanır —
+     kullanıcı ikinci satıra Rol atadığını sanır ama sistem hâlâ eskisini
+     baz alır, kafa karıştırıcı/çelişkili sonuçlar üretir. Burada yeni Rol
+     atanırken, AYNI Rol'ü taşıyan BAŞKA satırlardan otomatik kaldırılır —
+     "bu rolü artık BEN taşıyorum" mantığıyla tek sahip garanti edilir. */
+  if(rl && rl.value){
+    var yeniRol=rl.value, tasindi=0;
+    P.forEach(function(diger,dIdx){
+      if(dIdx!==idx && !diger.silindi && diger.rol===yeniRol){ diger.rol=""; tasindi++; }
+    });
+    if(tasindi>0) toast('⚠️ "'+refEtiketi(yeniRol)+'" rolü başka '+tasindi+' satırdan kaldırılıp buraya taşındı');
+  }
+  /* Referans noktası (Kompost indirme/Poşet/Tiftik/Toprak/Tırmık/Hava/Geliş) —
+     eskiden bu satırlarda hiç düzenlenemiyordu, sadece yeni satır eklerken
+     (ve orada da sadece Geliş/Toprak seçeneği vardı) ayarlanabiliyordu. Bu,
+     "Poşetten sonra sulama vermedi" ve "sıradaki işlem sıra atlıyor" gibi
+     hataların temel sebebiydi — kullanıcı referansı göremiyor/değiştiremiyordu. */
+  var refEl=el("pr_ref_"+idx); if(refEl && refEl.value) P[idx].ref=refEl.value;
   var scEl=el("pr_sonuc_"+idx);
   if(scEl){ P[idx].sonucSecenekleri = scEl.value.split(",").map(function(x){return x.trim();}).filter(Boolean); }
   /* Tekrarlı sulama/ilaç kuralı (Mühendis Protokolü satırları): "HER GÜN
@@ -9637,6 +9870,16 @@ function protokolIlacEkle(){
   if(!can("manage")) return noPerm();
   var ref=el("pi_ref").value, gun=parseInt(el("pi_gun").value,10), txt=(el("pi_txt").value||"").trim();
   if(isNaN(gun)){ toast("Gün sayısı gir"); return; }
+  /* KRİTİK: "Su (lt)" kaydırıcısı (pi_su) görsel olarak vardı ama değeri hiçbir
+     zaman kaydedilmiyordu — sadece ilaç seçimi Açıklama'ya otomatik yazılıyor,
+     su kaydırıcısı sessizce YOK SAYILIYORDU. Kullanıcı suyu kaydırıp "eklendi"
+     sanıyordu ama kaydedilen satırda su hiç yoktu (KRİTİK BUG, düzeltildi).
+     Artık su>0 ise ve metinde zaten "lt su" geçmiyorsa, otomatik başa eklenir. */
+  var suEl=el("pi_su");
+  var suV=suEl?parseInt(suEl.value,10):0;
+  if(suV>0 && !/lt\s*su/i.test(txt)){
+    txt = suV+" lt su"+(txt?(" + "+txt):"");
+  }
   if(!txt){ toast("Açıklama gir (su/ilaç seçince otomatik dolar)"); return; }
   var d=loadData(); ensureProtokol();
   var yeni={ref:ref, gun:gun, tip:"ilac", sahip:"ziraat", txt:txt};
@@ -9649,8 +9892,8 @@ function protokolIlacEkle(){
   }
   d.settings.protokol.push(yeni);
   d.settings.protokolOzellestirildi=true;
-  saveData(); logAudit("ilaçlama reçetesine ekleme", txt); toast("İlaçlama eklendi");
-  el("pi_gun").value=""; el("pi_txt").value="";
+  saveData(); logAudit("ilaçlama reçetesine ekleme", txt); toast("İlaçlama eklendi: "+txt);
+  el("pi_gun").value=""; el("pi_txt").value=""; if(suEl){ suEl.value=0; var lbl=el("pi_su_lbl"); if(lbl) lbl.textContent="0 lt"; }
   if(tekrarChk){ tekrarChk.checked=false; el("pi_tekrar_alan").style.display="none"; }
   render();
 }
