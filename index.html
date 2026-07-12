@@ -459,7 +459,7 @@ function hasatTartiGetir(oda, tur){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v323";
+var APP_VER = "v324";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -493,6 +493,16 @@ function loadData(){
   } else {
     memData = {cycles:[]};
   }
+  memDataNormalizeVeGoc();
+  return memData;
+}
+/* loadData()'nın alan-varsayılanı + tek seferlik göç mantığı — PIN akışları
+   (pinBoot/pinKilidiAc/resumeYenidenYukle) memData'yı loadData()'nın senkron
+   soğuk yolundan GEÇMEDEN doğrudan atadığı için (şifre çözme asenkron olduğu
+   için zorunlu), bu adımı KENDİLERİ de çağırmalı — aksi halde örn. yeni bir
+   kurulumda memData={cycles:[]} kalır, memData.gorevler hiç oluşmaz ve ilk
+   "Görev ekle" TypeError ile çöker (KRİTİK BUG, düzeltildi). */
+function memDataNormalizeVeGoc(){
   if(!memData || typeof memData !== "object") memData = {cycles:[]};
   if(!Array.isArray(memData.cycles)) memData.cycles = [];
   if(!memData.settings || typeof memData.settings !== "object") memData.settings = {};
@@ -504,7 +514,6 @@ function loadData(){
   var _degTekil = gunlukNotlariTekille(memData);
   var _degKompostInd = kompostIndirmeGeriyeDonukDoldur(memData);
   if(_degMigrasyon || _degTekil || _degKompostInd) saveData();
-  return memData;
 }
 /* TEK SEFERLİK GEÇİŞ: Zaten aktif olan (kompost içinde, günlük ölçüm giriliyor)
    odalarda kompostIndirme hiç set edilmemiş olabilir (bu düzeltmeden önce oluşturulmuş
@@ -3530,13 +3539,35 @@ function gorevTurSil(ad){
   var d=loadData(); d.settings.gorevTurleri=getGorevTurleri().filter(function(x){return x!==ad;});
   saveData(); toast("Görev türü silindi"); render();
 }
+/* Genel görevler listesine tarih+başlık eşleşen BEKLEYEN bir görev varsa
+   onun atamasına ekler (kopya oluşturmaz), yoksa yeni görev oluşturur.
+   UI yan etkisi (toast/render/saveData) YOK — hem gorevEkle() (tekli elle
+   ekleme) hem topluOnayla() (WhatsApp toplu girişi) bunu kullanır; ikisi de
+   ayrı ayrı aynı işi (örn. "Oda B-1 · Oda boşaltma/yıkama") her tekrarda/
+   toplu girişte kopya "Atanmamış" görev olarak biriktiren bugı taşıyordu. */
+function gorevEkleVeyaBirlestir(tarih, baslik, atama){
+  var d=loadData();
+  var mevcut = d.gorevler.find(function(g){ return !g.done && g.tarih===tarih && g.baslik===baslik; });
+  if(mevcut){
+    if(atama){
+      var arr=atamaParse(mevcut.atama||"");
+      atamaParse(atama).forEach(function(a){ if(arr.indexOf(a)<0) arr.push(a); });
+      mevcut.atama=arr.join(",");
+    }
+    return false; /* yeni eklenmedi, mevcuda birleştirildi */
+  }
+  d.gorevler.push({id:uid(), tarih:tarih, baslik:baslik, atama:atama||"", done:false, at:new Date().toISOString(), by:deviceName()});
+  return true;
+}
 function gorevEkle(tarih,baslik,atama){
   if(!can("edit")) return noPerm();
   baslik=(baslik||"").trim(); if(!baslik){ toast("Görev başlığı gir"); return; }
   if(!tarih){ toast("Tarih seç"); return; }
-  var d=loadData();
-  d.gorevler.push({id:uid(), tarih:tarih, baslik:baslik, atama:atama||"", done:false, at:new Date().toISOString(), by:deviceName()});
-  saveData(); logAudit("görev eklendi", baslik+" ("+fmtDate(tarih)+")"); toast("Görev eklendi"); render();
+  var yeni=gorevEkleVeyaBirlestir(tarih, baslik, atama);
+  saveData();
+  if(yeni) logAudit("görev eklendi", baslik+" ("+fmtDate(tarih)+")");
+  toast(yeni?"Görev eklendi":"Bu görev zaten vardı — atama güncellendi");
+  render();
 }
 function gorevToggle(id){
   if(!can("edit")) return noPerm();
@@ -4635,14 +4666,35 @@ function renderGorevlerSekme(){
     + '<div class="muted" style="text-align:center; padding:2px 0 6px;">Üretim Takip '+APP_VER+'</div>';
 }
 /* Odaya özel, tek seferlik işlemler — Görevler sekmesinden manuel eklenir */
+/* gorevEkleVeyaBirlestir ile aynı desen (bkz. o yorumu) ama oda-bazlı
+   görevler (c.odaGorevleri) için. */
+function odaGorevEkleVeyaBirlestir(cid, tarih, is, atama){
+  var c=loadData().cycles.find(function(x){return x.id===cid;}); if(!c) return null;
+  if(!c.odaGorevleri) c.odaGorevleri=[];
+  var mevcut = c.odaGorevleri.find(function(g){ return !g.done && g.tarih===tarih && g.is===is; });
+  if(mevcut){
+    if(atama){
+      var arr=atamaParse(mevcut.atama||"");
+      atamaParse(atama).forEach(function(a){ if(arr.indexOf(a)<0) arr.push(a); });
+      mevcut.atama=arr.join(",");
+    }
+    touchCycle(c);
+    return false;
+  }
+  c.odaGorevleri.push({id:uid(), tarih:tarih, is:is, atama:atama||"", done:false, ertele:0});
+  touchCycle(c);
+  return true;
+}
 function odaGorevEkle(cid, tarih, is, atama){
   if(!can("edit")) return noPerm();
   is=(is||"").trim(); if(!is){ toast("İşlem açıklaması gir"); return; }
   if(!tarih){ toast("Tarih seç"); return; }
   var c=loadData().cycles.find(function(x){return x.id===cid;}); if(!c) return;
-  if(!c.odaGorevleri) c.odaGorevleri=[];
-  c.odaGorevleri.push({id:uid(), tarih:tarih, is:is, atama:atama||"", done:false, ertele:0});
-  touchCycle(c); saveData(); logAudit("oda işlemi eklendi", c.oda+" · "+is); toast("Eklendi"); render();
+  var yeni=odaGorevEkleVeyaBirlestir(cid, tarih, is, atama);
+  saveData();
+  if(yeni) logAudit("oda işlemi eklendi", c.oda+" · "+is);
+  toast(yeni?"Eklendi":"Bu işlem zaten vardı — atama güncellendi");
+  render();
 }
 function odaGorevOnayla(cid, ogId){
   if(!can("edit")) return noPerm();
@@ -4874,26 +4926,29 @@ function topluAyristir(){
 function topluOnayla(){
   if(!can("edit")) return noPerm();
   topluDOMdanSenkronla();
-  var eklenen=0, resmiKayit=0;
+  var eklenen=0, resmiKayit=0, birlesen=0;
   _topluTaslak.forEach(function(t){
     var konum=(t.konum||"").trim();
     var is=(t.is||"").trim();
     if(!is) return;
     /* Aynı akıllı yönlendirme: konum kayıtlı bir odaya denk geliyorsa ve o odanın
-       açık döngüsü varsa, görev otomatik olarak odanın resmi kaydına işlenir. */
+       açık döngüsü varsa, görev otomatik olarak odanın resmi kaydına işlenir.
+       Her ikisi de VeyaBirlestir çekirdeğini kullanır — aynı iş (örn. pasteden
+       metinde birden fazla satırda geçen "Oda B-1 · Oda boşaltma/yıkama")
+       kopya kopya "Atanmamış" görev olarak birikmesin, mevcuda birleşsin. */
     var hedefCycle = konum ? loadData().cycles.find(function(c){ return !c.bosaltimTarihi && normalizeOda(c.oda)===normalizeOda(konum); }) : null;
     if(hedefCycle){
-      odaGorevEkle(hedefCycle.id, (t.tarih||todayISO()), is, (t.atama||""));
-      resmiKayit++;
+      var yeni1=odaGorevEkleVeyaBirlestir(hedefCycle.id, (t.tarih||todayISO()), is, (t.atama||""));
+      if(yeni1) resmiKayit++; else birlesen++;
     } else {
       var baslik = konum ? (konum+" · "+is) : is;
-      var d=loadData();
-      d.gorevler.push({id:uid(), tarih:(t.tarih||todayISO()), baslik:baslik, atama:(t.atama||""), done:false, at:new Date().toISOString(), by:deviceName()});
+      var yeni2=gorevEkleVeyaBirlestir((t.tarih||todayISO()), baslik, (t.atama||""));
+      if(!yeni2) birlesen++;
     }
     eklenen++;
   });
-  saveData(); logAudit("toplu görev girişi", eklenen+" işlem eklendi ("+resmiKayit+" oda kaydına)");
-  toast(eklenen+" görev eklendi"+(resmiKayit?(" ("+resmiKayit+" odanın resmi kaydına)"):""));
+  saveData(); logAudit("toplu görev girişi", eklenen+" işlem işlendi ("+resmiKayit+" oda kaydına, "+birlesen+" zaten vardı)");
+  toast(eklenen+" işlem işlendi"+(resmiKayit?(" ("+resmiKayit+" odanın resmi kaydına)"):"")+(birlesen?(", "+birlesen+" zaten vardı"):""));
   _topluAcik=false; _topluTaslak=null;
   render();
 }
@@ -8674,6 +8729,7 @@ async function pinKurulumKaydet(){
     var rawKey=await crypto.subtle.exportKey("raw", _pinKey);
     sessionStorage.setItem(PIN_SESSION_KEY, JSON.stringify({salt:salt, raw:b64FromBuf(rawKey)}));
   }catch(e){ console.warn("oturum anahtarı kaydedilemedi", e); }
+  memDataNormalizeVeGoc();
   persistEncrypted(JSON.stringify(memData));
   bootApp();
 }
@@ -8690,6 +8746,7 @@ async function pinKilidiAc(){
     if(env && env.enc===1){ plaintext = await pinCoz(key, env.iv, env.ct); }
     memData = JSON.parse(plaintext);
     _pinKey = key;
+    memDataNormalizeVeGoc();
     try{
       var rawKey=await crypto.subtle.exportKey("raw", key);
       sessionStorage.setItem(PIN_SESSION_KEY, JSON.stringify({salt:cfg.salt, raw:b64FromBuf(rawKey)}));
@@ -8766,6 +8823,7 @@ async function pinBoot(){
       }
     }
     memData = legacy || {cycles:[]};
+    memDataNormalizeVeGoc();
     renderPinSetup(!!legacy);
     return;
   }
@@ -8781,6 +8839,7 @@ async function pinBoot(){
         var plaintext2 = await pinCoz(key, env2.iv, env2.ct);
         memData = JSON.parse(plaintext2);
         _pinKey = key;
+        memDataNormalizeVeGoc();
         bootApp();
         return;
       }
@@ -10936,6 +10995,7 @@ async function resumeYenidenYukle(){
       if(env && env.enc===1){
         var plaintext = await pinCoz(_pinKey, env.iv, env.ct);
         memData = JSON.parse(plaintext);
+        memDataNormalizeVeGoc();
       }
     }
   }catch(e){
