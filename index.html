@@ -459,7 +459,7 @@ function hasatTartiGetir(oda, tur){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v316";
+var APP_VER = "v317";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -5697,11 +5697,11 @@ function kgGuncelSicaklik(c){
   return {alt:numParse(c.kgDereceAlt), ust:numParse(c.kgDereceUst), kaynak:"geliş günü"};
 }
 /* Kompost geliş sıcaklığı için 3 kademe (kritikUst'ten AYRI — bu ikisi farklı
-   amaçlar): 30°'ye kadar sorun yok (madde kapalı). 30-35° arası hâlâ soğuyor,
+   amaçlar): 28°'ye kadar sorun yok (madde kapalı). 28-35° arası hâlâ soğuyor,
    hafif ikaz kalır. 35° üstü ACİL: kompost torbaları ıslatılmalı. 35°'nin
-   altına düşünce acil ikaz kalkar, hafif ikaza döner (30° altına düşene kadar
+   altına düşünce acil ikaz kalkar, hafif ikaza döner (28° altına düşene kadar
    madde tam kapanmaz). */
-var KG_SICAK_ORTA = 30, KG_SICAK_YUKSEK = 35;
+var KG_SICAK_ORTA = 28, KG_SICAK_YUKSEK = 35;
 function kompostEksikMaddeler(c){
   var eksik=[];
   var sic=kgGuncelSicaklik(c); var ko=sic.alt, kou=sic.ust;
@@ -5823,10 +5823,10 @@ function komposGelisKontrolHTML(c){
   } else {
     var enYuksek = (ko!==null&&kou!==null)?Math.max(ko,kou):(ko!==null?ko:kou);
     var dereceMetni = (ko!==null?ko:"")+(kou!==null?("-"+kou):"")+"° ("+olcumKaynak+")";
-    /* KRİTİK: Kompost sıcak gelir (30-35°, hatta üstü), 1-2 günde soğur.
-       3 kademe: 30° altı sorun yok · 30-35° hâlâ soğuyor (hafif ikaz kalır) ·
+    /* KRİTİK: Kompost sıcak gelir (28-35°, hatta üstü), 1-2 günde soğur.
+       3 kademe: 28° altı sorun yok · 28-35° hâlâ soğuyor (hafif ikaz kalır) ·
        35° üstü ACİL (kompost torbaları ıslatılmalı) — 35° altına düşünce acil
-       ikaz kalkar, hafif ikaza döner (30° altına düşene kadar madde tam kapanmaz). */
+       ikaz kalkar, hafif ikaza döner (28° altına düşene kadar madde tam kapanmaz). */
     if(enYuksek > KG_SICAK_YUKSEK){
       maddeler.push(mddIkaz("1. Kompost sıcaklığı ÇOK YÜKSEK", dereceMetni+" · kompost torbalarını ıslat", dereceInput));
     } else if(enYuksek > KG_SICAK_ORTA){
