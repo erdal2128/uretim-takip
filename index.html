@@ -459,7 +459,7 @@ function hasatTartiGetir(oda, tur){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v312";
+var APP_VER = "v313";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -6999,14 +6999,19 @@ function setManuelDonem(id,val){
 
 /* ---------- Bulut yedek (Firebase) — cihaz kırılsa/kaybolsa bile veri güvende ----------
    Yerel yedek (yukarıdaki autoSnapshot) sadece BU cihazda kalır. Bu fonksiyon aynı
-   anlık görüntüyü Firestore'a da yazar: farms/{FARM_CODE}/yedekler/{slot}.
+   anlık görüntüyü Firestore'a da yazar: farms/{FARM_CODE}/yedekler/{docId}.
    Zamanlama: uygulama açıkken her CLOUD_BACKUP_DAKIKA dakikada bir dener (kesin saat
    garantisi değil — sunucusuz bir PWA'da bu ancak Cloud Functions gibi ayrı bir
    arka uç ile mümkün olur; ama sahada uygulama gün boyu defalarca açıldığı için
    pratikte çok yakın sonuç verir).
-   Rotasyon: haftanın gününe göre 7 slot (aktif_0..6, arsiv_0..6) — sınırsız
-   büyümez, en fazla 14 doküman, her hafta üzerine yazılır. */
+   Rotasyon: her yedekleme ANINA (aktif_<ms>, arsiv_<ms>) özel bir doküman —
+   önceki yedeği EZMEZ, gerçek geçmiş listesi oluşur. Sınırsız büyümesin diye
+   günde bir kez otomatik temizlik yapılır (bkz. cloudYedekEskiSil): hem
+   CLOUD_BACKUP_RETENTION_GUN'dan eski hem de en yeni CLOUD_BACKUP_MAX_KAYIT
+   sayısını aşan kayıtlar silinir (hangisi daha kısıtlayıcıysa). */
 var CLOUD_BACKUP_DAKIKA = 5; /* eskiden 4 saatti — kullanıcı iste diğiyle 5 dakikaya düşürüldü */
+var CLOUD_BACKUP_RETENTION_GUN = 7; /* bu kadar günden eski bulut yedekleri otomatik silinir */
+var CLOUD_BACKUP_MAX_KAYIT = 30; /* en fazla bu kadar yedek noktası tutulur (7 gün içinde bile olsa) */
 var CLOUD_YEDEK_LIMIT = 700000; /* güvenli karakter sınırı — Firestore'un 1MB doküman limitine karşı tampon */
 function getLastCloudBackup(){ try{ return localStorage.getItem("utp_cloudbak_last")||null; }catch(e){ return null; } }
 function setLastCloudBackup(){ try{ localStorage.setItem("utp_cloudbak_last", ""+Date.now()); }catch(e){ console.warn("bulut yedek zamanı kaydedilemedi", e); } updateCloudBakBadge(); }
@@ -7044,13 +7049,41 @@ function cloudYedekYaz(docId, payload){
     .set({ts:new Date().toISOString(), gun:todayISO(), veri:payload})
     .catch(function(e){ console.warn("bulut yedek yazılamadı ("+docId+")", e); throw e; });
 }
+/* Hem CLOUD_BACKUP_RETENTION_GUN'dan eski hem de en yeni CLOUD_BACKUP_MAX_KAYIT
+   sayısını aşan aktif_/arsiv_ dokümanlarını siler (hangisi önce tetiklenirse).
+   Doküman sayısı zaten bu politikayla sınırlı tutulduğu için tüm koleksiyonu
+   çekip JS tarafında sıralamak (ekstra Firestore index'i gerektirmeden) yeterli.
+   Günde bir kez denenir (gereksiz okuma/silme trafiğini önlemek için). */
+var TEMIZLIK_GUN_KEY = "utp_cloudbak_temizlikGun";
+function cloudYedekEskiSil(){
+  if(!FB.ready || !FB.db) return;
+  var bugun=todayISO();
+  try{ if(localStorage.getItem(TEMIZLIK_GUN_KEY)===bugun) return; }catch(e){}
+  var cutoff=addDays(bugun, -CLOUD_BACKUP_RETENTION_GUN);
+  var refBase=FB.db.collection("farms").doc(FARM_CODE).collection("yedekler");
+  ["aktif_","arsiv_"].forEach(function(prefix){
+    refBase.where(firebase.firestore.FieldPath.documentId(), ">=", prefix)
+      .where(firebase.firestore.FieldPath.documentId(), "<", prefix+"~")
+      .get().then(function(snap){
+        var docs=[]; snap.forEach(function(d){ docs.push(d); });
+        docs.sort(function(a,b){ return (b.data().ts||"").localeCompare(a.data().ts||""); }); /* en yeni önce */
+        docs.forEach(function(d, idx){
+          var tooOld = (d.data().gun||"") < cutoff;
+          var tooMany = idx >= CLOUD_BACKUP_MAX_KAYIT;
+          if(tooOld || tooMany) d.ref.delete().catch(function(e){ console.warn("eski bulut yedeği silinemedi", d.id, e); });
+        });
+      }).catch(function(e){ console.warn("eski bulut yedekleri sorgulanamadı", e); });
+  });
+  try{ localStorage.setItem(TEMIZLIK_GUN_KEY, bugun); }catch(e){ console.warn("temizlik günü kaydedilemedi", e); }
+}
 function cloudYedekTetikle(){
   if(!cloudYedekGerekliMi()) return;
   if(!FB.ready) return; /* internet yoksa sessizce atla, bir sonraki fırsatta dener */
   var d=loadData();
-  var slot=new Date().getDay(); /* 0-6, haftalık rotasyon — sınırsız büyümeyi engeller */
-  var aktifP=cloudYedekYaz("aktif_"+slot, {cycles:d.cycles||[], gorevler:d.gorevler||[], settings:d.settings||{}});
-  cloudYedekYaz("arsiv_"+slot, {arsiv:d.arsiv||[]}).catch(function(){}); /* arşiv ayrı, best-effort — büyükse atlanır, ana yedeği engellemez */
+  var olayId=""+Date.now(); /* her yedekleme anı ayrı doküman — önceki yedeği ezmez */
+  var aktifP=cloudYedekYaz("aktif_"+olayId, {cycles:d.cycles||[], gorevler:d.gorevler||[], settings:d.settings||{}});
+  cloudYedekYaz("arsiv_"+olayId, {arsiv:d.arsiv||[]}).catch(function(){}); /* arşiv ayrı, best-effort — büyükse atlanır, ana yedeği engellemez */
+  cloudYedekEskiSil();
   aktifP.then(function(){
     /* KRİTİK: zaman damgasını ancak yazma GERÇEKTEN başarılı olduktan sonra kaydet.
        Eskiden yazma denemesi başlar başlamaz (sonucu beklemeden) kaydediliyordu —
@@ -9447,7 +9480,7 @@ function renderYedekleme(){
   /* Bulut yedek — cihaz kırılsa/kaybolsa bile veri güvende (Firebase) */
   var lcb=getLastCloudBackup();
   h+='<div class="card"><div class="sec-title" style="margin-top:0;">☁️ Bulut yedeği (telefon kaybolsa/kırılsa bile güvende)</div>'
-    +'<div class="muted" style="margin-bottom:8px;">Her '+CLOUD_BACKUP_DAKIKA+' dakikada bir (uygulama açıkken) aktif veriler + arşiv Firebase\'e de yedeklenir. Haftanın gününe göre 7 nokta tutulur, üzerine yazılır — sınırsız büyümez.</div>'
+    +'<div class="muted" style="margin-bottom:8px;">Her '+CLOUD_BACKUP_DAKIKA+' dakikada bir (uygulama açıkken) aktif veriler + arşiv Firebase\'e de yedeklenir. Son '+CLOUD_BACKUP_RETENTION_GUN+' gün, en fazla '+CLOUD_BACKUP_MAX_KAYIT+' yedek noktası tutulur — üzerine yazılmaz, gerçek geçmiş listesi oluşur.</div>'
     +'<div class="muted" style="margin-bottom:8px;">'+(lcb?('Son bulut yedeği: '+fmtDateTime(+lcb)):'Henüz bulut yedeği alınmadı.')+'</div>'
     +'<button class="btn ghost small" onclick="cloudYedekZorla()">☁️ Şimdi buluta yedekle</button> '
     +'<button class="btn ghost small" onclick="cloudYedekleriGetir()">🔄 Bulut yedeklerini listele</button>';
@@ -9457,8 +9490,8 @@ function renderYedekleme(){
     h+='<div style="margin-top:10px;">';
     _cloudBakList.forEach(function(x){
       h+='<div style="display:flex;justify-content:space-between;align-items:center;padding:7px 2px;border-bottom:1px solid #eee;">'
-        +'<span>'+GUN_ADLARI[x.slot]+' <span class="muted" style="font-size:12px;">'+fmtDateTime(x.ts)+'</span></span>'
-        +'<button class="btn ghost small" onclick="cloudYedektenGeriYukle('+x.slot+')">Geri yükle</button></div>';
+        +'<span>'+fmtDateTime(x.ts)+'</span>'
+        +'<button class="btn ghost small" onclick="cloudYedektenGeriYukle(\''+x.olayId+'\')">Geri yükle</button></div>';
     });
     h+='</div>';
   }
@@ -9476,15 +9509,15 @@ function autoBackupGeriYukle(day){
   saveData(); toast("Otomatik yedekten geri yüklendi"); go("bugun");
 }
 /* ---------- Bulut yedeği: manuel tetikleme, listeleme, geri yükleme ---------- */
-var GUN_ADLARI=["Pazar","Pazartesi","Salı","Çarşamba","Perşembe","Cuma","Cumartesi"];
 var _cloudBakList=null;
 function cloudYedekZorla(){
   if(!FB.ready){ toast("Bulut bağlantısı yok — internete bağlanınca tekrar dene"); return; }
   var d=loadData();
-  var slot=new Date().getDay();
+  var olayId=""+Date.now();
   toast("☁️ Yedekleniyor...");
-  var aktifP=cloudYedekYaz("aktif_"+slot, {cycles:d.cycles||[], gorevler:d.gorevler||[], settings:d.settings||{}});
-  cloudYedekYaz("arsiv_"+slot, {arsiv:d.arsiv||[]}).catch(function(){}); /* arşiv best-effort, ana yedeği engellemez */
+  var aktifP=cloudYedekYaz("aktif_"+olayId, {cycles:d.cycles||[], gorevler:d.gorevler||[], settings:d.settings||{}});
+  cloudYedekYaz("arsiv_"+olayId, {arsiv:d.arsiv||[]}).catch(function(){}); /* arşiv best-effort, ana yedeği engellemez */
+  cloudYedekEskiSil();
   aktifP.then(function(){
     setLastCloudBackup();
     toast("☁️ Buluta yedeklendi");
@@ -9506,9 +9539,10 @@ function cloudYedekAcilista(){
   if(Date.now()-_acilisYedekSonDeneme < 120000) return; /* 2 dk içinde tekrar denemeye gerek yok */
   _acilisYedekSonDeneme = Date.now();
   var d=loadData();
-  var slot=new Date().getDay();
-  var aktifP=cloudYedekYaz("aktif_"+slot, {cycles:d.cycles||[], gorevler:d.gorevler||[], settings:d.settings||{}});
-  cloudYedekYaz("arsiv_"+slot, {arsiv:d.arsiv||[]}).catch(function(){});
+  var olayId=""+Date.now();
+  var aktifP=cloudYedekYaz("aktif_"+olayId, {cycles:d.cycles||[], gorevler:d.gorevler||[], settings:d.settings||{}});
+  cloudYedekYaz("arsiv_"+olayId, {arsiv:d.arsiv||[]}).catch(function(){});
+  cloudYedekEskiSil();
   aktifP.then(function(){
     setLastCloudBackup();
     if(typeof view!=="undefined" && view && view.name==="yedekleme") render();
@@ -9517,29 +9551,27 @@ function cloudYedekAcilista(){
 function cloudYedekleriGetir(){
   if(!FB.ready || !FB.db){ toast("Bulut bağlantısı yok"); return; }
   var refBase=FB.db.collection("farms").doc(FARM_CODE).collection("yedekler");
-  var proms=[];
-  for(var i=0;i<7;i++){
-    proms.push(refBase.doc("aktif_"+i).get().then(function(snap){
-      return snap.exists ? {slot:+snap.id.replace("aktif_",""), ts:snap.data().ts} : null;
-    }).catch(function(){ return null; }));
-  }
   toast("Yükleniyor...");
-  Promise.all(proms).then(function(results){
-    _cloudBakList=results.filter(Boolean).sort(function(a,b){ return (b.ts||"").localeCompare(a.ts||""); });
-    render();
-  });
+  refBase.where(firebase.firestore.FieldPath.documentId(), ">=", "aktif_")
+    .where(firebase.firestore.FieldPath.documentId(), "<", "aktif_~")
+    .get().then(function(snap){
+      var list=[];
+      snap.forEach(function(doc){ list.push({olayId:doc.id.replace("aktif_",""), ts:doc.data().ts, gun:doc.data().gun}); });
+      _cloudBakList=list.sort(function(a,b){ return (b.ts||"").localeCompare(a.ts||""); });
+      render();
+    }).catch(function(e){ console.warn("bulut yedekleri listelenemedi", e); toast("Bulut yedekleri listelenemedi"); });
 }
-function cloudYedektenGeriYukle(slotNum){
+function cloudYedektenGeriYukle(olayId){
   if(!can("manage")) return noPerm();
   if(!FB.ready || !FB.db){ toast("Bulut bağlantısı yok"); return; }
-  if(!confirm(GUN_ADLARI[slotNum]+" günkü bulut yedeği ile cihazdaki TÜM veri (aktif + arşiv) değiştirilecek. Emin misin?")) return;
+  if(!confirm("Bu bulut yedeği ile cihazdaki TÜM veri (aktif + arşiv) değiştirilecek. Emin misin?")) return;
   var refBase=FB.db.collection("farms").doc(FARM_CODE).collection("yedekler");
   Promise.all([
-    refBase.doc("aktif_"+slotNum).get(),
-    refBase.doc("arsiv_"+slotNum).get()
+    refBase.doc("aktif_"+olayId).get(),
+    refBase.doc("arsiv_"+olayId).get()
   ]).then(function(snaps){
     var aktifSnap=snaps[0], arsivSnap=snaps[1];
-    if(!aktifSnap.exists){ toast("Bu güne ait bulut yedeği bulunamadı"); return; }
+    if(!aktifSnap.exists){ toast("Bu yedek bulunamadı"); return; }
     var av=aktifSnap.data().veri||{};
     var ar=arsivSnap.exists ? (arsivSnap.data().veri||{}) : {};
     /* Eski bir bulut yedeği, o tarihten SONRA silinmiş hayalet kayıtları hâlâ
