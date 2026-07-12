@@ -588,17 +588,69 @@ function gunlukKayitlariniBirlestir(){
 var _quotaWarnShown=false;
 function saveData(){
   if(!memData || typeof memData !== "object") return; /* null/bozuk veriyi asla kaydetme */
-  try{
-    localStorage.setItem(STORE_KEY, JSON.stringify(memData));
+  persistEncrypted(JSON.stringify(memData));
+  fbPushDirty();
+  fbPushDirtyGorev();
+  fbPushSettings();
+  autoSnapshotThrottled();
+  cloudYedekTetikle();
+}
+/* ================= PIN KİLİDİ + YEREL VERİ ŞİFRELEME =================
+   Cihazdaki iş verisi (ciro/hasat/personel kayıtları) artık düz metin değil,
+   kullanıcının belirlediği PIN'den türetilen bir anahtarla AES-256-GCM ile
+   şifrelenmiş olarak localStorage'da tutuluyor. PIN yalnızca bu cihazda
+   bilinir, hiçbir yere (buluta dahil) gönderilmez — unutulursa cihazdaki
+   şifreli veri kurtarılamaz (bulut senkronu açıksa oradan geri gelir).
+   Kilit açma anahtarı sessionStorage'da tutulur: sekme tamamen kapanınca
+   silinir, aynı sekmede sayfa yenilemede tekrar PIN sormaz — güvenlik ile
+   kullanılabilirlik arasında bilinçli bir denge. */
+var PIN_CFG_KEY = "utp_pinCfg";        /* localStorage: {salt} — PIN'in kendisi HİÇ saklanmaz */
+var PIN_SESSION_KEY = "utp_pinOturum"; /* sessionStorage: türetilmiş ham anahtar — sekme ömrü */
+var _pinKey = null; /* CryptoKey — yalnızca bellekte */
+function b64FromBuf(buf){
+  var bytes=new Uint8Array(buf), bin="";
+  for(var i=0;i<bytes.length;i++) bin+=String.fromCharCode(bytes[i]);
+  return btoa(bin);
+}
+function bufFromB64(b64){
+  var bin=atob(b64), bytes=new Uint8Array(bin.length);
+  for(var i=0;i<bin.length;i++) bytes[i]=bin.charCodeAt(i);
+  return bytes.buffer;
+}
+function pinCfgOku(){ try{ return JSON.parse(localStorage.getItem(PIN_CFG_KEY)||"null"); }catch(e){ return null; } }
+async function pinAnahtarTuret(pin, saltB64){
+  var baseKey=await crypto.subtle.importKey("raw", new TextEncoder().encode(pin), {name:"PBKDF2"}, false, ["deriveKey"]);
+  return crypto.subtle.deriveKey(
+    {name:"PBKDF2", salt:bufFromB64(saltB64), iterations:150000, hash:"SHA-256"},
+    baseKey, {name:"AES-GCM", length:256}, true, ["encrypt","decrypt"]
+  );
+}
+async function pinSifrele(key, metin){
+  var iv=crypto.getRandomValues(new Uint8Array(12));
+  var ct=await crypto.subtle.encrypt({name:"AES-GCM", iv:iv}, key, new TextEncoder().encode(metin));
+  return {iv:b64FromBuf(iv), ct:b64FromBuf(ct)};
+}
+async function pinCoz(key, ivB64, ctB64){
+  var pt=await crypto.subtle.decrypt({name:"AES-GCM", iv:bufFromB64(ivB64)}, key, bufFromB64(ctB64));
+  return new TextDecoder().decode(pt);
+}
+/* Üst üste gelen saveData() çağrıları birbirini yarışta ezmesin diye
+   yazmalar bir zincirde (kuyrukta) sırayla işlenir. */
+var _pinSaveChain = Promise.resolve();
+function persistEncrypted(jsonStr){
+  if(!_pinKey){ return; } /* kilit açılmadan buraya düşülmemeli, güvenlik ağı */
+  _pinSaveChain = _pinSaveChain.then(function(){
+    return pinSifrele(_pinKey, jsonStr);
+  }).then(function(payload){
+    var cfg=pinCfgOku()||{};
+    localStorage.setItem(STORE_KEY, JSON.stringify({enc:1, salt:cfg.salt, iv:payload.iv, ct:payload.ct}));
     _quotaWarnShown=false; /* bir sonraki dolma anında tekrar uyarabilelim */
-  }catch(e){
-    console.error("localStorage yazılamadı", e);
+  }).catch(function(e){
+    console.error("şifreli kayıt yazılamadı", e);
     /* KRİTİK: Depolama dolduğunda sessizce geçmek veri kaybına yol açar —
        kullanıcı "kaydettim" sanır ama değişiklik sadece bellekte (memData)
-       kalır, sayfa kapanınca kaybolur. Kota dolma hatası (QuotaExceededError,
-       bazı tarayıcılarda farklı isimlerle de gelebilir) özel olarak
-       yakalanıp AÇIKÇA bildirilir — sadece console'a değil. Aynı oturumda
-       tekrar tekrar aynı uyarıyı göstermemek için bir kerelik bayrak var. */
+       kalır, sayfa kapanınca kaybolur. Kota dolma hatası özel olarak
+       yakalanıp AÇIKÇA bildirilir — sadece console'a değil. */
     var isQuota = (e && (e.name==="QuotaExceededError" || e.code===22 || e.code===1014 || /quota/i.test(e.message||"")));
     if(isQuota && !_quotaWarnShown){
       _quotaWarnShown=true;
@@ -609,12 +661,7 @@ function saveData(){
         "Silme sonrası tekrar dene — bu uyarı kaybolursa kayıt başarılı demektir."
       ]);
     }
-  }
-  fbPushDirty();
-  fbPushDirtyGorev();
-  fbPushSettings();
-  autoSnapshotThrottled();
-  cloudYedekTetikle();
+  });
 }
 var _lastAutoSnap=0;
 function autoSnapshotThrottled(){
@@ -8303,8 +8350,169 @@ function renderLogin(){
   el("app").innerHTML=h;
 }
 function navRow(){
-  return '<div style="text-align:center; padding:14px 0 4px;"><button class="btn ghost small" onclick="logout()">🚪 Çıkış</button></div>'
+  return '<div style="text-align:center; padding:14px 0 4px;"><button class="btn ghost small" onclick="logout()">🚪 Çıkış</button> <button class="btn ghost small" onclick="pinKilitle()">🔒 Kilitle</button></div>'
     +'<div class="muted" style="text-align:center; font-size:12px; padding-bottom:8px;">Giriş yapan: '+(currentRole?ROLE_DEFS[currentRole].ad:"-")+'</div>';
+}
+/* ---------- PIN kilidi ekranları (kurulum / kilit açma) ---------- */
+function renderPinSetup(mevcutVeriVar){
+  el("hdrTitle").textContent="Kilit Kurulumu";
+  var h='<div class="card" style="margin-bottom:100px;">'
+    +'<div style="text-align:center; margin-bottom:20px;"><span style="font-size:48px;">🔒</span></div>'
+    +'<div class="sec-title" style="margin-top:0;">Cihaz PIN Kilidi</div>'
+    +'<div class="muted" style="margin-bottom:14px; font-size:14px;">Bu cihazdaki veriler artık PIN ile şifrelenecek. '
+    +(mevcutVeriVar?'Mevcut verilerin korunuyor, sadece şifreleniyor. ':'')
+    +'PIN\'i unutursan bu cihazdaki şifreli veri kurtarılamaz (bulut senkronu açıksa oradan geri gelir) — güvenli bir yere not al.</div>'
+    +'<label>PIN belirle (en az 4 hane)</label><input type="password" inputmode="numeric" id="pin_yeni" autocomplete="off" placeholder="ör. 4821" minlength="4">'
+    +'<label>PIN tekrar</label><input type="password" inputmode="numeric" id="pin_yeni2" autocomplete="off" placeholder="tekrar gir" minlength="4">'
+    +'<div id="pin_hata" style="color:#c0291f; font-weight:600; font-size:14px; margin:8px 0;"></div>'
+    +'<div style="display:flex; gap:10px; align-items:center; margin:14px 0; padding:12px; background:var(--amber-soft); border-radius:8px;">'
+      +'<span style="font-size:18px;">💡</span><span style="font-size:13px;"><b>Not:</b> Bu PIN rol şifrelerinden farklıdır, cihazın kendisinin kilididir.</span>'
+    +'</div>'
+    +'<button class="btn" style="width:100%;" onclick="pinKurulumKaydet()">✓ PIN Belirle ve Devam Et</button>'
+    +'</div>';
+  el("app").innerHTML=h;
+}
+function renderPinUnlock(hataMsg){
+  el("hdrTitle").textContent="Kilit Açma";
+  var h='<div class="card" style="margin-bottom:100px;">'
+    +'<div style="text-align:center; margin-bottom:20px;"><span style="font-size:48px;">🔒</span></div>'
+    +'<div class="sec-title" style="margin-top:0;">Cihaz Kilidi</div>'
+    +'<div class="muted" style="margin-bottom:14px; font-size:14px;">Devam etmek için PIN\'i gir.</div>'
+    +'<label>PIN</label><input type="password" inputmode="numeric" id="pin_giris" autocomplete="off" placeholder="PIN" onkeydown="if(event.key===\'Enter\') pinKilidiAc();">'
+    +(hataMsg?('<div style="color:#c0291f; font-weight:600; font-size:14px; margin:8px 0;">'+esc(hataMsg)+'</div>'):'')
+    +'<button class="btn" style="width:100%;margin-top:10px;" onclick="pinKilidiAc()">🔓 Kilidi Aç</button>'
+    +'</div>';
+  el("app").innerHTML=h;
+}
+async function pinKurulumKaydet(){
+  var p1=(el("pin_yeni")||{}).value||"";
+  var p2=(el("pin_yeni2")||{}).value||"";
+  var hataEl=el("pin_hata"); if(hataEl) hataEl.textContent="";
+  if(p1.trim().length<4){ var m="PIN en az 4 haneli olmalı."; if(hataEl) hataEl.textContent=m; toast(m); return; }
+  if(p1.trim()!==p2.trim()){ var m2="PIN'ler eşleşmiyor."; if(hataEl) hataEl.textContent=m2; toast(m2); return; }
+  if(!window.crypto || !window.crypto.subtle){
+    var m3="❌ HTTPS bağlantı gerekli — sayfayı yenile."; if(hataEl) hataEl.textContent=m3; return;
+  }
+  var salt=b64FromBuf(crypto.getRandomValues(new Uint8Array(16)).buffer);
+  localStorage.setItem(PIN_CFG_KEY, JSON.stringify({salt:salt}));
+  _pinKey = await pinAnahtarTuret(p1.trim(), salt);
+  try{
+    var rawKey=await crypto.subtle.exportKey("raw", _pinKey);
+    sessionStorage.setItem(PIN_SESSION_KEY, JSON.stringify({salt:salt, raw:b64FromBuf(rawKey)}));
+  }catch(e){ console.warn("oturum anahtarı kaydedilemedi", e); }
+  persistEncrypted(JSON.stringify(memData));
+  bootApp();
+}
+async function pinKilidiAc(){
+  var p=(el("pin_giris")||{}).value||"";
+  if(!p.trim()){ toast("PIN gir"); return; }
+  var cfg=pinCfgOku();
+  if(!cfg || !cfg.salt){ renderPinSetup(false); return; }
+  try{
+    var key=await pinAnahtarTuret(p.trim(), cfg.salt);
+    var raw=localStorage.getItem(STORE_KEY);
+    var env = raw ? JSON.parse(raw) : null;
+    var plaintext = "{\"cycles\":[]}";
+    if(env && env.enc===1){ plaintext = await pinCoz(key, env.iv, env.ct); }
+    memData = JSON.parse(plaintext);
+    _pinKey = key;
+    try{
+      var rawKey=await crypto.subtle.exportKey("raw", key);
+      sessionStorage.setItem(PIN_SESSION_KEY, JSON.stringify({salt:cfg.salt, raw:b64FromBuf(rawKey)}));
+    }catch(e){ console.warn("oturum anahtarı kaydedilemedi", e); }
+    bootApp();
+  }catch(e){
+    console.warn("PIN açma hatası", e);
+    renderPinUnlock("PIN yanlış, tekrar dene.");
+  }
+}
+function pinKilitle(){
+  _pinKey=null;
+  try{ sessionStorage.removeItem(PIN_SESSION_KEY); }catch(e){ console.warn("oturum anahtarı silinemedi", e); }
+  memData=null;
+  renderPinUnlock();
+}
+async function pinDegistir(){
+  if(!can("manage")) return noPerm();
+  var eski=(el("pin_eski")||{}).value||"";
+  var yeni=(el("pin_yeni_d")||{}).value||"";
+  if(yeni.trim().length<4){ toast("Yeni PIN en az 4 haneli olmalı"); return; }
+  var cfg=pinCfgOku();
+  if(!cfg || !cfg.salt){ toast("PIN kurulumu bulunamadı"); return; }
+  try{
+    var eskiKey=await pinAnahtarTuret(eski.trim(), cfg.salt);
+    var raw=localStorage.getItem(STORE_KEY);
+    var env = raw ? JSON.parse(raw) : null;
+    if(!env || env.enc!==1){ toast("Şifreli veri bulunamadı"); return; }
+    await pinCoz(eskiKey, env.iv, env.ct); /* çözülmezse (yanlış PIN) catch'e düşer */
+    var yeniSalt=b64FromBuf(crypto.getRandomValues(new Uint8Array(16)).buffer);
+    var yeniKey=await pinAnahtarTuret(yeni.trim(), yeniSalt);
+    localStorage.setItem(PIN_CFG_KEY, JSON.stringify({salt:yeniSalt}));
+    _pinKey=yeniKey;
+    try{
+      var rawKey=await crypto.subtle.exportKey("raw", yeniKey);
+      sessionStorage.setItem(PIN_SESSION_KEY, JSON.stringify({salt:yeniSalt, raw:b64FromBuf(rawKey)}));
+    }catch(e){ console.warn("oturum anahtarı kaydedilemedi", e); }
+    persistEncrypted(JSON.stringify(memData));
+    if(el("pin_eski")) el("pin_eski").value="";
+    if(el("pin_yeni_d")) el("pin_yeni_d").value="";
+    logAudit("PIN değiştirildi","");
+    toast("PIN değiştirildi");
+  }catch(e){
+    console.warn("PIN değiştirme hatası", e);
+    toast("❌ Mevcut PIN yanlış");
+  }
+}
+async function pinBoot(){
+  el("app").innerHTML='<div class="card" style="text-align:center; padding:40px 20px;" ><span class="muted">Yükleniyor…</span></div>';
+  if(!window.crypto || !window.crypto.subtle){
+    /* Eski tarayıcı / güvensiz bağlam (HTTP): şifreleme yapılamaz. Kilidi
+       tamamen atlayıp düz metin modunda devam — veri erişimini tümden
+       engellemek bundan daha kötü bir sonuç olurdu. */
+    console.error("crypto.subtle yok — PIN kilidi devre dışı, düz metin modunda devam");
+    loadData();
+    bootApp();
+    return;
+  }
+  var cfg=pinCfgOku();
+  if(!cfg){
+    /* Bu cihazda PIN hiç kurulmamış. Var olan (eski, düz metin) veri varsa
+       kaybetmeden PIN kurulumuna taşı. */
+    var raw=null;
+    try{ raw=localStorage.getItem(STORE_KEY); }catch(e){ console.warn("localStorage okunamadı", e); }
+    var legacy=null;
+    if(raw){
+      try{
+        var parsed=JSON.parse(raw);
+        if(!parsed || parsed.enc!==1) legacy=parsed;
+      }catch(e){
+        console.error("Kayıtlı veri bozuk — JSON.parse hatası", e);
+        try{ localStorage.setItem(STORE_KEY+"_bozuk_"+Date.now(), raw); }catch(e2){ console.error("bozuk veri yedeklenemedi", e2); }
+        _veriOkumaHatasi=true;
+      }
+    }
+    memData = legacy || {cycles:[]};
+    renderPinSetup(!!legacy);
+    return;
+  }
+  /* PIN daha önce kurulmuş. Bu sekmede zaten açılmışsa (sessionStorage)
+     tekrar sorma — sayfa yenilemede kullanıcıyı rahatsız etmesin. */
+  try{
+    var sess=JSON.parse(sessionStorage.getItem(PIN_SESSION_KEY)||"null");
+    if(sess && sess.salt===cfg.salt){
+      var key=await crypto.subtle.importKey("raw", bufFromB64(sess.raw), {name:"AES-GCM"}, true, ["encrypt","decrypt"]);
+      var raw2=localStorage.getItem(STORE_KEY);
+      var env2 = raw2 ? JSON.parse(raw2) : null;
+      if(env2 && env2.enc===1){
+        var plaintext2 = await pinCoz(key, env2.iv, env2.ct);
+        memData = JSON.parse(plaintext2);
+        _pinKey = key;
+        bootApp();
+        return;
+      }
+    }
+  }catch(e){ console.warn("oturum kilidi geçersiz, PIN tekrar sorulacak", e); }
+  renderPinUnlock();
 }
 function logAudit(action, detail){
   try{
@@ -8549,13 +8757,6 @@ function renderAudit(){
     h+='</tbody></table></div>'; }
   h+='</div><button class="btn ghost" style="width:100%;margin-top:10px;" onclick="go(\'list\')">‹ Geri</button>';
   el("app").innerHTML=h;
-}
-function saveRoles(){
-  if(!can("manage")) return noPerm();
-  var d=loadData(); if(!d.settings) d.settings={}; var r=rolePass();
-  function gv(id,cur){ var e2=el(id); var v=e2?e2.value.trim():""; return v||cur; }
-  r.ziraat=gv("rl_ziraat",r.ziraat); r.yonetici=gv("rl_yonetici",r.yonetici); r.sahip=gv("rl_sahip",r.sahip); r.teknisyen=gv("rl_teknisyen",r.teknisyen);
-  d.settings.roles=r; saveData(); logAudit("şifreler güncellendi",""); toast("Şifreler kaydedildi"); render();
 }
 function teknisyenTelKaydet(){
   if(!can("manage")) return noPerm();
@@ -9460,7 +9661,12 @@ function renderAyarlar(){
     +'</div>'
     +'<div class="card"><div class="sec-title">📱 WhatsApp</div>'
     +'<div class="muted" style="margin-bottom:8px;">"WhatsApp\'ta Aç" butonuna basınca WhatsApp otomatik açılır, mesaj hazır gelir — hangi gruba/kişiye göndereceğini sen seçersin (WhatsApp grup linkleri metni önceden dolduramıyor, bu yüzden link kaydetmene gerek yok). Mesaj ayrıca panoya da kopyalanır, istersen elle de yapıştırabilirsin.</div>'
-    +'</div>';
+    +'</div>'
+    +'<div class="card"><div class="sec-title">🔒 Cihaz PIN Kilidi</div>'
+    +'<div class="muted" style="margin-bottom:8px;">Bu cihazdaki veriler PIN ile şifrelidir. PIN\'i değiştirmek verileri yeni PIN ile yeniden şifreler.</div>'
+    +'<label>Mevcut PIN</label><input type="password" inputmode="numeric" id="pin_eski" autocomplete="off" placeholder="mevcut PIN">'
+    +'<label>Yeni PIN</label><input type="password" inputmode="numeric" id="pin_yeni_d" autocomplete="off" placeholder="yeni PIN, en az 4 hane">'
+    +'<div class="row" style="margin-top:12px;"><button class="btn" onclick="pinDegistir()">PIN\'i değiştir</button></div></div>';
   }
   if(_ayarKategori==="firma_personel"){
   var ekipler=getEkipler();
@@ -9553,19 +9759,6 @@ function renderAyarlar(){
       +'<button class="btn small" style="margin-top:8px;" onclick="ilacEkle(el(\'il_ad\').value, el(\'il_tekrar\').value, el(\'il_hasat\').value); el(\'il_ad\').value=\'\'; el(\'il_tekrar\').value=\'\'; el(\'il_hasat\').value=\'\';">+ İlaç ekle</button></div>';
   }
   h+='</div>';
-  }
-  if(_ayarKategori==="cihaz"){
-  if(can("manage")){
-    h+='<div class="card"><div class="sec-title" style="margin-top:0;">Rol şifreleri (yalnızca yönetici)</div>'
-      +'<div class="muted" style="margin-bottom:8px;">Boş bırakılan değişmez. Şifreler bu dosyada istemci tarafında tutulur; tam güvenlik için sunucu gerekir.</div>'
-      +'<label>Ziraat müh. şifresi</label><input type="text" id="rl_ziraat" placeholder="değiştirmek için yaz">'
-      +'<label>Yönetici şifresi</label><input type="text" id="rl_yonetici" placeholder="değiştirmek için yaz">'
-      +'<label>Firma sahibi şifresi</label><input type="text" id="rl_sahip" placeholder="değiştirmek için yaz">'
-      +'<label>Teknisyen şifresi</label><input type="text" id="rl_teknisyen" placeholder="değiştirmek için yaz">'
-      +'<div class="row" style="margin-top:12px;"><button class="btn" onclick="saveRoles()">Şifreleri kaydet</button></div></div>';
-      /* Teknisyen WhatsApp numarası bölümü kaldırıldı: arıza bildirimi artık
-         kişiye değil GRUBA — WhatsApp mesaj hazır açılır, grup seçilir. */
-  }
   }
   if(_ayarKategori==="odalar"){
   if(can("manage")){
@@ -10431,6 +10624,7 @@ function havaHedef(c){
 }
 
 /* ---------- Olaylar ---------- */
+function bootApp(){
 try{
   el("fileRestore").onchange = function(e){ if(e.target.files[0]) restoreJSON(e.target.files[0]); e.target.value=""; };
   el("hdrVer").textContent = APP_VER;
@@ -10499,11 +10693,13 @@ autoSnapshotThrottled();
 /* Başarısız senkron denemelerini periyodik olarak tekrar dene (internet geri gelince otomatik kurtarır) */
 setInterval(function(){ if(FB.ready){ fbPushDirty(); fbPushDirtyGorev(); fbPushSettings(); cloudYedekTetikle(); } }, 30000);
 setInterval(updateCloudBakBadge, 60000);
+}
 if("serviceWorker" in navigator){
   window.addEventListener("load", function(){
     navigator.serviceWorker.register("sw.js").catch(function(e){ console.warn("sw register", e); });
   });
 }
+pinBoot();
 </script>
 </body>
 </html>
