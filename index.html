@@ -459,7 +459,7 @@ function hasatTartiGetir(oda, tur){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v305";
+var APP_VER = "v306";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -1044,7 +1044,8 @@ function ensureProtokol(){
    (ref:"toprak"), bu yüzden döngüye girmemesi için ayrı ele alınır; tahmini
    ayarlardaki offToprak'tan gelir. poset/tiftik/tırmık/hava satırları gelis veya
    toprak'a referans verdiği için özyinelemeli çözüm güvenlidir (döngü olmaz). */
-function protokolReferansTarihi(c, ref, callerRol){
+function protokolReferansTarihi(c, ref, callerRol, _visiting){
+  var visiting = _visiting || [];
   if(!c || !ref) return null;
   if(ref==="gelis") return c.gelisTarihi||null;
   if(ref==="toprak"){
@@ -1060,7 +1061,10 @@ function protokolReferansTarihi(c, ref, callerRol){
        ref:"toprak" (kendine referans) olduğu için sonsuz döngüye girmemek
        adına SADECE ref başka bir şeyse (özelleştirilmişse) bu yolu kullanırız. */
     if(ti>=0 && getProtokol()[ti].ref!=="toprak"){
-      base=protokolTarih(c, getProtokol()[ti]);
+      if(visiting.indexOf(ti)<0){
+        base=protokolTarih(c, getProtokol()[ti], visiting.concat([ti]));
+      }
+      /* visiting'de zaten varsa (döngü) base=null kalır, alttaki varsayılana düşer */
     }
     if(!base){
       base=addDays(c.gelisTarihi,getSet(c).offToprak); /* varsayılan/self-referential durum */
@@ -1080,23 +1084,34 @@ function protokolReferansTarihi(c, ref, callerRol){
   /* poset / tiftik / tırmık / hava: gerçek tarih varsa onu, yoksa protokoldeki
      kendi tanımından (ref:gelis veya ref:toprak — döngü olmaz) tahmin ediyoruz,
      tahmine o adımın kendi ertelemesi de eklenir. Böylece "tiftikten 2 gün
-     sonra" gibi yeni bir madde, tiftik ertelenirse otomatik kayar. */
+     sonra" gibi yeni bir madde, tiftik ertelenirse otomatik kayar.
+     GÜVENLİK: kullanıcı Ayarlar'dan iki adımı birbirine referans verecek
+     şekilde ayarlarsa (A→B, B→A), bu zincir sonsuz döngüye girip tarayıcıyı
+     çökertebilirdi ("Maximum call stack size exceeded"). "visiting" dizisi
+     şu ana kadar ziyaret edilen adım indekslerini tutar; aynı indekse tekrar
+     gelinirse döngü tespit edilmiş demektir — hesaplama sessizce durdurulur
+     (null döner, uygulama çökmez). Kullanıcıya asıl uyarı Ayarlar ekranında
+     protokol satırı kaydedilirken (protokolDongriVarMi) gösterilir. */
   var idx=protokolRolIdx(ref);
   if(idx<0) return null;
+  if(visiting.indexOf(idx)>=0){
+    console.error("⚠️ Protokol referans döngüsü tespit edildi (adım #"+idx+") — hesaplama durduruldu, çökme engellendi");
+    return null;
+  }
   var st=getProtokol()[idx];
   if(!st) return null;
   if(adimGercektenYapildiMi(c, idx, st)){
     var real=adimYapilmaTarihi(c, idx, st);
     if(real) return real;
   }
-  var est=protokolTarih(c, st);
+  var est=protokolTarih(c, st, visiting.concat([idx]));
   if(!est) return null;
   var ert=(c.ertele && c.ertele["p"+idx]) || 0;
   return ert ? addDays(est, ert) : est;
 }
-function protokolTarih(c, step){
+function protokolTarih(c, step, _visiting){
   if(!step) return null;
-  var refDate=protokolReferansTarihi(c, step.ref, step.rol);
+  var refDate=protokolReferansTarihi(c, step.ref, step.rol, _visiting);
   if(!refDate) return null;
   return addDays(refDate, step.gun);
 }
@@ -1457,6 +1472,32 @@ function protokolRolIdx(rol){
   /* Sahip şartıyla bulunamadıysa (kullanıcı bu alanı değiştirmiş olabilir), sadece metne bak */
   for(var k=0;k<P.length;k++){ if(!P[k].silindi && P[k].tip==="olay" && re.test(P[k].txt)) return k; }
   return -1;
+}
+/* Bir adımın (startIdx) referans zinciri takip edildiğinde kendine geri dönüp
+   dönmediğini kontrol eder. protokolTarih()'teki döngü koruması bir GÜVENLİK
+   AĞI'dır (çökmeyi engeller) — ama en doğrusu döngüyü hiç KAYDETMEMEK. Bu
+   fonksiyon, Ayarlar'da bir referans değiştirilirken (henüz kaydedilmeden
+   hemen önce, o değerle) çağrılır. */
+function protokolRefDongusuVarMi(startIdx){
+  var P=getProtokol();
+  var idx=startIdx, guard=0;
+  while(true){
+    if(guard++ > P.length+2) return true; /* aşırı uzun zincir, güvenlik için döngü say */
+    var st=P[idx];
+    if(!st || !st.ref) return false;
+    if(st.ref==="gelis") return false;
+    var nextIdx;
+    if(st.ref==="toprak"){
+      var ti=protokolRolIdx("toprak");
+      if(ti<0 || !P[ti] || P[ti].ref==="toprak" || !P[ti].ref) return false; /* kendine referans = güvenli taban */
+      nextIdx=ti;
+    } else {
+      nextIdx=protokolRolIdx(st.ref);
+      if(nextIdx<0) return false; /* tanımsız referans, döngü değil */
+    }
+    if(nextIdx===startIdx) return true; /* zincir başa döndü — döngü! */
+    idx=nextIdx;
+  }
 }
 /* Bir odanın SIRADAKİ (henüz yapılmamış, en yakın tarihli) protokol adımını bulur.
    Günlük Tur ekranında ziraat mühendisinin gözlemine göre "yarın yapalım" diyebilmesi için. */
@@ -9922,7 +9963,23 @@ function protokolSatirKaydet(idx){
      (ve orada da sadece Geliş/Toprak seçeneği vardı) ayarlanabiliyordu. Bu,
      "Poşetten sonra sulama vermedi" ve "sıradaki işlem sıra atlıyor" gibi
      hataların temel sebebiydi — kullanıcı referansı göremiyor/değiştiremiyordu. */
-  var refEl=el("pr_ref_"+idx); if(refEl && refEl.value) P[idx].ref=refEl.value;
+  var refEl=el("pr_ref_"+idx);
+  if(refEl && refEl.value){
+    var eskiRef=P[idx].ref;
+    P[idx].ref=refEl.value;
+    if(refEl.value!==eskiRef && protokolRefDongusuVarMi(idx)){
+      /* Bu referans zinciri kendine geri dönüyor — kaydedilirse uygulama her
+         bu adımın tarihi hesaplanmaya çalışıldığında çökerdi (sonsuz
+         özyineleme). Değişikliği geri al, kullanıcıyı net bir şekilde uyar. */
+      P[idx].ref=eskiRef;
+      refEl.value=eskiRef;
+      showWarnBox("❌ Döngüsel Referans", [
+        '"'+esc(refEtiketi(refEl.value))+'" referansı seçilemedi — bu adımın referans zinciri dolaşıp kendine geri dönüyor.',
+        "Örnek: A adımı B'ye bakıyor, B de (dolaylı olarak) A'ya bakıyorsa döngü oluşur.",
+        "Değişiklik kaydedilmedi, önceki referans korundu."
+      ]);
+    }
+  }
   var scEl=el("pr_sonuc_"+idx);
   if(scEl){ P[idx].sonucSecenekleri = scEl.value.split(",").map(function(x){return x.trim();}).filter(Boolean); }
   /* Tekrarlı sulama/ilaç kuralı (Mühendis Protokolü satırları): "HER GÜN
