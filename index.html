@@ -459,7 +459,7 @@ function hasatTartiGetir(oda, tur){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v324";
+var APP_VER = "v325";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -6683,20 +6683,26 @@ function renderToplu(id){
   if(bas<0) bas=0;
   if(son<bas) son=bas;
   if(son-bas>90){ son=bas+90; } /* aşırı uzun tablo engeli */
-  /* Üretim protokolündeki TÜM olay adımları (rol'ü olan her satır) — dinamik,
-     kod değişmeden yeni bir protokol satırı eklenirse burada da otomatik çıkar. */
+  /* Üretim protokolündeki TÜM olay adımları — dinamik, kod değişmeden yeni
+     bir protokol satırı eklenirse (rol atanmış olsun ya da olmasın, örn.
+     "+ Yeni görev ekle"den eklenen özel bir adım) burada da otomatik çıkar.
+     Not: eskiden sadece rol'ü OLAN satırlar listeleniyordu — kullanıcının
+     rol atamadan eklediği bir adım (örn. "Toprak çekimi") bu yüzden hiç
+     görünmüyordu, halbuki adimTamamla/adimYapilmaTarihi rol'süz adımlar için
+     de zaten çalışıyor (c.adimDetay üzerinden). idx kullanılır çünkü rol'ü
+     olmayan birden fazla satır olabilir (aynı boş değer eşleşmesin diye). */
   var islemSecenekleri = getProtokol().map(function(s,idx){return {s:s,idx:idx};})
-    .filter(function(x){ return !x.s.silindi && x.s.rol; });
+    .filter(function(x){ return !x.s.silindi && x.s.tip==="olay"; });
   h += '<div class="card" style="padding:8px;"><div class="muted" style="margin-bottom:8px;">Elindeki forma bakarak sağdaki kutuları doldur. Boş bıraktığın satırlar kaydedilmez. Zaten kayıtlı bir güne yazarsan üzerine günceller. "Üretim İşlemi" sütunundan o gün hangi işlem yapıldıysa (tiftik, toprak, tırmık vb.) seçebilirsin — geçmiş bir günü unutmuşsan buradan tamamlarsın.</div>'
     +'<div style="overflow-x:auto;"><table><thead><tr><th>Gün</th><th>Tarih</th><th>Oda°C</th><th>Komp°C</th><th>Sulama/İlaç</th><th>Su(lt)</th><th>Üretim İşlemi</th></tr></thead><tbody>';
   for(var i=bas;i<=son;i++){
     var tarih = addDays(c.gelisTarihi, i);
     var mevcut = (c.gunluk||[]).find(function(g){return g.tarih===tarih;})||{};
     /* Bu güne denk gelen zaten kayıtlı bir işlem varsa (örn. toprakTarihi===tarih), seçili gelsin */
-    var seciliRol="";
+    var seciliIdx="";
     islemSecenekleri.forEach(function(x){
-      if(seciliRol) return;
-      if(adimYapilmaTarihi(c, x.idx, x.s)===tarih) seciliRol=x.s.rol;
+      if(seciliIdx!=="") return;
+      if(adimYapilmaTarihi(c, x.idx, x.s)===tarih) seciliIdx=x.idx;
     });
     h += '<tr><td><b>'+i+'</b></td><td class="note">'+fmtDate(tarih)+'</td>'
       +'<td><input type="text" inputmode="decimal" id="tp_oda_'+i+'" value="'+esc(mevcut.odaC||"")+'" style="width:56px;padding:6px;"></td>'
@@ -6704,7 +6710,7 @@ function renderToplu(id){
       +'<td><input type="text" id="tp_sul_'+i+'" value="'+esc(mevcut.sulama||"")+'" style="width:120px;padding:6px;"></td>'
       +'<td><input type="text" inputmode="decimal" id="tp_su_'+i+'" value="'+esc(mevcut.su||"")+'" style="width:56px;padding:6px;"></td>'
       +'<td><select id="tp_islem_'+i+'" style="min-width:130px;padding:6px;"><option value="">—</option>'
-      +islemSecenekleri.map(function(x){ return '<option value="'+esc(x.s.rol)+'" '+(x.s.rol===seciliRol?'selected':'')+'>'+esc(x.s.txt.split(" (")[0].split(" —")[0])+'</option>'; }).join('')
+      +islemSecenekleri.map(function(x){ return '<option value="'+x.idx+'" '+(x.idx===seciliIdx?'selected':'')+'>'+esc(x.s.txt.split(" (")[0].split(" —")[0])+'</option>'; }).join('')
       +'</select></td></tr>';
   }
   h += '</tbody></table></div>'
@@ -6727,16 +6733,16 @@ function topluKaydet(id, bas, son){
   if(!c.gunluk) c.gunluk=[];
   var eklenen=0, guncellenen=0, islemSayisi=0; var warnLines=[]; var warnSet={};
   var islemSecenekleri = getProtokol().map(function(s,idx){return {s:s,idx:idx};})
-    .filter(function(x){ return !x.s.silindi && x.s.rol; });
+    .filter(function(x){ return !x.s.silindi && x.s.tip==="olay"; });
   for(var i=bas;i<=son;i++){
     var oda=el("tp_oda_"+i).value.trim(), komp=el("tp_komp_"+i).value.trim(), sul=el("tp_sul_"+i).value.trim(), su=el("tp_su_"+i).value.trim();
-    var islemSecEl=el("tp_islem_"+i); var islemRol=islemSecEl?islemSecEl.value:"";
+    var islemSecEl=el("tp_islem_"+i); var islemIdxStr=islemSecEl?islemSecEl.value:"";
     var tarih = addDays(c.gelisTarihi, i);
     /* Üretim işlemi seçildiyse SSOT kapısından kaydet — Tur'daki detay kutusuyla
        AYNI fonksiyon (adimTamamla), sadece giriş yeri farklı. Geçmiş günü unutmuşsan
        buradan hızlıca tamamlarsın. */
-    if(islemRol){
-      var secX=islemSecenekleri.find(function(x){return x.s.rol===islemRol;});
+    if(islemIdxStr){
+      var secX=islemSecenekleri.find(function(x){return (""+x.idx)===islemIdxStr;});
       if(secX && adimYapilmaTarihi(c, secX.idx, secX.s)!==tarih){
         if(adimTamamla(c, secX.idx, {tarih:tarih})) islemSayisi++;
         else warnLines.push(fmtDate(tarih)+": "+secX.s.txt+" kaydedilmedi — önceki adım henüz tamamlanmamış");
