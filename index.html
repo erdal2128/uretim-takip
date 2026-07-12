@@ -187,7 +187,21 @@ function fbPushDirty(){
     }
   });
 }
-function fbDelete(id){ if(FB.ready){ delete _synced[id]; return FB.coll.doc(id).delete().catch(function(e){ console.warn("delete",e); fbSetStatus("hata"); throw e; }); } return Promise.resolve(); }
+function fbDelete(id){
+  if(!FB.ready) return Promise.resolve();
+  delete _synced[id];
+  return FB.coll.doc(id).delete()
+    .then(function(){
+      /* Silme başarılı — tombstone listesinden çıkar (tekrar gelmez) */
+      silinenIdTemizle(id);
+    })
+    .catch(function(e){
+      console.warn("delete hatası", e);
+      fbSetStatus("hata");
+      /* Hata olsa bile tombstone'da kalır — sonra retry'ı otomatik deneyecek */
+      throw e;
+    });
+}
 /* KALICI SİLİNEN KAYIT LİSTESİ (tombstone): bir döngü silindiğinde ID'si buraya
    eklenir. Silme isteği buluta ulaşamadan (yavaş bağlantı, uygulama erken
    kapatılırsa) cihaz kapanırsa, bulut o kaydı hâlâ tutar ve bir sonraki
@@ -204,6 +218,14 @@ function silinenIdEkle(id){
   }catch(e){ console.warn("silinen id kaydedilemedi", e); }
 }
 function silinenIdMi(id){ return silinenIdlerGetir().indexOf(id)>=0; }
+/* Silinen ID'sini listeden kaldır (buluta başarıyla gittikten sonra) */
+function silinenIdTemizle(id){
+  try{
+    var L=silinenIdlerGetir();
+    L = L.filter(function(x){return x!==id;});
+    localStorage.setItem(SILINEN_KEY, JSON.stringify(L));
+  }catch(e){ console.warn("silinen id temizleme hatası", e); }
+}
 function fbPushDirtyGorev(){
   if(!FB.ready || !FB.gorevColl) return;
   ((memData&&memData.gorevler)||[]).forEach(function(g){
@@ -264,9 +286,14 @@ function fbInit(){
            zamanında ulaşmamış olabilir) ASLA yerel listeye eklenmez — sessizce
            buluttan bir daha silinir. Kullanıcıya hiç görünmez, tekrar tekrar
            elle silmesi gerekmez. */
-        if(ch.type!=="removed" && silinenIdMi(data.id)){
-          FB.coll.doc(data.id).delete().catch(function(e){ console.warn("hayalet kayıt yeniden silinemedi", e); });
-          return;
+        if(data.id && silinenIdMi(data.id)){
+          if(ch.type!=="removed"){
+            /* Gelen kayıt silinen listesindeyse, YOK SAY ve buluttan sil */
+            FB.coll.doc(data.id).delete().then(function(){
+              console.log("👻 Hayalet kayıt geri geldi → tekrar silindi:", data.id);
+            }).catch(function(e){ console.warn("hayalet yeniden silinemedi", data.id, e); });
+          }
+          return;  /* Yerel listeye ASLA ekleme */
         }
         if(ch.type==="removed"){
           if(_synced[data.id]!==undefined) realChange=true;
@@ -286,7 +313,25 @@ function fbInit(){
       if(!FB.firstServer && !snap.metadata.fromCache){
         FB.firstServer=true;
         var cloud={}; snap.forEach(function(dd){ cloud[dd.id]=1; });
-        ((memData.cycles)||[]).forEach(function(c){ if(!cloud[c.id]){ _synced[c.id]=cycleJSON(c); FB.coll.doc(c.id).set(fbClean(c)).catch(function(e){ console.warn("ilk senkron set",e); _syncFailCount++; fbSetStatus("hata"); }); } });
+        /* Local'dan buluta push — ama öncesinde silinen listesini kontrol et */
+        ((memData.cycles)||[]).forEach(function(c){
+          if(!cloud[c.id]){
+            _synced[c.id]=cycleJSON(c);
+            FB.coll.doc(c.id).set(fbClean(c)).catch(function(e){ console.warn("ilk senkron set",e); _syncFailCount++; fbSetStatus("hata"); });
+          }
+        });
+        /* Bulutta hala silinen kayıtlar varsa (silme isteği buluta ulaşamamışsa) sil */
+        var silinenList = silinenIdlerGetir();
+        silinenList.forEach(function(id){
+          if(cloud[id]){
+            FB.coll.doc(id).delete().then(function(){
+              silinenIdTemizle(id);
+              console.log("hayalet kayıt buluttan temizlendi:", id);
+            }).catch(function(e){
+              console.warn("hayalet silme hatası", id, e);
+            });
+          }
+        });
       }
       /* Senkronla gelmiş olabilecek tekrar eden günlük notları temizle */
       gunlukNotlariTekille(memData);
@@ -6428,6 +6473,11 @@ function exportCycleCSV(id){
    veriye (c.notlar) yazar, o sekmede de görünür. Tam render() yapmıyoruz — kart üzerindeki
    henüz kaydedilmemiş diğer alanlar (sıcaklık, sulama vb.) kaybolmasın diye sadece bu
    alanın kendisini DOM üzerinden güncelliyoruz. */
+/* Günlük Tur'da oda numarası başlığını güncelleyen helper */
+function updateTurHeader(c){
+  if(c) el("hdrTitle").textContent = esc(c.oda) + " — Günlük tur";
+  else el("hdrTitle").textContent = "Günlük tur";
+}
 function turNotEkle(cid){
   if(!can("edit")) return noPerm();
   var c=loadData().cycles.find(function(x){return x.id===cid;}); if(!c) return;
@@ -6536,10 +6586,13 @@ function renderTur(){
     if(turIndex>=active.length) turIndex=active.length-1;
     var c=active[turIndex];
     var st=stageOf(c);
+    updateTurHeader(c);  /* Oda numarasını başlığa koy */
     h+='<div class="card" data-cid="'+c.id+'" style="padding:14px; border:2px solid var(--green);">'
+      +'<div style="position:sticky; top:56px; z-index:20; background:var(--card); padding:8px 0 8px 0; margin:0 -16px 8px -16px; padding-left:16px; padding-right:16px; border-bottom:1px solid var(--line);">'
       +'<div style="text-align:center; font-size:13px; color:var(--muted); margin-bottom:6px; font-weight:600;">🚶 Oda '+(turIndex+1)+' / '+active.length+'</div>'
-      +'<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">'
+      +'<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0;">'
       +'<span style="font-weight:700; font-size:22px;">'+esc(c.oda)+'</span><span class="badge '+st.cls+'">'+st.t+'</span></div>'
+      +'</div>'
       +turOdaKartIcHTML(c, gunKaydiBul(c), true)
       +'</div>';
     h+='<div style="display:flex; gap:8px; margin-top:12px;">'
@@ -6577,6 +6630,7 @@ function turModDegistir(){
   _turTarihVal=el("tur_tarih")?el("tur_tarih").value:_turTarihVal;
   setTurMod(getTurMod()==="tek"?"liste":"tek");
   turIndex=0;
+  if(getTurMod()==="liste") updateTurHeader(null);  /* Liste modunda header reset */
   render();
 }
 /* Ortak günlük kayıt mantığı: hem Günlük Tur hem Ana Ekran (panoEdit) bunu kullanır —
@@ -6674,7 +6728,7 @@ function turIlerle(delta){
     if(warnLines.length) showWarnBox("Bu oda için uyarı", warnLines);
   }
   turIndex += delta;
-  render();
+  render();  /* render() içinde updateTurHeader() çağrılır */
 }
 function turBitir(){
   var t=el("tur_tarih").value;
@@ -6689,6 +6743,7 @@ function turBitir(){
   }
   toast("✓ Tur tamamlandı");
   turIndex=0; _turTarihVal=null; _turVakitVal=null;
+  updateTurHeader(null);  /* Header'ı reset et */
   go("bugun");
 }
 function saveTur(){
