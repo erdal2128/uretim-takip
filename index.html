@@ -251,6 +251,9 @@ function fbInit(){
     FB.ready=true;
     rebuildSynced();
     rebuildSyncedG();
+    /* Bulut bağlantısı kurulur kurulmaz (uygulama her açılışında) sessiz bir
+       yedek dene — kullanıcı "her açılışta buluta yedekle" istedi. */
+    setTimeout(cloudYedekAcilista, 1500);
     FB.coll.onSnapshot({includeMetadataChanges:true}, function(snap){
       loadData();
       var realChange=false, needPush=false;
@@ -391,7 +394,7 @@ function hasatTartiGetir(oda, tur){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v276";
+var APP_VER = "v281";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -3708,32 +3711,18 @@ function getRecentActions(){
 
 /* Helper: Günün ilerleme bilgisi */
 function getDayProgress(){
-  var d=loadData(), bugun=todayISO();
-  
-  /* KALAN: getTodaysTasks() hem bekleyen HEM (bugün) tamamlanan görevleri içerir
-     (liste ekranında ikisi de gösterilir — tamamlananlar çizili). "Kalan" sayacı
-     için SADECE done:false olanlar sayılmalı — aksi halde tamamlanan görevler de
-     "kalan"a dahil olur (KRİTİK BUG, düzeltildi: eskiden .length tüm listeyi sayıyordu). */
-  var kalan=getTodaysTasks().filter(function(t){return !t.done;}).length;
-  
-  /* TAMAMLANAN: SADECE bugün tamamlanmış işler.
-     doneAt (ISO timestamp) bugüne aitse sayılır. Eski kayıtlarda doneAt yoksa,
-     görev tarihi bugünse fallback olarak sayılır (geriye dönük uyum). */
-  var tamamlanan=0;
-  function bugunTamamlandiMi(item){
-    if(item.doneAt){ return item.doneAt.substring(0,10)===bugun; }
-    return item.tarih===bugun; /* eski kayıt fallback */
-  }
-  (d.cycles||[]).filter(function(c){return !c.bosaltimTarihi;}).forEach(function(c){
-    (c.odaGorevleri||[]).forEach(function(og){
-      if(og.done && bugunTamamlandiMi(og)) tamamlanan++;
-    });
-  });
-  (getGorevler()||[]).forEach(function(g){
-    if(g.done && bugunTamamlandiMi(g)) tamamlanan++;
-  });
-  
-  var toplam=tamamlanan+kalan;
+  /* TEK KAYNAK: hem "kalan" hem "tamamlanan", getTodaysTasks()'in DÖNDÜRDÜĞÜ
+     AYNI listeden sayılır — liste zaten 4 kategoriyi de (oda görevleri, genel
+     görevler, protokol adımları, sulama/ilaç) doğru "done" bayrağıyla içeriyor.
+     ESKİDEN "tamamlanan" ayrı, sadece oda+genel görevlerini sayan bir mantıkla
+     hesaplanıyordu — protokol adımı ve sulama/ilaç tamamlamaları hiç
+     sayılmıyordu. Sonuç: liste "5 tamamlandı" derken özet kartı "0/0"
+     gösteriyordu (KRİTİK BUG, düzeltildi). İki ayrı sayma mantığı olduğu
+     sürece bu tür sapmalar tekrar olur — tek kaynağa indirgemek kalıcı çözüm. */
+  var tasks = getTodaysTasks()||[];
+  var tamamlanan = tasks.filter(function(t){return t.done;}).length;
+  var kalan = tasks.filter(function(t){return !t.done;}).length;
+  var toplam = tamamlanan+kalan;
   return {
     toplam: toplam,
     tamamlanan: tamamlanan,
@@ -3753,7 +3742,6 @@ function renderBugun(){
   var tasks=getTodaysTasks()||[];
   var tourPending=getTourPendingRooms()||[];
   var recent=getRecentActions()||[];
-  var progress=getDayProgress()||{toplam:0, tamamlanan:0, kalan:0, yuzde:0};
   
   var h='';
   
@@ -3793,24 +3781,8 @@ function renderBugun(){
       +'</div>';
   }
   
-  /* 2. GÜNÜN ÖZETI KARTI (her zaman görünür) */
-  h+='<div class="sec-title">📈 Günün Özeti</div>'
-    +'<div class="card" style="background:var(--green-soft);border:1.5px solid var(--green);">'
-    +'<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px;">'
-    +'<div>'
-    +'<div style="font-size:14px;color:var(--muted);font-weight:600;">'+fmtDate(bugun)+' — '+todayName()+'</div>'
-    +'<div style="font-size:24px;font-weight:700;color:var(--green);margin-top:4px;">'+progress.tamamlanan+'/'+progress.toplam+'</div>'
-    +'</div>'
-    +'<div style="text-align:right;font-size:12px;color:var(--muted);">'+new Date().toLocaleTimeString('tr-TR',{hour:'2-digit',minute:'2-digit'})+'</div>'
-    +'</div>'
-    +'<div style="background:#fff;border-radius:8px;height:6px;margin:12px 0;overflow:hidden;">'
-    +'<div style="background:var(--green);height:100%;width:'+progress.yuzde+'%;transition:width 0.3s;"></div>'
-    +'</div>'
-    +'<div style="display:flex;gap:16px;font-size:13px;justify-content:space-around;">'
-    +'<div><span style="color:var(--green);font-weight:700;">'+progress.tamamlanan+'</span> tamamlandı</div>'
-    +'<div><span style="color:var(--amber);font-weight:700;">'+progress.kalan+'</span> kalan</div>'
-    +'</div>'
-    +'</div>';
+  /* Günün Özeti kartı kaldırıldı — aynı bilgi (tamamlandı/kalan sayısı) zaten
+     aşağıdaki "Bugünkü Görevler" başlığında gösteriliyor, tekrar/gereksizdi. */
   
   /* 3. BUGÜNÜN İŞLERİ (tek liste — geciken üstte kırmızı, sonra en yeni komposttan) */
   /* 3. BUGÜNÜN İŞLERİ — başlık her zaman görünür */
@@ -6579,13 +6551,13 @@ function setManuelDonem(id,val){
 /* ---------- Bulut yedek (Firebase) — cihaz kırılsa/kaybolsa bile veri güvende ----------
    Yerel yedek (yukarıdaki autoSnapshot) sadece BU cihazda kalır. Bu fonksiyon aynı
    anlık görüntüyü Firestore'a da yazar: farms/{FARM_CODE}/yedekler/{slot}.
-   Zamanlama: uygulama açıkken her CLOUD_BACKUP_SAAT saatte bir dener (kesin saat
+   Zamanlama: uygulama açıkken her CLOUD_BACKUP_DAKIKA dakikada bir dener (kesin saat
    garantisi değil — sunucusuz bir PWA'da bu ancak Cloud Functions gibi ayrı bir
    arka uç ile mümkün olur; ama sahada uygulama gün boyu defalarca açıldığı için
    pratikte çok yakın sonuç verir).
    Rotasyon: haftanın gününe göre 7 slot (aktif_0..6, arsiv_0..6) — sınırsız
    büyümez, en fazla 14 doküman, her hafta üzerine yazılır. */
-var CLOUD_BACKUP_SAAT = 4;
+var CLOUD_BACKUP_DAKIKA = 5; /* eskiden 4 saatti — kullanıcı iste diğiyle 5 dakikaya düşürüldü */
 var CLOUD_YEDEK_LIMIT = 700000; /* güvenli karakter sınırı — Firestore'un 1MB doküman limitine karşı tampon */
 function getLastCloudBackup(){ try{ return localStorage.getItem("utp_cloudbak_last")||null; }catch(e){ return null; } }
 function setLastCloudBackup(){ try{ localStorage.setItem("utp_cloudbak_last", ""+Date.now()); }catch(e){ console.warn("bulut yedek zamanı kaydedilemedi", e); } updateCloudBakBadge(); }
@@ -6609,7 +6581,7 @@ function updateCloudBakBadge(){
 function cloudYedekGerekliMi(){
   var lb=getLastCloudBackup();
   if(!lb) return true;
-  return (Date.now()-(+lb)) > CLOUD_BACKUP_SAAT*3600*1000;
+  return (Date.now()-(+lb)) > CLOUD_BACKUP_DAKIKA*60*1000;
 }
 function cloudYedekYaz(docId, payload){
   if(!FB.ready || !FB.db) return Promise.reject(new Error("bulut hazır değil"));
@@ -8808,7 +8780,7 @@ function renderYedekleme(){
   /* Bulut yedek — cihaz kırılsa/kaybolsa bile veri güvende (Firebase) */
   var lcb=getLastCloudBackup();
   h+='<div class="card"><div class="sec-title" style="margin-top:0;">☁️ Bulut yedeği (telefon kaybolsa/kırılsa bile güvende)</div>'
-    +'<div class="muted" style="margin-bottom:8px;">Her '+CLOUD_BACKUP_SAAT+' saatte bir (uygulama açıkken) aktif veriler + arşiv Firebase\'e de yedeklenir. Haftanın gününe göre 7 nokta tutulur, üzerine yazılır — sınırsız büyümez.</div>'
+    +'<div class="muted" style="margin-bottom:8px;">Her '+CLOUD_BACKUP_DAKIKA+' dakikada bir (uygulama açıkken) aktif veriler + arşiv Firebase\'e de yedeklenir. Haftanın gününe göre 7 nokta tutulur, üzerine yazılır — sınırsız büyümez.</div>'
     +'<div class="muted" style="margin-bottom:8px;">'+(lcb?('Son bulut yedeği: '+fmtDateTime(+lcb)):'Henüz bulut yedeği alınmadı.')+'</div>'
     +'<button class="btn ghost small" onclick="cloudYedekZorla()">☁️ Şimdi buluta yedekle</button> '
     +'<button class="btn ghost small" onclick="cloudYedekleriGetir()">🔄 Bulut yedeklerini listele</button>';
@@ -8855,6 +8827,26 @@ function cloudYedekZorla(){
     toast("⚠️ Bulut yedeği başarısız oldu — internet bağlantını kontrol et");
   });
 }
+/* AÇILIŞTA SESSİZ YEDEK: kullanıcı "her açılışta buluta yedekle" istedi — normal
+   cloudYedekTetikle() 4 saatlik gate'e takılıyor (art arda açılışlarda hep
+   yedeklemez). Bu fonksiyon gate'i BYPASS eder ama toast GÖSTERMEZ (sessiz,
+   rahatsız etmez) ve art arda çok hızlı açılış/kapanışta spam yapmasın diye
+   kendi kısa (2 dakika) minimum aralığı var — FB henüz hazır değilse (internet
+   gelmemiş) sessizce vazgeçer, bir dahaki açılışta/senkron olayında tekrar dener. */
+var _acilisYedekSonDeneme = 0;
+function cloudYedekAcilista(){
+  if(!FB.ready) return;
+  if(Date.now()-_acilisYedekSonDeneme < 120000) return; /* 2 dk içinde tekrar denemeye gerek yok */
+  _acilisYedekSonDeneme = Date.now();
+  var d=loadData();
+  var slot=new Date().getDay();
+  var aktifP=cloudYedekYaz("aktif_"+slot, {cycles:d.cycles||[], gorevler:d.gorevler||[], settings:d.settings||{}});
+  cloudYedekYaz("arsiv_"+slot, {arsiv:d.arsiv||[]}).catch(function(){});
+  aktifP.then(function(){
+    setLastCloudBackup();
+    if(typeof view!=="undefined" && view && view.name==="yedekleme") render();
+  }).catch(function(e){ console.warn("açılış bulut yedeği başarısız", e); });
+}
 function cloudYedekleriGetir(){
   if(!FB.ready || !FB.db){ toast("Bulut bağlantısı yok"); return; }
   var refBase=FB.db.collection("farms").doc(FARM_CODE).collection("yedekler");
@@ -8897,6 +8889,8 @@ function cloudYedektenGeriYukle(slotNum){
 var _ayarKategori=null; /* null = kategori menüsü gösterilir */
 function ayarKategoriAc(kat){ _ayarKategori=kat; window.scrollTo(0,0); render(); }
 function ayarMenuyeDon(){ _ayarKategori=null; window.scrollTo(0,0); render(); }
+var _gorevAltSekme=null; /* "Görevler (4 Bölüm)" kategorisi içindeki alt sekme: uretim/kontrol/muhendis/diger */
+function gorevAltSekmeSec(k){ _gorevAltSekme=k; window.scrollTo(0,0); render(); }
 /* Başka bir ekrandan (örn. Odalar sekmesi) doğrudan belirli bir Ayarlar
    kategorisine atlamak için — go('ayarlar') gibi menüye sıfırlamaz. */
 function ayarKategorisineGit(kat){ _ayarKategori=kat; view={name:"ayarlar", id:null}; window.scrollTo(0,0); render(); }
@@ -9228,7 +9222,16 @@ function renderAyarlar(){
   }
   /* YAPILACAK İŞLEMLER — fiziksel ekip işleri (poşet açma, tiftik, tırmık, toprak serimi, oda yıkama vb.) */
   if(_ayarKategori==="gorevler" && can("manage")){
+    if(!_gorevAltSekme) _gorevAltSekme="uretim";
+    var GOREV_SEKMELERI=[{k:"uretim",ic:"🌱",ad:"Üretim"},{k:"kontrol",ic:"🌡️",ad:"Kontrol"},{k:"muhendis",ic:"💧",ad:"Mühendis"},{k:"diger",ic:"🧹",ad:"Diğer"}];
+    h+='<div style="display:flex; gap:6px; margin-bottom:12px; overflow-x:auto;">'
+      +GOREV_SEKMELERI.map(function(sk){
+        var aktif=(_gorevAltSekme===sk.k);
+        return '<button onclick="gorevAltSekmeSec(\''+sk.k+'\')" style="flex:1;min-width:78px;padding:9px 4px;border-radius:10px;border:1.5px solid '+(aktif?'var(--green)':'#ddd')+';background:'+(aktif?'var(--green)':'#fff')+';color:'+(aktif?'#fff':'#333')+';font-weight:700;font-size:12.5px;white-space:nowrap;">'+sk.ic+' '+sk.ad+'</button>';
+      }).join('')
+      +'</div>';
     var PR=getProtokol();
+    if(_gorevAltSekme==="uretim"){
     h+='<div class="card"><div class="sec-title" style="margin-top:0;">🌱 1. Üretim Protokolü</div>'
       +'<div class="muted" style="margin-bottom:8px;">Üretimle ilgili fiziksel işler: tiftik, tırmık, toprak serimi, poşet açma gibi. Ekibin hangi gün ne iş yapacağını burada tanımlarsın. Gün, "Geliş" veya "Toprak serimi" tarihine göre sayılır (örn. Geliş +6 = kompost geldikten 6 gün sonra).</div>';
     var UP_sirali=PR.map(function(s,idx){return {s:s, idx:idx};}).filter(function(x){return !x.s.silindi && x.s.tip==="olay";}).sort(function(a,b){return protokolSiraAnahtari(a.s)-protokolSiraAnahtari(b.s);});
@@ -9274,6 +9277,9 @@ function renderAyarlar(){
       +'</div></div>';
     h+='</div>';
 
+    } /* /uretim tab */
+
+    if(_gorevAltSekme==="kontrol"){
     /* KONTROL PROTOKOLÜ — tamamlanacak bir iş değil, dikkat edilmesi/gözlenmesi gereken noktalar (sarım, ısıtma, Δ T gibi) */
     h+='<div class="card"><div class="sec-title" style="margin-top:0;">🌡️ 2. Kontrol Protokolü</div>'
       +'<div class="muted" style="margin-bottom:8px;">Sarım durumu, ısıtma, Δ T gibi gözlem/kontrol noktaları. Bunlar "yapılacak iş" değil, o gün dikkat edilmesi/gözlenmesi gereken noktalardır (ör. ateşlenme riski, misel durumu). Ekibin görev listesine düşmez, oda sayfasında hatırlatma olarak görünür.</div>';
@@ -9367,10 +9373,12 @@ function renderAyarlar(){
       +'</div>'
       +'<button class="btn small" style="margin-top:8px;" onclick="sartKuralEkleForm()">+ Şartlı kural ekle</button>'
       +'</div></div>';
+  } /* /kontrol tab */
   }
 
   /* MÜHENDİS PROTOKOLÜ — sulama/ilaç şablonu (görevlerden ayrı, "gorevler" kategorisinin 3. bölümü) */
   if(_ayarKategori==="gorevler" && can("manage")){
+    if(_gorevAltSekme==="muhendis"){
     var PR2=getProtokol();
     h+='<div class="card"><div class="sec-title" style="margin-top:0;">💧 3. Mühendis Protokolü</div>'
       +'<div class="muted" style="margin-bottom:8px;">Sulama işleri. Hangi gün ne kadar su ve hangi ilaçtan ne kadar verileceğini burada tanımlarsın. Bu, ekip görevlerinden ayrı — oda içinde ziraat mühendisine gösterilir, ekip görev listesine düşmez.</div>';
@@ -9443,9 +9451,11 @@ function renderAyarlar(){
       +'<button class="btn ghost small" style="margin-top:12px;" onclick="protokolVarsayilan()">Tüm reçeteyi (görev + ilaçlama) varsayılana döndür</button>'
       +'</div>';
     h+='</div>';
+    } /* /muhendis tab */
   }
   /* Konumlar */
   if(_ayarKategori==="gorevler" && can("manage")){
+    if(_gorevAltSekme==="diger"){
     var KL=getKonumlar();
     h+='<div class="card"><div class="sec-title" style="margin-top:0;">📍 Konumlar (görev yerleri)</div>'
       +'<div class="muted" style="margin-bottom:8px;">Görev eklerken kullanılır. Odalar otomatik listelenir; buraya alan/bahçe/blok gibi ek yerler ekle.</div>';
@@ -9480,6 +9490,7 @@ function renderAyarlar(){
       h+='<button class="btn ghost small" style="margin-top:10px;" onclick="protokolSilinenleriTemizle()">🗑 Tümünü kalıcı olarak temizle ('+_silinenP.length+')</button>';
       h+='</div>';
     }
+    } /* /diger tab */
   }
   if(_ayarKategori==="diger"){
   h+='<div class="card"><div class="sec-title" style="margin-top:0;">Diğer</div>'
@@ -9966,6 +9977,7 @@ try{
         memData = null;
         loadData();
         try{ render(); }catch(e){ console.error("resume render error:", e); }
+        cloudYedekAcilista();
       }
     }
   });
