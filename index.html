@@ -187,7 +187,23 @@ function fbPushDirty(){
     }
   });
 }
-function fbDelete(id){ if(FB.ready){ delete _synced[id]; FB.coll.doc(id).delete().catch(function(e){ console.warn("delete",e); fbSetStatus("hata"); }); } }
+function fbDelete(id){ if(FB.ready){ delete _synced[id]; return FB.coll.doc(id).delete().catch(function(e){ console.warn("delete",e); fbSetStatus("hata"); throw e; }); } return Promise.resolve(); }
+/* KALICI SİLİNEN KAYIT LİSTESİ (tombstone): bir döngü silindiğinde ID'si buraya
+   eklenir. Silme isteği buluta ulaşamadan (yavaş bağlantı, uygulama erken
+   kapatılırsa) cihaz kapanırsa, bulut o kaydı hâlâ tutar ve bir sonraki
+   senkronda GERİ GELİR — kullanıcı "her kapattığımda eski veri geliyor" diye
+   defalarca aynı hayalet kayıtları elle siliyordu. Artık silinen ID'ler ayrı
+   bir listede kalıcı tutuluyor; senkronda bu ID'lerden biri tekrar gelirse
+   sessizce YOK SAYILIP buluttan bir daha silinir — kullanıcıya hiç görünmez. */
+var SILINEN_KEY = "utp_silinenIdler";
+function silinenIdlerGetir(){ try{ return JSON.parse(localStorage.getItem(SILINEN_KEY)||"[]"); }catch(e){ return []; } }
+function silinenIdEkle(id){
+  try{
+    var L=silinenIdlerGetir();
+    if(L.indexOf(id)<0){ L.push(id); if(L.length>500) L=L.slice(-500); localStorage.setItem(SILINEN_KEY, JSON.stringify(L)); }
+  }catch(e){ console.warn("silinen id kaydedilemedi", e); }
+}
+function silinenIdMi(id){ return silinenIdlerGetir().indexOf(id)>=0; }
 function fbPushDirtyGorev(){
   if(!FB.ready || !FB.gorevColl) return;
   ((memData&&memData.gorevler)||[]).forEach(function(g){
@@ -240,6 +256,15 @@ function fbInit(){
       var realChange=false, needPush=false;
       snap.docChanges().forEach(function(ch){
         var data=ch.doc.data();
+        /* HAYALET KAYIT KORUMASI: bu ID daha önce bu cihazdan silinmişse
+           (tombstone listesinde), buluttan "geri geldiyse" (silme isteği
+           zamanında ulaşmamış olabilir) ASLA yerel listeye eklenmez — sessizce
+           buluttan bir daha silinir. Kullanıcıya hiç görünmez, tekrar tekrar
+           elle silmesi gerekmez. */
+        if(ch.type!=="removed" && silinenIdMi(data.id)){
+          FB.coll.doc(data.id).delete().catch(function(e){ console.warn("hayalet kayıt yeniden silinemedi", e); });
+          return;
+        }
         if(ch.type==="removed"){
           if(_synced[data.id]!==undefined) realChange=true;
           memData.cycles=memData.cycles.filter(function(x){return x.id!==data.id;});
@@ -366,7 +391,7 @@ function hasatTartiGetir(oda, tur){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v274";
+var APP_VER = "v275";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -6162,8 +6187,16 @@ function delCycle(id){
   var c = loadData().cycles.find(function(x){return x.id===id;});
   if(!c){ toast("Kayıt bulunamadı"); return; }
   if(confirm(c.oda+" döngüsünü tamamen sil? Bu geri alınamaz.")){
+    silinenIdEkle(id); /* ÖNCE tombstone'a ekle — silme buluta ulaşmasa bile bir daha geri gelmez */
     var d=loadData(); d.cycles = d.cycles.filter(function(x){return x.id!==id;});
-    fbDelete(id); saveData(); toast("Silindi"); go("bugun");
+    saveData();
+    toast("Siliniyor...");
+    fbDelete(id).then(function(){
+      toast("✓ Buluttan da silindi — güvenle kapatabilirsin");
+    }).catch(function(){
+      toast("⚠️ Yerel silindi ama buluta ulaşamadı — internet gelince otomatik tamamlanacak, tekrar görünmeyecek");
+    });
+    go("bugun");
   }
 }
 
@@ -8839,7 +8872,10 @@ function cloudYedektenGeriYukle(slotNum){
     if(!aktifSnap.exists){ toast("Bu güne ait bulut yedeği bulunamadı"); return; }
     var av=aktifSnap.data().veri||{};
     var ar=arsivSnap.exists ? (arsivSnap.data().veri||{}) : {};
-    memData={cycles:av.cycles||[], settings:av.settings||{}, gorevler:av.gorevler||[], arsiv:ar.arsiv||[]};
+    /* Eski bir bulut yedeği, o tarihten SONRA silinmiş hayalet kayıtları hâlâ
+       içerebilir — tombstone listesiyle filtrele, geri gelmesinler. */
+    var av_cycles=(av.cycles||[]).filter(function(c){ return !silinenIdMi(c.id); });
+    memData={cycles:av_cycles, settings:av.settings||{}, gorevler:av.gorevler||[], arsiv:ar.arsiv||[]};
     _settingsFirstSyncDone = true; /* elle geri yükleme — buluta göndermeyi engelleyen kilidi aç, bkz. restoreJSON */
     saveData(); toast("☁️ Bulut yedeğinden geri yüklendi"); go("bugun");
   }).catch(function(e){ console.warn("bulut yedek okunamadı", e); toast("Bulut yedeği okunamadı — internet bağlantını kontrol et"); });
