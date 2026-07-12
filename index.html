@@ -127,6 +127,7 @@
 <div class="toast" id="toast"></div>
 
 <script src="https://www.gstatic.com/firebasejs/12.13.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/12.13.0/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/12.13.0/firebase-firestore-compat.js"></script>
 <script>
 "use strict";
@@ -265,6 +266,25 @@ function fbInit(){
   if(typeof firebase==="undefined"){ fbSetStatus("local"); console.warn("Firebase SDK y\u00fcklenmedi (ilk a\u00e7\u0131l\u0131\u015fta internet gerekir)."); return; }
   try{
     firebase.initializeApp(FIREBASE_CONFIG);
+    /* GÜVENLİK: Firestore Rules artık "request.auth != null" bekliyor.
+       Anonim giriş (kullanıcıya hiç görünmez, şifre gerektirmez) yapmadan
+       hiçbir okuma/yazma işlemi çalışmaz. Bu, API key'i bilen rastgele bir
+       script/curl isteğinin doğrudan Firestore'a erişmesini engeller —
+       sadece gerçek Firebase SDK üzerinden (yani bu uygulama üzerinden)
+       bağlanan istekler kabul edilir. */
+    firebase.auth().signInAnonymously().then(function(){
+      fbInitAfterAuth();
+    }).catch(function(e){
+      console.error("Anonim giriş başarısız — Firestore Auth Console'da 'Anonymous' etkin mi kontrol et", e);
+      fbSetStatus("local");
+    });
+  }catch(e){
+    console.error("Firebase başlatma hatası", e);
+    fbSetStatus("local");
+  }
+}
+function fbInitAfterAuth(){
+  try{
     var db=firebase.firestore();
     db.enablePersistence({synchronizeTabs:true}).catch(function(e){ console.warn("persistence", e); });
     FB.db=db;
@@ -439,7 +459,7 @@ function hasatTartiGetir(oda, tur){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v298";
+var APP_VER = "v303";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -6473,11 +6493,6 @@ function exportCycleCSV(id){
    veriye (c.notlar) yazar, o sekmede de görünür. Tam render() yapmıyoruz — kart üzerindeki
    henüz kaydedilmemiş diğer alanlar (sıcaklık, sulama vb.) kaybolmasın diye sadece bu
    alanın kendisini DOM üzerinden güncelliyoruz. */
-/* Günlük Tur'da oda numarası başlığını güncelleyen helper */
-function updateTurHeader(c){
-  if(c) el("hdrTitle").textContent = esc(c.oda) + " — Günlük tur";
-  else el("hdrTitle").textContent = "Günlük tur";
-}
 function turNotEkle(cid){
   if(!can("edit")) return noPerm();
   var c=loadData().cycles.find(function(x){return x.id===cid;}); if(!c) return;
@@ -6564,7 +6579,6 @@ function turOdaKartIcHTML(c, ge, showExtra){
     +(showExtra?hasatTakipKart(c):'');
 }
 function renderTur(){
-  el("hdrTitle").textContent = "Günlük tur";
   var d=loadData(); var active=d.cycles.filter(function(c){return !c.bosaltimTarihi;});
   active.sort(function(a,b){ return cmpDate(b.gelisTarihi||"", a.gelisTarihi||""); }); /* biyogüvenlik: en yeni (temiz) → en eski (kirli) */
   var tarihVal = _turTarihVal || todayISO();
@@ -6579,6 +6593,7 @@ function renderTur(){
   if(active.length===0){
     h+='<div class="empty"><div class="big">🍄</div><div>Aktif oda yok.</div></div>';
     el("app").innerHTML=h;
+    el("hdrTitle").textContent = "Günlük tur";
     return;
   }
   if(mod==="tek"){
@@ -6586,7 +6601,7 @@ function renderTur(){
     if(turIndex>=active.length) turIndex=active.length-1;
     var c=active[turIndex];
     var st=stageOf(c);
-    updateTurHeader(c);  /* Oda numarasını başlığa koy */
+    el("hdrTitle").textContent = esc(c.oda) + " — Günlük tur"; /* Header güncelle */
     h+='<div class="card" data-cid="'+c.id+'" style="padding:14px; border:2px solid var(--green);">'
       +'<div style="position:sticky; top:56px; z-index:20; background:var(--card); padding:8px 0 8px 0; margin:0 -16px 8px -16px; padding-left:16px; padding-right:16px; border-bottom:1px solid var(--line);">'
       +'<div style="text-align:center; font-size:13px; color:var(--muted); margin-bottom:6px; font-weight:600;">🚶 Oda '+(turIndex+1)+' / '+active.length+'</div>'
@@ -6601,10 +6616,7 @@ function renderTur(){
       +'</div>';
     h+='<button class="btn ghost" style="width:100%; margin-top:10px;" onclick="go(\'list\')">‹ Listeye dön</button>';
   } else {
-    /* Liste modu artık yoğun tablo (panoHTML) — Firma, Oda, Gün, Puan, Derece,
-       Bugün işlem tek bakışta. Satıra dokunma → panoEdit (özet) → "Günlük Tur'u
-       aç" → turOdadaAc → o odanın TEK ODA modundaki tam ekranına atlar.
-       Böylece SSOT korunur: veri girişi hep tek odaya odaklanmış ekrandan. */
+    el("hdrTitle").textContent = "Günlük tur"; /* Liste modunda header reset */
     h += panoHTML(active);
     h+='<button class="btn ghost" style="width:100%; margin-top:10px;" onclick="go(\'list\')">‹ Geri</button>';
   }
@@ -6630,8 +6642,7 @@ function turModDegistir(){
   _turTarihVal=el("tur_tarih")?el("tur_tarih").value:_turTarihVal;
   setTurMod(getTurMod()==="tek"?"liste":"tek");
   turIndex=0;
-  if(getTurMod()==="liste") updateTurHeader(null);  /* Liste modunda header reset */
-  render();
+  render();  /* render() → renderTur() → header otomatik güncellenir */
 }
 /* Ortak günlük kayıt mantığı: hem Günlük Tur hem Ana Ekran (panoEdit) bunu kullanır —
    böylece hangi ekrandan girilirse girilsin AYNI kurallarla AYNI kayda (tarih+vakit) yazılır.
@@ -6728,7 +6739,7 @@ function turIlerle(delta){
     if(warnLines.length) showWarnBox("Bu oda için uyarı", warnLines);
   }
   turIndex += delta;
-  render();  /* render() içinde updateTurHeader() çağrılır */
+  render();  /* render() → renderTur() → header otomatik güncellenir */
 }
 function turBitir(){
   var t=el("tur_tarih").value;
@@ -6743,8 +6754,7 @@ function turBitir(){
   }
   toast("✓ Tur tamamlandı");
   turIndex=0; _turTarihVal=null; _turVakitVal=null;
-  updateTurHeader(null);  /* Header'ı reset et */
-  go("bugun");
+  go("bugun");  /* go() → render() → header otomatik güncellenir */
 }
 function saveTur(){
   var t=el("tur_tarih").value;
@@ -8056,6 +8066,25 @@ function resetRecete(){
 }
 
 /* ============ ROLLER + AUDIT ============ */
+/* ---- Parola güvenliği: SHA-256 hash ---- */
+/* Eskiden şifreler düz metin (plaintext) saklanıyordu — hem localStorage'da
+   hem Firestore'da. Artık SHA-256 hash'i saklanıyor. Geçiş dönemi için: eski
+   plaintext parola ile girişi hâlâ kabul ediyoruz, ama başarılı girişte
+   otomatik olarak hash'e yükseltiyoruz (kullanıcı hiçbir şey fark etmez). */
+async function hashPass(pass){
+  try{
+    if(!window.crypto || !window.crypto.subtle){
+      /* HTTP (güvensiz bağlam) veya çok eski tarayıcı — crypto.subtle yok.
+         Cloudflare Pages HTTPS olduğu için normalde buraya düşmez. */
+      console.error("crypto.subtle yok — HTTPS bağlantı gerekli");
+      return null;
+    }
+    var enc=new TextEncoder().encode(pass);
+    var buf=await crypto.subtle.digest("SHA-256", enc);
+    return Array.prototype.map.call(new Uint8Array(buf), function(b){ return b.toString(16).padStart(2,"0"); }).join("");
+  }catch(e){ console.error("hash hatası", e); return null; }
+}
+function isHashedPass(s){ return typeof s==="string" && /^[a-f0-9]{64}$/.test(s); }
 var ROLE_DEFS={ ziraat:{ad:"Ziraat Mühendisi", edit:true, manage:false}, yonetici:{ad:"Yönetici", edit:true, manage:true}, sahip:{ad:"Firma Sahibi", edit:false, manage:false}, teknisyen:{ad:"Teknisyen", edit:false, manage:false, ariza:true, kisitli:true} };
 var currentRole=null;
 /* GÜVENLİK: yönetici/sahip parolaları ARTIK sabit kodda YOK — ilk açılışta Setup Wizard
@@ -8080,18 +8109,35 @@ function loadRole(){ try{ if(isSetupNeeded()){ view={name:"setup", id:null}; ret
 function can(perm){ if(!currentRole) return false; var r=ROLE_DEFS[currentRole]; if(perm==="view") return true; return !!r[perm]; }
 function noPerm(){ toast("Bu işlem için yetkiniz yok"+(currentRole?" ("+ROLE_DEFS[currentRole].ad+")":"")); }
 function logout(){ logAudit("çıkış",""); currentRole=null; try{ localStorage.removeItem("utp_role"); }catch(e){ console.warn("rol silinemedi", e); } render(); }
-function doLogin(role){
+async function doLogin(role){
   var passEl=el("lg_pass"); var pass=(passEl?passEl.value:"").trim();
   var want=(rolePass()[role]||"").trim();
   if(!want){ toast("❌ "+ROLE_DEFS[role].ad+" parolası henüz kurulmamış — Ayarlar'dan belirle"); return; }
-  if(pass!==want){
+  var ok=false;
+  if(isHashedPass(want)){
+    var inputHash=await hashPass(pass);
+    if(inputHash===null){ toast("❌ Bağlantı hatası (HTTPS gerekli), tekrar dene"); return; }
+    ok=(inputHash===want);
+  } else {
+    /* Eski plaintext kayıt — geçiş dönemi karşılaştırması */
+    ok=(pass===want);
+    if(ok){
+      /* Başarılı giriş → otomatik hash'e yükselt, kullanıcı fark etmez */
+      var newHash=await hashPass(pass);
+      if(newHash){
+        var d=loadData(); if(!d.settings) d.settings={}; if(!d.settings.roles) d.settings.roles={};
+        d.settings.roles[role]=newHash; saveData();
+      }
+    }
+  }
+  if(!ok){
     var er=el("lg_err"); if(er) er.textContent="Şifre yanlış. Büyük/küçük harfe dikkat — 'Şifreyi göster' ile kontrol et.";
     toast("Şifre yanlış"); return;
   }
   currentRole=role; try{ localStorage.setItem("utp_role",role); }catch(e){ console.warn("rol kaydedilemedi", e); }
   logAudit("giriş", ROLE_DEFS[role].ad); render();
 }
-function saveSetup(){
+async function saveSetup(){
   var ypass=(el("setup_yonetici")||{}).value||"";
   var spass=(el("setup_sahip")||{}).value||"";
   var hataEl=el("setup_hata"); if(hataEl) hataEl.textContent="";
@@ -8106,8 +8152,14 @@ function saveSetup(){
     return;
   }
   var d=loadData(); if(!d.settings) d.settings={}; if(!d.settings.roles) d.settings.roles={};
-  d.settings.roles.yonetici=ypass.trim();
-  if(spass.trim()) d.settings.roles.sahip=spass.trim();
+  var yhash=await hashPass(ypass.trim());
+  if(!yhash){
+    var msg3="❌ Parola işlenemedi — HTTPS bağlantı gerekli. Sayfayı yenile.";
+    toast(msg3); if(hataEl) hataEl.textContent=msg3;
+    return;
+  }
+  d.settings.roles.yonetici=yhash;
+  if(spass.trim()){ var shash=await hashPass(spass.trim()); if(shash) d.settings.roles.sahip=shash; }
   saveData(); markSetupDone(); logAudit("kurulum tamamlandı", spass.trim()?"yönetici ve sahip parolaları ayarlandı":"yönetici parolası ayarlandı (sahip boş bırakıldı)");
   view={name:null,id:null}; loadRole(); render();
 }
@@ -9782,15 +9834,17 @@ function saveCihaz(){
   var ad=v||deviceId();
   try{ localStorage.setItem("utp_cihazAd", ad); }catch(e){ console.warn("cihaz adı kaydedilemedi", e); }
   toast("Cihaz adı kaydedildi: "+ad); render(); }
-function parolaDegistir(rolKey){
+async function parolaDegistir(rolKey){
   if(!can("manage")) return noPerm();
   var inp=el("rp_"+rolKey);
   var yeni=(inp?inp.value:"").trim();
   if(!yeni){ toast("Yeni parola gir"); return; }
   if(yeni.length<4){ toast("Parola en az 4 karakter olsun"); return; }
   if(!confirm(esc(ROLE_DEFS[rolKey].ad)+" parolası değiştirilsin mi?")) return;
+  var hash=await hashPass(yeni);
+  if(!hash){ toast("❌ Parola işlenemedi, tekrar dene"); return; }
   var d=loadData(); if(!d.settings) d.settings={}; if(!d.settings.roles) d.settings.roles={};
-  d.settings.roles[rolKey]=yeni;
+  d.settings.roles[rolKey]=hash;
   saveData(); logAudit("parola değiştirildi", ROLE_DEFS[rolKey].ad);
   if(inp) inp.value="";
   toast("✓ "+ROLE_DEFS[rolKey].ad+" parolası değiştirildi");
