@@ -459,7 +459,7 @@ function hasatTartiGetir(oda, tur){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v317";
+var APP_VER = "v318";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -5481,6 +5481,20 @@ function setKGNem(id,val){
   var d=loadData(); var c=d.cycles.find(function(x){return x.id===id;});
   if(!c) return;
   c.kgNem=val; touchCycle(c);
+  /* Nem YÜKSEK (havalandır) veya DÜŞÜK (nemlendir) ise poşet kompost
+     indirmeden 1 gün sonraya çekilir (standart: +6). Normal'e dönülürse
+     standart zamanlamaya geri döner. Poşet zaten açılmışsa (gerçek tarih
+     kayıtlı) dokunulmaz — geçmiş değiştirilmez. */
+  var pi=protokolRolIdx("poset");
+  if(pi>=0){
+    var pst=getProtokol()[pi];
+    if(!adimGercektenYapildiMi(c, pi, pst)){
+      if(!c.ertele) c.ertele={};
+      var norm=nemNormalize(val);
+      if(norm==="yuksek" || norm==="dusuk") c.ertele["p"+pi] = 1-(pst.gun||0);
+      else delete c.ertele["p"+pi];
+    }
+  }
   saveData(); renderDetail(id);
 }
 var HASTALIK_TURLERI = ["Yeşil küf (Trichoderma)","Dactylium (Örümcek ağı hastalığı)","Mycogone (Islak kabarcık)","Verticillium","Bakteriyel leke","Keçeleşme","Diğer mantar hastalığı","Sinek (Sciarid/Phorid)"];
@@ -5696,6 +5710,15 @@ function kgGuncelSicaklik(c){
   }
   return {alt:numParse(c.kgDereceAlt), ust:numParse(c.kgDereceUst), kaynak:"geliş günü"};
 }
+/* Nem 3 seçeneğe indirildi (Yüksek/Normal/Düşük). Eski kayıtlarda hâlâ
+   İyi/Kuru/Çok kuru/Islak/Çok ıslak olabilir — veri göçü yapmadan burada
+   normalize ediyoruz ki hem eski hem yeni kayıtlar aynı mantıkla okunsun. */
+function nemNormalize(v){
+  if(v==="yuksek"||v==="islak"||v==="cok_islak") return "yuksek";
+  if(v==="dusuk"||v==="kuru"||v==="cok_kuru") return "dusuk";
+  if(v==="normal"||v==="iyi") return "normal";
+  return v||"";
+}
 /* Kompost geliş sıcaklığı için 3 kademe (kritikUst'ten AYRI — bu ikisi farklı
    amaçlar): 28°'ye kadar sorun yok (madde kapalı). 28-35° arası hâlâ soğuyor,
    hafif ikaz kalır. 35° üstü ACİL: kompost torbaları ıslatılmalı. 35°'nin
@@ -5715,7 +5738,7 @@ function kompostEksikMaddeler(c){
   else if(c.kgIrsaliye==="hayir") eksik.push("irsaliye alınmadı");
   if(!(c.kestaneKat && c.kestaneTaraf)) eksik.push("kestane yeri?");
   if(!c.kgNem) eksik.push("nem?");
-  else if(c.kgNem!=="iyi" && c.kgNem!=="normal") eksik.push("nem: "+c.kgNem);
+  else if(nemNormalize(c.kgNem)!=="normal") eksik.push("nem: "+c.kgNem);
   if(!c.kgAmonyak) eksik.push("amonyak?");
   else if(c.kgAmonyak==="belirsiz") eksik.push("amonyak belirsiz");
   else if(c.kgAmonyak==="var" && !c.kgAmonyakHavalandirildi) eksik.push("amonyak var");
@@ -5863,22 +5886,21 @@ function komposGelisKontrolHTML(c){
     maddeler.push(mddSor("3. Kestane nereye yerleşti?", "Hem kat hem taraf gir:", kestaneInput));
   }
 
-  /* 4. NEM */
-  var nemOpts=[["iyi","İyi"],["normal","Normal"],["kuru","Kuru"],["cok_kuru","Çok kuru"],["islak","Islak"],["cok_islak","Çok ıslak"]];
+  /* 4. NEM — 3 seçenek: Yüksek/Normal/Düşük. Yüksek veya Düşük işaretlenince
+     setKGNem() poşeti kompost indirmeden 1 gün sonraya çeker (bkz. yukarısı). */
+  var nemOpts=[["yuksek","Yüksek"],["normal","Normal"],["dusuk","Düşük"]];
   var nemBtns='<div style="display:flex; gap:5px; flex-wrap:wrap; margin-top:6px;">'
-    + nemOpts.map(function(o){ return '<button class="btn ghost small" onclick="setKGNem(\''+c.id+'\',\''+o[0]+'\')" style="'+(c.kgNem===o[0]?"background:#2f8f4e;color:#fff;":"")+'">'+o[1]+'</button>'; }).join("")
+    + nemOpts.map(function(o){ return '<button class="btn ghost small" onclick="setKGNem(\''+c.id+'\',\''+o[0]+'\')" style="'+(nemNormalize(c.kgNem)===o[0]?"background:#2f8f4e;color:#fff;":"")+'">'+o[1]+'</button>'; }).join("")
     + '</div>';
+  var nemN = nemNormalize(c.kgNem);
   if(!c.kgNem){
     maddeler.push(mddSor("4. Kompostun nemi nasıl?", "", nemBtns));
-  } else if(c.kgNem==="iyi" || c.kgNem==="normal"){
-    tamamlar.push("💧 Nem: "+c.kgNem+" ✓");
+  } else if(nemN==="normal"){
+    tamamlar.push("💧 Nem: normal ✓");
+  } else if(nemN==="yuksek"){
+    maddeler.push(mddIkaz("4. Nem: Yüksek", "Poşeti kompost indirmeden 1 gün sonra kes · fanları aç, kompostu havalandır · nem normale gelene kadar takip et", nemBtns));
   } else {
-    var nemAksiyon="";
-    if(c.kgNem==="cok_islak") nemAksiyon="ÇOK ISLAK → poşet aç · havalandırmayı çalıştır · kompostu havalandır";
-    else if(c.kgNem==="islak") nemAksiyon="ISLAK → poşet aç · havalandır";
-    else if(c.kgNem==="cok_kuru") nemAksiyon="ÇOK KURU → poşet aç · nemlendir (sulama düşün)";
-    else if(c.kgNem==="kuru") nemAksiyon="KURU → poşet aç · nemlendir";
-    maddeler.push(mddIkaz("4. Nem: "+c.kgNem, nemAksiyon, nemBtns));
+    maddeler.push(mddIkaz("4. Nem: Düşük", "Poşeti kompost indirmeden 1 gün sonra kes · nemlendirici çalıştır · nem normale gelene kadar takip et", nemBtns));
   }
 
   /* 5. AMONYAK — kompost kalitesi (firma amonyağı tam atmamış olabilir) */
