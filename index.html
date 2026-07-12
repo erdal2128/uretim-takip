@@ -459,7 +459,7 @@ function hasatTartiGetir(oda, tur){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v309";
+var APP_VER = "v310";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -2868,9 +2868,16 @@ function turOdadaAc(cid){
   var active=d.cycles.filter(function(c){return !c.bosaltimTarihi;});
   active.sort(function(a,b){ return cmpDate(b.gelisTarihi||"", a.gelisTarihi||""); });
   var idx=active.findIndex(function(c){return c.id===cid;});
-  turIndex = idx<0 ? 0 : idx;
   setTurMod("tek");
-  go("tur");
+  /* KRİTİK: go("tur") turIndex'i her zaman 0'a sıfırlar (bkz. go()) — o yüzden
+     hedef odanın index'ini go()'dan SONRA, view'i doğrudan atayıp render()
+     ile uygularız (turOdayaGit ile aynı desen). Aksi halde bu buton her zaman
+     en yeni odayı açar, kullanıcı hedef odaya "Sonraki oda" ile elle gitmek
+     zorunda kalır. */
+  turIndex = idx<0 ? 0 : idx;
+  view={name:"tur", id:null};
+  window.scrollTo(0,0);
+  render();
 }
 function renderPanoEdit(id){
   if(!can("edit")){ noPerm(); go("bugun"); return; }
