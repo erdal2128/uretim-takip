@@ -355,7 +355,7 @@ function fbInitAfterAuth(){
       }
       /* Senkronla gelmiş olabilecek tekrar eden günlük notları temizle */
       gunlukNotlariTekille(memData);
-      try{ localStorage.setItem(STORE_KEY, JSON.stringify(memData)); }catch(e){ console.warn("senkron sonrası yerel kayıt yazılamadı", e); }
+      persistEncrypted(JSON.stringify(memData));
       fbSetStatus(snap.metadata.fromCache?"offline":"synced");
       if(realChange && !isTyping()) render();
     }, function(err){ console.warn("snapshot",err); fbSetStatus("offline"); });
@@ -383,7 +383,7 @@ function fbInitAfterAuth(){
         var cloud={}; snap.forEach(function(dd){ cloud[dd.id]=1; });
         ((memData.gorevler)||[]).forEach(function(g){ if(!cloud[g.id]){ _syncedG[g.id]=cycleJSON(g); FB.gorevColl.doc(g.id).set(fbClean(g)).catch(function(e){ console.warn("ilk senkron setG",e); _syncFailCount++; fbSetStatus("hata"); }); } });
       }
-      try{ localStorage.setItem(STORE_KEY, JSON.stringify(memData)); }catch(e){ console.warn("senkron sonrası yerel kayıt yazılamadı", e); }
+      persistEncrypted(JSON.stringify(memData));
       if(realChange && !isTyping()) render();
     }, function(err){ console.warn("snapshotG",err); });
 
@@ -419,7 +419,7 @@ function fbInitAfterAuth(){
       _syncedSettings = j;
       var d=loadData();
       d.settings = remote;
-      try{ localStorage.setItem(STORE_KEY, JSON.stringify(memData)); }catch(e){ console.warn("senkron sonrası yerel kayıt yazılamadı", e); }
+      persistEncrypted(JSON.stringify(memData));
       if(!isTyping()) render();
     }, function(err){ console.warn("snapshotSettings",err); _settingsFirstSyncDone = true; });
     /* NOT: Önceden burada "6 sn sonra ne olursa olsun izin ver" diye bir güvenlik ağı vardı.
@@ -459,7 +459,7 @@ function hasatTartiGetir(oda, tur){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v310";
+var APP_VER = "v311";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -634,6 +634,74 @@ async function pinCoz(key, ivB64, ctB64){
   var pt=await crypto.subtle.decrypt({name:"AES-GCM", iv:bufFromB64(ivB64)}, key, bufFromB64(ctB64));
   return new TextDecoder().decode(pt);
 }
+/* ================= IndexedDB (ana veri deposu) =================
+   localStorage'ın ~5-10MB sınırı büyüdükçe (yıllar boyu biriken günlük
+   kayıtlar) yetersiz kalabilir. Ana şifreli veri bloğu (STORE_KEY) artık
+   IndexedDB'de tutuluyor — çok daha büyük kota. IndexedDB kullanılamazsa
+   (eski tarayıcı, kısıtlı bağlam) localStorage'a sessizce düşülür —
+   crypto.subtle yoksa düz metin moduna düşen mantıkla aynı desen.
+   Küçük anahtarlar (PIN_CFG_KEY, oturum vb.) hala localStorage/sessionStorage'da —
+   senkron okunmaları gerekiyor, boyutları zaten önemsiz. */
+var IDB_NAME = "utp_db", IDB_STORE = "kv", IDB_VERSION = 1;
+var _idbPromise = null;
+function idbAc(){
+  if(_idbPromise) return _idbPromise;
+  _idbPromise = new Promise(function(resolve, reject){
+    if(!window.indexedDB){ reject(new Error("indexedDB yok")); return; }
+    var req;
+    try{ req = indexedDB.open(IDB_NAME, IDB_VERSION); }catch(e){ reject(e); return; }
+    req.onupgradeneeded = function(){ req.result.createObjectStore(IDB_STORE); };
+    req.onsuccess = function(){ resolve(req.result); };
+    req.onerror = function(){ reject(req.error); };
+  });
+  return _idbPromise;
+}
+function idbGet(key){
+  return idbAc().then(function(db){
+    return new Promise(function(resolve, reject){
+      var req;
+      try{ req = db.transaction(IDB_STORE, "readonly").objectStore(IDB_STORE).get(key); }catch(e){ reject(e); return; }
+      req.onsuccess = function(){ resolve(req.result); };
+      req.onerror = function(){ reject(req.error); };
+    });
+  });
+}
+function idbSet(key, val){
+  return idbAc().then(function(db){
+    return new Promise(function(resolve, reject){
+      var tx;
+      try{ tx = db.transaction(IDB_STORE, "readwrite"); tx.objectStore(IDB_STORE).put(val, key); }catch(e){ reject(e); return; }
+      tx.oncomplete = function(){ resolve(); };
+      tx.onerror = function(){ reject(tx.error); };
+      tx.onabort = function(){ reject(tx.error||new Error("işlem iptal edildi")); };
+    });
+  });
+}
+/* STORE_KEY'i okur; IndexedDB'de yoksa localStorage'a bakar (eski v≤310
+   kurulumları ya da IndexedDB'nin henüz tarafına hiç yazılmamış olması) ve
+   bulursa TEK SEFERLİK IndexedDB'ye taşır (başarılı taşımadan SONRA
+   localStorage'dan siler — asıl kazanılan alan bu). */
+async function storeKeyOku(){
+  try{
+    var v = await idbGet(STORE_KEY);
+    if(v!=null) return v;
+  }catch(e){ console.warn("IndexedDB okunamadı, localStorage'a bakılıyor", e); }
+  var raw=null;
+  try{ raw=localStorage.getItem(STORE_KEY); }catch(e){ console.warn("localStorage okunamadı", e); }
+  if(raw!=null){
+    try{
+      await idbSet(STORE_KEY, raw);
+      try{ localStorage.removeItem(STORE_KEY); }catch(e){ console.warn("eski localStorage kaydı silinemedi (önemli değil)", e); }
+    }catch(e){ console.warn("IndexedDB'ye taşınamadı, localStorage'da kalmaya devam ediyor", e); }
+  }
+  return raw;
+}
+function storeKeyYaz(str){
+  return idbSet(STORE_KEY, str).catch(function(e){
+    console.warn("IndexedDB'ye yazılamadı, localStorage'a düşülüyor", e);
+    localStorage.setItem(STORE_KEY, str); /* kota hatası burada fırlarsa çağıran yakalar */
+  });
+}
 /* Üst üste gelen saveData() çağrıları birbirini yarışta ezmesin diye
    yazmalar bir zincirde (kuyrukta) sırayla işlenir. */
 var _pinSaveChain = Promise.resolve();
@@ -643,7 +711,8 @@ function persistEncrypted(jsonStr){
     return pinSifrele(_pinKey, jsonStr);
   }).then(function(payload){
     var cfg=pinCfgOku()||{};
-    localStorage.setItem(STORE_KEY, JSON.stringify({enc:1, salt:cfg.salt, iv:payload.iv, ct:payload.ct}));
+    return storeKeyYaz(JSON.stringify({enc:1, salt:cfg.salt, iv:payload.iv, ct:payload.ct}));
+  }).then(function(){
     _quotaWarnShown=false; /* bir sonraki dolma anında tekrar uyarabilelim */
   }).catch(function(e){
     console.error("şifreli kayıt yazılamadı", e);
@@ -8417,7 +8486,7 @@ async function pinKilidiAc(){
   if(!cfg || !cfg.salt){ renderPinSetup(false); return; }
   try{
     var key=await pinAnahtarTuret(p.trim(), cfg.salt);
-    var raw=localStorage.getItem(STORE_KEY);
+    var raw=await storeKeyOku();
     var env = raw ? JSON.parse(raw) : null;
     var plaintext = "{\"cycles\":[]}";
     if(env && env.enc===1){ plaintext = await pinCoz(key, env.iv, env.ct); }
@@ -8448,7 +8517,7 @@ async function pinDegistir(){
   if(!cfg || !cfg.salt){ toast("PIN kurulumu bulunamadı"); return; }
   try{
     var eskiKey=await pinAnahtarTuret(eski.trim(), cfg.salt);
-    var raw=localStorage.getItem(STORE_KEY);
+    var raw=await storeKeyOku();
     var env = raw ? JSON.parse(raw) : null;
     if(!env || env.enc!==1){ toast("Şifreli veri bulunamadı"); return; }
     await pinCoz(eskiKey, env.iv, env.ct); /* çözülmezse (yanlış PIN) catch'e düşer */
@@ -8508,7 +8577,7 @@ async function pinBoot(){
     var sess=JSON.parse(sessionStorage.getItem(PIN_SESSION_KEY)||"null");
     if(sess && sess.salt===cfg.salt){
       var key=await crypto.subtle.importKey("raw", bufFromB64(sess.raw), {name:"AES-GCM"}, true, ["encrypt","decrypt"]);
-      var raw2=localStorage.getItem(STORE_KEY);
+      var raw2=await storeKeyOku();
       var env2 = raw2 ? JSON.parse(raw2) : null;
       if(env2 && env2.enc===1){
         var plaintext2 = await pinCoz(key, env2.iv, env2.ct);
