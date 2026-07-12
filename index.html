@@ -459,7 +459,7 @@ function hasatTartiGetir(oda, tur){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v318";
+var APP_VER = "v319";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -5740,8 +5740,11 @@ function kompostEksikMaddeler(c){
   if(!c.kgNem) eksik.push("nem?");
   else if(nemNormalize(c.kgNem)!=="normal") eksik.push("nem: "+c.kgNem);
   if(!c.kgAmonyak) eksik.push("amonyak?");
-  else if(c.kgAmonyak==="belirsiz") eksik.push("amonyak belirsiz");
-  else if(c.kgAmonyak==="var" && !c.kgAmonyakHavalandirildi) eksik.push("amonyak var");
+  else if(c.kgAmonyak==="belirsiz") eksik.push("amonyak belirsiz — yarınki tur'da bak");
+  else if(c.kgAmonyak==="var" && !c.kgAmonyakHavalandirildi){
+    var amGun=c.kgAmonyakVarTarihi?(daysBetween(c.kgAmonyakVarTarihi,todayISO())||0):0;
+    eksik.push(amGun>=3 ? "amonyak 3+ gündür geçmedi — poşeti kes, kompostu havalandır" : "amonyak var — havalandırılıyor");
+  }
   if(!c.kgDuzeltme) eksik.push("düzeltme?");
   else if(c.kgDuzeltme==="gerek") eksik.push("kompost düzeltilmeli");
   return eksik;
@@ -5913,14 +5916,22 @@ function komposGelisKontrolHTML(c){
   } else if(c.kgAmonyak==="yok"){
     tamamlar.push("👃 Amonyak yok ✓");
   } else if(c.kgAmonyak==="belirsiz"){
-    maddeler.push(mddBekle("5. Amonyak: emin değil", "Biraz sonra tekrar kokla — netleşince gir.", amBtns));
+    maddeler.push(mddBekle("5. Amonyak: emin değil", "Bazen koku kendini belli etmez — yarınki Günlük Tur'da tekrar kokla, netleşince gir.", amBtns));
   } else {
     if(c.kgAmonyakHavalandirildi){
-      tamamlar.push("👃 Amonyak vardı · havalandırıldı ✓");
+      tamamlar.push("👃 Amonyak vardı · koku geçti ✓");
     } else {
+      /* KRİTİK: Amonyak "Var" işaretlenince havalandırma açılır, kokunun
+         çıkması beklenir. 3 gün içinde geçmezse kompostta yoğun amonyak
+         var demektir — poşet kesilip kompost havalandırılmalı. */
+      var amGun=c.kgAmonyakVarTarihi?(daysBetween(c.kgAmonyakVarTarihi,todayISO())||0):0;
       var amAksiyon='<div style="margin-top:6px;">'+amBtns
-        +'<button class="btn small" style="margin-top:6px;" onclick="setKG3(\''+c.id+'\',\'kgAmonyakHavalandirildi\',true)">✓ Havalandırdım / takibe aldım</button></div>';
-      maddeler.push(mddIkaz("5. Amonyak VAR", "Firma amonyağı tam atmamış olabilir. Havayı aç · kompostu havalandır · takip et.", amAksiyon));
+        +'<button class="btn small" style="margin-top:6px;" onclick="setKG3(\''+c.id+'\',\'kgAmonyakHavalandirildi\',true)">✓ Koku geçti</button></div>';
+      if(amGun>=3){
+        maddeler.push(mddIkaz("5. Amonyak YOĞUN — "+amGun+" gündür geçmedi", "Kompostta yoğun amonyak var → poşeti kes, kompostu havalandır.", amAksiyon));
+      } else {
+        maddeler.push(mddBekle("5. Amonyak var", "Havalandırma açıldı, kokunun çıkması bekleniyor ("+amGun+". gün) — 3 gün içinde geçmezse poşet kesilmesi gerekecek.", amAksiyon));
+      }
     }
   }
 
@@ -5981,9 +5992,19 @@ function mddBekle(baslik, aksiyon, input){
 function setKG3(id,field,val){
   if(!can("edit")) return noPerm();
   var d=loadData(); var c=d.cycles.find(function(x){return x.id===id;}); if(!c) return;
+  if(field==="kgAmonyak"){
+    if(val==="var"){
+      /* İlk kez "Var" işaretleniyorsa gün sayacı başlar — tekrar "Var"a
+         basılırsa (zaten var'ken) tarihi SIFIRLAMAYIZ, aksi halde 3 günlük
+         sayaç hiç ilerlemez. */
+      if(c.kgAmonyak!=="var") c.kgAmonyakVarTarihi=todayISO();
+    } else {
+      /* yok/belirsiz'e dönülürse havalandırma onayını ve gün sayacını temizle */
+      c.kgAmonyakHavalandirildi=false;
+      c.kgAmonyakVarTarihi="";
+    }
+  }
   c[field]=val;
-  /* Amonyak var→yok/belirsiz değişirse havalandırma onayını temizle */
-  if(field==="kgAmonyak" && val!=="var") c.kgAmonyakHavalandirildi=false;
   touchCycle(c); saveData(); renderDetail(id);
 }
 function setTurNumarasi(id, val){
