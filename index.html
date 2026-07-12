@@ -459,7 +459,7 @@ function hasatTartiGetir(oda, tur){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v307";
+var APP_VER = "v308";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -2416,23 +2416,20 @@ function esc(s){ return (s===null||s===undefined)?"":(""+s).replace(/&/g,"&amp;"
    yapılıyordu — Poşet/Tiftik/Tırmık/Hava seçilse bile ekranda hep "Toprak"
    yazıyordu (kullanıcı Poşet seçip "neden Toprak yazıyor" diye şaşırıyordu).
    Artık TÜM referans tipleri doğru gösteriliyor. */
-var REF_ETIKET_TAM={gelis:"Geliş", poset:"Poşet", tiftik:"Tiftik", toprak:"Toprak", tirmik:"Tırmık", hava:"Hava"};
 function refEtiketi(ref){
   var oz=getOzelRoller().find(function(r){return r.v===ref;});
   if(oz) return oz.l;
   return REF_ETIKET_TAM[ref] || ref || "Toprak";
 }
 /* TEK KAYNAK (SSOT): Sistemin bütün "built-in" dönüm noktaları burada
-   tanımlanır. Hem "ref" dropdown'ı (Ayarlar → Protokol, "hangi olaydan kaç
-   gün sonra") hem "Rol" dropdown'ı (Ayarlar → Protokol, "bu satır hangi
-   olayı TANIMLIYOR") bu TEK diziden türetilir. Eskiden iki ayrı elle yazılmış
-   liste vardı (REF_SECENEKLERI ve ROL_ETIKET) ve birbirinden bağımsız
-   güncellendiği için senkron kalmıyorlardı — sonuç: "hava", "kompost indirme"
-   gibi sistemde zaten kullanılan roller Rol dropdown'ında hiç görünmüyordu,
-   kullanıcı onları elle atayamıyordu (sadece varsayılan protokolde otomatik
-   geliyordu, ama biri bozar/değiştirmek isterse şansı yoktu). Yeni bir
-   built-in dönüm noktası eklenecekse SADECE burası güncellenmeli — iki
-   dropdown da otomatik senkron kalır. */
+   tanımlanır. "ref" dropdown'ı, "Rol" dropdown'ı VE etiket gösterimi
+   (REF_ETIKET_TAM, "X günü" yazıları) hep bu TEK diziden türetilir. Eskiden
+   üç ayrı elle yazılmış liste vardı ve birbirinden bağımsız güncellendiği
+   için senkron kalmıyorlardı — sonuç: "hava", "kompost indirme" gibi
+   sistemde zaten kullanılan roller Rol dropdown'ında hiç görünmüyordu, ve
+   flas1/flas2/bosaltma gibi roller ekranda çirkin ham anahtar ("flas1
+   günü") olarak görünüyordu. Yeni bir built-in dönüm noktası eklenecekse
+   SADECE burası güncellenmeli — üçü de otomatik senkron kalır. */
 var BUILTIN_ROLLER=[
   {v:"kompostindirme", l:"Kompost indirme", e:"📥"},
   {v:"poset",           l:"Poşet kesimi",    e:"🔓"},
@@ -2448,6 +2445,11 @@ var BUILTIN_ROLLER=[
   {v:"flas2bitis",      l:"2. Flaş Bitişi",  e:"🍄"},
   {v:"bosaltma",        l:"Oda Boşaltma",    e:"📤"}
 ];
+/* "X günü" gibi kısa etiketler için (uzun açıklama gerekmeyen yerlerde) —
+   BUILTIN_ROLLER'dan otomatik türetilir, artık hiçbir rol "çıplak anahtar"
+   (örn. "flas1") olarak ekranda kalmaz. */
+var REF_ETIKET_TAM={gelis:"Geliş"};
+BUILTIN_ROLLER.forEach(function(r){ REF_ETIKET_TAM[r.v]=r.l; });
 /* Referans noktası seçim listesi — bir protokol satırının "hangi olaydan kaç
    gün sonra/önce" olduğunu tanımlar. Kullanıcı bunu dropdown'dan seçer,
    sistem hesaplamayı (protokolTarih/protokolReferansTarihi) buna göre yapar.
