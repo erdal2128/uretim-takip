@@ -459,7 +459,7 @@ function hasatTartiGetir(oda, tur){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v306";
+var APP_VER = "v307";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -2422,23 +2422,43 @@ function refEtiketi(ref){
   if(oz) return oz.l;
   return REF_ETIKET_TAM[ref] || ref || "Toprak";
 }
+/* TEK KAYNAK (SSOT): Sistemin bütün "built-in" dönüm noktaları burada
+   tanımlanır. Hem "ref" dropdown'ı (Ayarlar → Protokol, "hangi olaydan kaç
+   gün sonra") hem "Rol" dropdown'ı (Ayarlar → Protokol, "bu satır hangi
+   olayı TANIMLIYOR") bu TEK diziden türetilir. Eskiden iki ayrı elle yazılmış
+   liste vardı (REF_SECENEKLERI ve ROL_ETIKET) ve birbirinden bağımsız
+   güncellendiği için senkron kalmıyorlardı — sonuç: "hava", "kompost indirme"
+   gibi sistemde zaten kullanılan roller Rol dropdown'ında hiç görünmüyordu,
+   kullanıcı onları elle atayamıyordu (sadece varsayılan protokolde otomatik
+   geliyordu, ama biri bozar/değiştirmek isterse şansı yoktu). Yeni bir
+   built-in dönüm noktası eklenecekse SADECE burası güncellenmeli — iki
+   dropdown da otomatik senkron kalır. */
+var BUILTIN_ROLLER=[
+  {v:"kompostindirme", l:"Kompost indirme", e:"📥"},
+  {v:"poset",           l:"Poşet kesimi",    e:"🔓"},
+  {v:"tiftik",          l:"Tiftik",          e:"🌾"},
+  {v:"toprak",          l:"Toprak serimi",   e:"🟫"},
+  {v:"tirmik",          l:"Tırmık",          e:"🔨"},
+  {v:"hava",            l:"Havaya başlama",  e:"💨"},
+  {v:"hasat",           l:"Hasat başlangıcı",e:"🧺"},
+  {v:"flas1",           l:"1. Flaş",         e:"🍄"},
+  {v:"flas1bitis",      l:"1. Flaş Bitişi",  e:"🍄"},
+  {v:"flasarasi",       l:"Flaş Arası",      e:"⏸️"},
+  {v:"flas2",           l:"2. Flaş",         e:"🍄"},
+  {v:"flas2bitis",      l:"2. Flaş Bitişi",  e:"🍄"},
+  {v:"bosaltma",        l:"Oda Boşaltma",    e:"📤"}
+];
 /* Referans noktası seçim listesi — bir protokol satırının "hangi olaydan kaç
    gün sonra/önce" olduğunu tanımlar. Kullanıcı bunu dropdown'dan seçer,
    sistem hesaplamayı (protokolTarih/protokolReferansTarihi) buna göre yapar.
-   7 sabit (built-in) referansın yanında, kullanıcı KENDİ referans noktalarını
-   da ekleyebilir (örn. "Misket atma", "1. Pin") — d.settings.ozelRoller'da
-   saklanır. Arka uçta ekstra kod gerekmez: protokolReferansTarihi() zaten
-   herhangi bir "rol" etiketli satırı (built-in ya da özel fark etmez)
-   protokolRolIdx() ile buluyor. */
-var REF_SECENEKLERI=[
-  {v:"gelis", l:"Geliş"},
-  {v:"kompostindirme", l:"Kompost indirme"},
-  {v:"poset", l:"Poşet kesimi"},
-  {v:"tiftik", l:"Tiftik"},
-  {v:"toprak", l:"Toprak serimi"},
-  {v:"tirmik", l:"Tırmık"},
-  {v:"hava", l:"Hava"}
-];
+   BUILTIN_ROLLER'daki tüm dönüm noktalarının yanında, kullanıcı KENDİ
+   referans noktalarını da ekleyebilir (örn. "Misket atma", "1. Pin") —
+   d.settings.ozelRoller'da saklanır. Arka uçta ekstra kod gerekmez:
+   protokolReferansTarihi() zaten herhangi bir "rol" etiketli satırı
+   (built-in ya da özel fark etmez) protokolRolIdx() ile buluyor. */
+var REF_SECENEKLERI=[{v:"gelis", l:"Geliş"}].concat(
+  BUILTIN_ROLLER.map(function(r){ return {v:r.v, l:r.l}; })
+);
 function getOzelRoller(){
   var d=loadData();
   return (d.settings && Array.isArray(d.settings.ozelRoller)) ? d.settings.ozelRoller : [];
@@ -9614,11 +9634,12 @@ function renderAyarlar(){
     h+='<div class="card"><div class="sec-title" style="margin-top:0;">🌱 1. Üretim Protokolü</div>'
       +'<div class="muted" style="margin-bottom:8px;">Üretimle ilgili fiziksel işler: tiftik, tırmık, toprak serimi, poşet açma gibi. Ekibin hangi gün ne iş yapacağını burada tanımlarsın. Gün, "Geliş" veya "Toprak serimi" tarihine göre sayılır (örn. Geliş +6 = kompost geldikten 6 gün sonra).</div>';
     var UP_sirali=PR.map(function(s,idx){return {s:s, idx:idx};}).filter(function(x){return !x.s.silindi && x.s.tip==="olay";}).sort(function(a,b){return protokolSiraAnahtari(a.s)-protokolSiraAnahtari(b.s);});
-    var ROL_ETIKET={"":"— rol yok —", poset:"🔓 Poşet", tiftik:"🌾 Tiftik", toprak:"🟫 Toprak", tirmik:"🔨 Tırmık", hasat:"🧺 Hasat"};
+    var ROL_ETIKET={"":"— rol yok —"};
+    BUILTIN_ROLLER.forEach(function(r){ ROL_ETIKET[r.v]=r.e+" "+r.l; });
     getOzelRoller().forEach(function(r){ ROL_ETIKET[r.v]="⭐ "+r.l; });
     h+='</div>';
     h+='<div class="card"><div class="sec-title" style="margin-top:0;">⭐ Özel Referans Noktaları</div>'
-      +'<div class="muted" style="margin-bottom:8px;">Başka satırların KENDİSİNİ referans alacağı dönüm noktaları — sadece 7 yerleşik olanla (Geliş/Toprak/Poşet vb.) sınırlı değilsin, "1. Flaş", "Kök temizliği", "Oda boşaltma" gibi kendi zincirini kurabilirsin. (Bir satır referans olsun istemiyorsan, buraya değil aşağıdaki "+ Yeni görev ekle"ye ekle — o zaman başka satırlar ona göre sayılamaz.)</div>';
+      +'<div class="muted" style="margin-bottom:8px;">Başka satırların KENDİSİNİ referans alacağı dönüm noktaları — Geliş/Kompost indirme/Poşet/Tiftik/Toprak/Tırmık/Hava/Hasat/Flaş aşamaları/Boşaltma zaten yerleşik (Rol dropdown\'ından herhangi bir satıra atanabilir). Bunlarla sınırlı değilsin, "Kök temizliği", "Misket atma" gibi tamamen kendi dönüm noktanı da ekleyebilirsin. (Bir satır referans olsun istemiyorsan, buraya değil aşağıdaki "+ Yeni görev ekle"ye ekle — o zaman başka satırlar ona göre sayılamaz.)</div>';
     var _oz=getOzelRoller();
     if(_oz.length){
       _oz.forEach(function(r){
