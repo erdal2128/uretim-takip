@@ -429,7 +429,7 @@ function fbInitAfterAuth(){
       }
       /* Senkronla gelmiş olabilecek tekrar eden günlük notları temizle */
       gunlukNotlariTekille(memData);
-      persistEncrypted(JSON.stringify(memData));
+      persistData(JSON.stringify(memData));
       fbSetStatus(snap.metadata.fromCache?"offline":"synced");
       if(realChange && !isTyping()) render();
     }, function(err){ console.warn("snapshot",err); fbSetStatus("offline"); });
@@ -464,7 +464,7 @@ function fbInitAfterAuth(){
          kopya görmesin. */
       if(gorevlerMukerrerleriBirlestir(memData)) saveData();
       gorevMukerrerBulutTemizle();
-      persistEncrypted(JSON.stringify(memData));
+      persistData(JSON.stringify(memData));
       if(realChange && !isTyping()) render();
     }, function(err){ console.warn("snapshotG",err); });
 
@@ -492,7 +492,7 @@ function fbInitAfterAuth(){
         var cloud={}; snap.forEach(function(dd){ cloud[dd.id]=1; });
         ((memData.arizalar)||[]).forEach(function(a){ if(!cloud[a.id]){ _syncedA[a.id]=cycleJSON(a); FB.arizaColl.doc(a.id).set(fbClean(a)).catch(function(e){ console.warn("ilk senkron setA",e); _syncFailCount++; fbSetStatus("hata"); }); } });
       }
-      persistEncrypted(JSON.stringify(memData));
+      persistData(JSON.stringify(memData));
       if(realChange && !isTyping()) render();
     }, function(err){ console.warn("snapshotA",err); });
 
@@ -561,7 +561,7 @@ function handleSettingsSnapshot(snap){
   _syncedSettings = j;
   var d=loadData();
   d.settings = remote;
-  persistEncrypted(JSON.stringify(memData));
+  persistData(JSON.stringify(memData));
   /* d.settings ARTIK gerçek bulut verisini taşıyor — bootwait (varsa) bu
      GÜNCEL veriyle çözülsün ki isSetupNeeded() doğru karar versin. Çözüldüyse
      loadRole()+render() zaten çağrıldı, alttaki render()'ı tekrar etmeye
@@ -597,7 +597,7 @@ function hasatTartiGetir(oda, tur){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v334";
+var APP_VER = "v335";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -608,15 +608,14 @@ function loadData(){
   if(raw){
     try{
       memData = JSON.parse(raw);
-      /* GÜVENLİK AĞI: raw, PIN ile şifrelenmiş zarf ({enc:1,salt,iv,ct}) olabilir —
-         bu senkron yol onu ÇÖZEMEZ (şifre çözme asenkron). Zarfı gerçek veriymiş
-         gibi kabul edip memData.cycles'ı sessizce boşaltmak yerine (geçmişte tam
-         olarak bu, "odalar silindi" görünümüne yol açan bir veri kaybı bugı
-         yaratmıştı — bkz. resumeYenidenYukle), burada NET biçimde reddedip
-         pinBoot/resumeYenidenYukle'nin doğru (asenkron) yoldan doldurmasını
-         bekleriz. */
+      /* GÜVENLİK AĞI: raw, eski (PIN kilidi kaldırılmadan önceki) şifreli zarf
+         ({enc:1,salt,iv,ct}) olabilir — bu senkron yol onu ÇÖZEMEZ. Zarfı
+         gerçek veriymiş gibi kabul edip memData.cycles'ı sessizce
+         boşaltmak yerine (geçmişte "odalar silindi" görünümüne yol açan bir
+         veri kaybı bugı yaratmıştı) burada NET biçimde reddedip appBoot'un
+         doğru (asenkron, göç mantıklı) yoldan doldurmasını bekleriz. */
       if(memData && memData.enc===1){
-        console.error("loadData(): şifreli zarf senkron yoldan okunmaya çalışıldı — çözülmeden kullanılmayacak");
+        console.error("loadData(): eski şifreli zarf senkron yoldan okunmaya çalışıldı — çözülmeden kullanılmayacak");
         memData = null;
         return {cycles:[]};
       }
@@ -634,10 +633,10 @@ function loadData(){
   memDataNormalizeVeGoc();
   return memData;
 }
-/* loadData()'nın alan-varsayılanı + tek seferlik göç mantığı — PIN akışları
-   (pinBoot/pinKilidiAc/resumeYenidenYukle) memData'yı loadData()'nın senkron
-   soğuk yolundan GEÇMEDEN doğrudan atadığı için (şifre çözme asenkron olduğu
-   için zorunlu), bu adımı KENDİLERİ de çağırmalı — aksi halde örn. yeni bir
+/* loadData()'nın alan-varsayılanı + tek seferlik göç mantığı — appBoot/
+   resumeYenidenYukle memData'yı loadData()'nın senkron soğuk yolundan
+   GEÇMEDEN doğrudan atadığı için (IndexedDB okuması asenkron olduğu için
+   zorunlu), bu adımı KENDİLERİ de çağırmalı — aksi halde örn. yeni bir
    kurulumda memData={cycles:[]} kalır, memData.gorevler hiç oluşmaz ve ilk
    "Görev ekle" TypeError ile çöker (KRİTİK BUG, düzeltildi). */
 function memDataNormalizeVeGoc(){
@@ -816,7 +815,7 @@ function gunlukKayitlariniBirlestir(){
 var _quotaWarnShown=false;
 function saveData(){
   if(!memData || typeof memData !== "object") return; /* null/bozuk veriyi asla kaydetme */
-  persistEncrypted(JSON.stringify(memData));
+  persistData(JSON.stringify(memData));
   fbPushDirty();
   fbPushDirtyGorev();
   fbPushDirtyAriza();
@@ -824,53 +823,11 @@ function saveData(){
   autoSnapshotThrottled();
   cloudYedekTetikle();
 }
-/* ================= PIN KİLİDİ + YEREL VERİ ŞİFRELEME =================
-   Cihazdaki iş verisi (ciro/hasat/personel kayıtları) artık düz metin değil,
-   kullanıcının belirlediği PIN'den türetilen bir anahtarla AES-256-GCM ile
-   şifrelenmiş olarak localStorage'da tutuluyor. PIN yalnızca bu cihazda
-   bilinir, hiçbir yere (buluta dahil) gönderilmez — unutulursa cihazdaki
-   şifreli veri kurtarılamaz (bulut senkronu açıksa oradan geri gelir).
-   Kilit açma anahtarı sessionStorage'da tutulur: sekme tamamen kapanınca
-   silinir, aynı sekmede sayfa yenilemede tekrar PIN sormaz — güvenlik ile
-   kullanılabilirlik arasında bilinçli bir denge. */
-var PIN_CFG_KEY = "utp_pinCfg";        /* localStorage: {salt} — PIN'in kendisi HİÇ saklanmaz */
-var PIN_SESSION_KEY = "utp_pinOturum"; /* sessionStorage: türetilmiş ham anahtar — sekme ömrü */
-var _pinKey = null; /* CryptoKey — yalnızca bellekte */
-function b64FromBuf(buf){
-  var bytes=new Uint8Array(buf), bin="";
-  for(var i=0;i<bytes.length;i++) bin+=String.fromCharCode(bytes[i]);
-  return btoa(bin);
-}
-function bufFromB64(b64){
-  var bin=atob(b64), bytes=new Uint8Array(bin.length);
-  for(var i=0;i<bin.length;i++) bytes[i]=bin.charCodeAt(i);
-  return bytes.buffer;
-}
-function pinCfgOku(){ try{ return JSON.parse(localStorage.getItem(PIN_CFG_KEY)||"null"); }catch(e){ return null; } }
-async function pinAnahtarTuret(pin, saltB64){
-  var baseKey=await crypto.subtle.importKey("raw", new TextEncoder().encode(pin), {name:"PBKDF2"}, false, ["deriveKey"]);
-  return crypto.subtle.deriveKey(
-    {name:"PBKDF2", salt:bufFromB64(saltB64), iterations:150000, hash:"SHA-256"},
-    baseKey, {name:"AES-GCM", length:256}, true, ["encrypt","decrypt"]
-  );
-}
-async function pinSifrele(key, metin){
-  var iv=crypto.getRandomValues(new Uint8Array(12));
-  var ct=await crypto.subtle.encrypt({name:"AES-GCM", iv:iv}, key, new TextEncoder().encode(metin));
-  return {iv:b64FromBuf(iv), ct:b64FromBuf(ct)};
-}
-async function pinCoz(key, ivB64, ctB64){
-  var pt=await crypto.subtle.decrypt({name:"AES-GCM", iv:bufFromB64(ivB64)}, key, bufFromB64(ctB64));
-  return new TextDecoder().decode(pt);
-}
 /* ================= IndexedDB (ana veri deposu) =================
    localStorage'ın ~5-10MB sınırı büyüdükçe (yıllar boyu biriken günlük
-   kayıtlar) yetersiz kalabilir. Ana şifreli veri bloğu (STORE_KEY) artık
-   IndexedDB'de tutuluyor — çok daha büyük kota. IndexedDB kullanılamazsa
-   (eski tarayıcı, kısıtlı bağlam) localStorage'a sessizce düşülür —
-   crypto.subtle yoksa düz metin moduna düşen mantıkla aynı desen.
-   Küçük anahtarlar (PIN_CFG_KEY, oturum vb.) hala localStorage/sessionStorage'da —
-   senkron okunmaları gerekiyor, boyutları zaten önemsiz. */
+   kayıtlar) yetersiz kalabilir. Ana veri bloğu (STORE_KEY) IndexedDB'de
+   tutuluyor — çok daha büyük kota. IndexedDB kullanılamazsa (eski tarayıcı,
+   kısıtlı bağlam) localStorage'a sessizce düşülür. */
 var IDB_NAME = "utp_db", IDB_STORE = "kv", IDB_VERSION = 1;
 var _idbPromise = null;
 function idbAc(){
@@ -934,17 +891,13 @@ function storeKeyYaz(str){
 /* Üst üste gelen saveData() çağrıları birbirini yarışta ezmesin diye
    yazmalar bir zincirde (kuyrukta) sırayla işlenir. */
 var _pinSaveChain = Promise.resolve();
-function persistEncrypted(jsonStr){
-  if(!_pinKey){ return; } /* kilit açılmadan buraya düşülmemeli, güvenlik ağı */
+function persistData(jsonStr){
   _pinSaveChain = _pinSaveChain.then(function(){
-    return pinSifrele(_pinKey, jsonStr);
-  }).then(function(payload){
-    var cfg=pinCfgOku()||{};
-    return storeKeyYaz(JSON.stringify({enc:1, salt:cfg.salt, iv:payload.iv, ct:payload.ct}));
+    return storeKeyYaz(jsonStr);
   }).then(function(){
     _quotaWarnShown=false; /* bir sonraki dolma anında tekrar uyarabilelim */
   }).catch(function(e){
-    console.error("şifreli kayıt yazılamadı", e);
+    console.error("kayıt yazılamadı", e);
     /* KRİTİK: Depolama dolduğunda sessizce geçmek veri kaybına yol açar —
        kullanıcı "kaydettim" sanır ama değişiklik sadece bellekte (memData)
        kalır, sayfa kapanınca kaybolur. Kota dolma hatası özel olarak
@@ -8977,173 +8930,63 @@ function renderLogin(){
   el("app").innerHTML=h;
 }
 function navRow(){
-  return '<div style="text-align:center; padding:14px 0 4px;"><button class="btn ghost small" onclick="logout()">🚪 Çıkış</button> <button class="btn ghost small" onclick="pinKilitle()">🔒 Kilitle</button></div>'
+  return '<div style="text-align:center; padding:14px 0 4px;"><button class="btn ghost small" onclick="logout()">🚪 Çıkış</button></div>'
     +'<div class="muted" style="text-align:center; font-size:12px; padding-bottom:8px;">Giriş yapan: '+(currentRole?ROLE_DEFS[currentRole].ad:"-")+'</div>';
 }
-/* ---------- PIN kilidi ekranları (kurulum / kilit açma) ---------- */
-function renderPinSetup(mevcutVeriVar){
-  el("hdrTitle").textContent="Kilit Kurulumu";
-  var h='<div class="card" style="margin-bottom:100px;">'
-    +'<div style="text-align:center; margin-bottom:20px;"><span style="font-size:48px;">🔒</span></div>'
-    +'<div class="sec-title" style="margin-top:0;">Cihaz PIN Kilidi</div>'
-    +'<div class="muted" style="margin-bottom:14px; font-size:14px;">Bu cihazdaki veriler artık PIN ile şifrelenecek. '
-    +(mevcutVeriVar?'Mevcut verilerin korunuyor, sadece şifreleniyor. ':'')
-    +'PIN\'i unutursan bu cihazdaki şifreli veri kurtarılamaz (bulut senkronu açıksa oradan geri gelir) — güvenli bir yere not al.</div>'
-    +'<label>PIN belirle (en az 4 hane)</label><input type="password" inputmode="numeric" id="pin_yeni" autocomplete="off" placeholder="ör. 4821" minlength="4">'
-    +'<label>PIN tekrar</label><input type="password" inputmode="numeric" id="pin_yeni2" autocomplete="off" placeholder="tekrar gir" minlength="4">'
-    +'<div id="pin_hata" style="color:#c0291f; font-weight:600; font-size:14px; margin:8px 0;"></div>'
-    +'<div style="display:flex; gap:10px; align-items:center; margin:14px 0; padding:12px; background:var(--amber-soft); border-radius:8px;">'
-      +'<span style="font-size:18px;">💡</span><span style="font-size:13px;"><b>Not:</b> Bu PIN rol şifrelerinden farklıdır, cihazın kendisinin kilididir.</span>'
-    +'</div>'
-    +'<button class="btn" style="width:100%;" onclick="pinKurulumKaydet()">✓ PIN Belirle ve Devam Et</button>'
-    +'</div>';
-  el("app").innerHTML=h;
+/* ---------- Uygulama açılışı ---------- */
+/* PIN kilidi KALDIRILDI (kullanıcı isteği: "her seferinde PIN girmek çok zor
+   oluyor"). Veri artık düz metin olarak IndexedDB'de tutuluyor.
+   GEÇİŞ: bu güncellemeden ÖNCE PIN ile şifrelenmiş veri barındıran
+   cihazlarda ({enc:1,...} zarfı) — sekmede hâlâ geçerli bir oturum anahtarı
+   varsa (sessionStorage'da, henüz silinmemişse) veriyi SESSİZCE çözüp düz
+   metne taşırız, kullanıcı hiçbir şey fark etmez. Oturum anahtarı yoksa
+   (kilit zaten kapanmış/süresi dolmuşsa) veriyi çözecek bir yol kalmaz —
+   yerel zarfı atıp boş başlarız; gerçek veri Firestore'da (bulutta, hiç
+   şifrelenmemiş) zaten güvende, bulut bağlantısı kurulur kurulmaz saniyeler
+   içinde otomatik geri gelir (bkz. FB.coll/gorevColl/arizaColl onSnapshot). */
+var PIN_CFG_KEY_ESKI = "utp_pinCfg";
+var PIN_SESSION_KEY_ESKI = "utp_pinOturum";
+function bufFromB64(b64){
+  var bin=atob(b64), bytes=new Uint8Array(bin.length);
+  for(var i=0;i<bin.length;i++) bytes[i]=bin.charCodeAt(i);
+  return bytes.buffer;
 }
-function renderPinUnlock(hataMsg){
-  el("hdrTitle").textContent="Kilit Açma";
-  var h='<div class="card" style="margin-bottom:100px;">'
-    +'<div style="text-align:center; margin-bottom:20px;"><span style="font-size:48px;">🔒</span></div>'
-    +'<div class="sec-title" style="margin-top:0;">Cihaz Kilidi</div>'
-    +'<div class="muted" style="margin-bottom:14px; font-size:14px;">Devam etmek için PIN\'i gir.</div>'
-    +'<label>PIN</label><input type="password" inputmode="numeric" id="pin_giris" autocomplete="off" placeholder="PIN" onkeydown="if(event.key===\'Enter\') pinKilidiAc();">'
-    +(hataMsg?('<div style="color:#c0291f; font-weight:600; font-size:14px; margin:8px 0;">'+esc(hataMsg)+'</div>'):'')
-    +'<button class="btn" style="width:100%;margin-top:10px;" onclick="pinKilidiAc()">🔓 Kilidi Aç</button>'
-    +'</div>';
-  el("app").innerHTML=h;
-}
-async function pinKurulumKaydet(){
-  var p1=(el("pin_yeni")||{}).value||"";
-  var p2=(el("pin_yeni2")||{}).value||"";
-  var hataEl=el("pin_hata"); if(hataEl) hataEl.textContent="";
-  if(p1.trim().length<4){ var m="PIN en az 4 haneli olmalı."; if(hataEl) hataEl.textContent=m; toast(m); return; }
-  if(p1.trim()!==p2.trim()){ var m2="PIN'ler eşleşmiyor."; if(hataEl) hataEl.textContent=m2; toast(m2); return; }
-  if(!window.crypto || !window.crypto.subtle){
-    var m3="❌ HTTPS bağlantı gerekli — sayfayı yenile."; if(hataEl) hataEl.textContent=m3; return;
-  }
-  var salt=b64FromBuf(crypto.getRandomValues(new Uint8Array(16)).buffer);
-  localStorage.setItem(PIN_CFG_KEY, JSON.stringify({salt:salt}));
-  _pinKey = await pinAnahtarTuret(p1.trim(), salt);
+async function eskiSifreliZarfiCozmeyeCalis(env){
   try{
-    var rawKey=await crypto.subtle.exportKey("raw", _pinKey);
-    sessionStorage.setItem(PIN_SESSION_KEY, JSON.stringify({salt:salt, raw:b64FromBuf(rawKey)}));
-  }catch(e){ console.warn("oturum anahtarı kaydedilemedi", e); }
-  memDataNormalizeVeGoc();
-  persistEncrypted(JSON.stringify(memData));
+    if(!window.crypto || !window.crypto.subtle) return null;
+    var cfg=JSON.parse(localStorage.getItem(PIN_CFG_KEY_ESKI)||"null");
+    var sess=JSON.parse(sessionStorage.getItem(PIN_SESSION_KEY_ESKI)||"null");
+    if(!cfg || !sess || sess.salt!==cfg.salt) return null;
+    var key=await crypto.subtle.importKey("raw", bufFromB64(sess.raw), {name:"AES-GCM"}, true, ["decrypt"]);
+    var pt=await crypto.subtle.decrypt({name:"AES-GCM", iv:bufFromB64(env.iv)}, key, bufFromB64(env.ct));
+    return new TextDecoder().decode(pt);
+  }catch(e){ console.warn("eski şifreli veri çözülemedi (oturum geçersiz)", e); return null; }
+}
+async function appBoot(){
+  el("app").innerHTML='<div class="card" style="text-align:center; padding:40px 20px;"><span class="muted">Yükleniyor…</span></div>';
+  var raw=null;
+  try{ raw = await storeKeyOku(); }catch(e){ console.warn("veri okunamadı", e); }
+  var parsed=null;
+  if(raw){
+    try{ parsed=JSON.parse(raw); }
+    catch(e){
+      console.error("Kayıtlı veri bozuk — JSON.parse hatası", e);
+      try{ localStorage.setItem(STORE_KEY+"_bozuk_"+Date.now(), raw); }catch(e2){ console.error("bozuk veri yedeklenemedi", e2); }
+      _veriOkumaHatasi=true;
+    }
+  }
+  if(parsed && parsed.enc===1){
+    var plaintext = await eskiSifreliZarfiCozmeyeCalis(parsed);
+    memData = plaintext ? JSON.parse(plaintext) : {cycles:[]};
+    memDataNormalizeVeGoc();
+    persistData(JSON.stringify(memData)); /* eski şifreli zarfı düz metinle değiştir, bir daha PIN sorulmasın */
+    if(plaintext){ try{ localStorage.removeItem(PIN_CFG_KEY_ESKI); sessionStorage.removeItem(PIN_SESSION_KEY_ESKI); }catch(e){ console.warn("eski PIN anahtarları temizlenemedi", e); } }
+    else console.warn("Eski PIN kilidinin oturumu geçmiş — yerel veri buluttan yeniden gelecek");
+  } else {
+    memData = parsed || {cycles:[]};
+    memDataNormalizeVeGoc();
+  }
   bootApp();
-}
-async function pinKilidiAc(){
-  var p=(el("pin_giris")||{}).value||"";
-  if(!p.trim()){ toast("PIN gir"); return; }
-  var cfg=pinCfgOku();
-  if(!cfg || !cfg.salt){ renderPinSetup(false); return; }
-  try{
-    var key=await pinAnahtarTuret(p.trim(), cfg.salt);
-    var raw=await storeKeyOku();
-    var env = raw ? JSON.parse(raw) : null;
-    var plaintext = "{\"cycles\":[]}";
-    if(env && env.enc===1){ plaintext = await pinCoz(key, env.iv, env.ct); }
-    memData = JSON.parse(plaintext);
-    _pinKey = key;
-    memDataNormalizeVeGoc();
-    try{
-      var rawKey=await crypto.subtle.exportKey("raw", key);
-      sessionStorage.setItem(PIN_SESSION_KEY, JSON.stringify({salt:cfg.salt, raw:b64FromBuf(rawKey)}));
-    }catch(e){ console.warn("oturum anahtarı kaydedilemedi", e); }
-    bootApp();
-  }catch(e){
-    console.warn("PIN açma hatası", e);
-    renderPinUnlock("PIN yanlış, tekrar dene.");
-  }
-}
-function pinKilitle(){
-  _pinKey=null;
-  try{ sessionStorage.removeItem(PIN_SESSION_KEY); }catch(e){ console.warn("oturum anahtarı silinemedi", e); }
-  memData=null;
-  renderPinUnlock();
-}
-async function pinDegistir(){
-  if(!can("manage")) return noPerm();
-  var eski=(el("pin_eski")||{}).value||"";
-  var yeni=(el("pin_yeni_d")||{}).value||"";
-  if(yeni.trim().length<4){ toast("Yeni PIN en az 4 haneli olmalı"); return; }
-  var cfg=pinCfgOku();
-  if(!cfg || !cfg.salt){ toast("PIN kurulumu bulunamadı"); return; }
-  try{
-    var eskiKey=await pinAnahtarTuret(eski.trim(), cfg.salt);
-    var raw=await storeKeyOku();
-    var env = raw ? JSON.parse(raw) : null;
-    if(!env || env.enc!==1){ toast("Şifreli veri bulunamadı"); return; }
-    await pinCoz(eskiKey, env.iv, env.ct); /* çözülmezse (yanlış PIN) catch'e düşer */
-    var yeniSalt=b64FromBuf(crypto.getRandomValues(new Uint8Array(16)).buffer);
-    var yeniKey=await pinAnahtarTuret(yeni.trim(), yeniSalt);
-    localStorage.setItem(PIN_CFG_KEY, JSON.stringify({salt:yeniSalt}));
-    _pinKey=yeniKey;
-    try{
-      var rawKey=await crypto.subtle.exportKey("raw", yeniKey);
-      sessionStorage.setItem(PIN_SESSION_KEY, JSON.stringify({salt:yeniSalt, raw:b64FromBuf(rawKey)}));
-    }catch(e){ console.warn("oturum anahtarı kaydedilemedi", e); }
-    persistEncrypted(JSON.stringify(memData));
-    if(el("pin_eski")) el("pin_eski").value="";
-    if(el("pin_yeni_d")) el("pin_yeni_d").value="";
-    logAudit("PIN değiştirildi","");
-    toast("PIN değiştirildi");
-  }catch(e){
-    console.warn("PIN değiştirme hatası", e);
-    toast("❌ Mevcut PIN yanlış");
-  }
-}
-async function pinBoot(){
-  el("app").innerHTML='<div class="card" style="text-align:center; padding:40px 20px;" ><span class="muted">Yükleniyor…</span></div>';
-  if(!window.crypto || !window.crypto.subtle){
-    /* Eski tarayıcı / güvensiz bağlam (HTTP): şifreleme yapılamaz. Kilidi
-       tamamen atlayıp düz metin modunda devam — veri erişimini tümden
-       engellemek bundan daha kötü bir sonuç olurdu. */
-    console.error("crypto.subtle yok — PIN kilidi devre dışı, düz metin modunda devam");
-    loadData();
-    bootApp();
-    return;
-  }
-  var cfg=pinCfgOku();
-  if(!cfg){
-    /* Bu cihazda PIN hiç kurulmamış. Var olan (eski, düz metin) veri varsa
-       kaybetmeden PIN kurulumuna taşı. */
-    var raw=null;
-    try{ raw=localStorage.getItem(STORE_KEY); }catch(e){ console.warn("localStorage okunamadı", e); }
-    var legacy=null;
-    if(raw){
-      try{
-        var parsed=JSON.parse(raw);
-        if(!parsed || parsed.enc!==1) legacy=parsed;
-      }catch(e){
-        console.error("Kayıtlı veri bozuk — JSON.parse hatası", e);
-        try{ localStorage.setItem(STORE_KEY+"_bozuk_"+Date.now(), raw); }catch(e2){ console.error("bozuk veri yedeklenemedi", e2); }
-        _veriOkumaHatasi=true;
-      }
-    }
-    memData = legacy || {cycles:[]};
-    memDataNormalizeVeGoc();
-    renderPinSetup(!!legacy);
-    return;
-  }
-  /* PIN daha önce kurulmuş. Bu sekmede zaten açılmışsa (sessionStorage)
-     tekrar sorma — sayfa yenilemede kullanıcıyı rahatsız etmesin. */
-  try{
-    var sess=JSON.parse(sessionStorage.getItem(PIN_SESSION_KEY)||"null");
-    if(sess && sess.salt===cfg.salt){
-      var key=await crypto.subtle.importKey("raw", bufFromB64(sess.raw), {name:"AES-GCM"}, true, ["encrypt","decrypt"]);
-      var raw2=await storeKeyOku();
-      var env2 = raw2 ? JSON.parse(raw2) : null;
-      if(env2 && env2.enc===1){
-        var plaintext2 = await pinCoz(key, env2.iv, env2.ct);
-        memData = JSON.parse(plaintext2);
-        _pinKey = key;
-        memDataNormalizeVeGoc();
-        bootApp();
-        return;
-      }
-    }
-  }catch(e){ console.warn("oturum kilidi geçersiz, PIN tekrar sorulacak", e); }
-  renderPinUnlock();
 }
 function logAudit(action, detail){
   try{
@@ -10320,12 +10163,7 @@ function renderAyarlar(){
     +'</div>'
     +'<div class="card"><div class="sec-title">📱 WhatsApp</div>'
     +'<div class="muted" style="margin-bottom:8px;">"WhatsApp\'ta Aç" butonuna basınca WhatsApp otomatik açılır, mesaj hazır gelir — hangi gruba/kişiye göndereceğini sen seçersin (WhatsApp grup linkleri metni önceden dolduramıyor, bu yüzden link kaydetmene gerek yok). Mesaj ayrıca panoya da kopyalanır, istersen elle de yapıştırabilirsin.</div>'
-    +'</div>'
-    +'<div class="card"><div class="sec-title">🔒 Cihaz PIN Kilidi</div>'
-    +'<div class="muted" style="margin-bottom:8px;">Bu cihazdaki veriler PIN ile şifrelidir. PIN\'i değiştirmek verileri yeni PIN ile yeniden şifreler.</div>'
-    +'<label>Mevcut PIN</label><input type="password" inputmode="numeric" id="pin_eski" autocomplete="off" placeholder="mevcut PIN">'
-    +'<label>Yeni PIN</label><input type="password" inputmode="numeric" id="pin_yeni_d" autocomplete="off" placeholder="yeni PIN, en az 4 hane">'
-    +'<div class="row" style="margin-top:12px;"><button class="btn" onclick="pinDegistir()">PIN\'i değiştir</button></div></div>';
+    +'</div>';
   }
   if(_ayarKategori==="firma_personel"){
   var ekipler=getEkipler();
@@ -11303,25 +11141,16 @@ function havaHedef(c){
    bazen JS'i hiç yeniden çalıştırmadan, kapanmadan ÖNCEKİ donmuş ekran
    görüntüsünü gösterir (bfcache) — bu yüzden diskteki EN GÜNCEL veriyi
    okuyup yeniden render etmemiz gerekiyor (belki başka cihaz senkronla
-   değiştirmiştir).
-   KRİTİK GÜVENLİK AĞI: Veri artık PIN ile şifreli olduğu için bu okuma
-   ASENKRON (storeKeyOku + pinCoz) yapılmak ZORUNDA. Önceki sürüm burada
-   memData'yı ÖNCE null'a çekip SENKRON eski loadData() ile dolduruyordu —
-   bu, diskteki şifreli zarfı ({enc:1,...}) çözülmemiş haliyle gerçek veriymiş
-   gibi yorumlayıp memData.cycles'ı SESSİZCE BOŞALTIYORDU (kullanıcı "odalar
-   silindi" görüyordu), üstüne bir de bu boş hal sonraki kayıtta diske geri
-   yazılabiliyordu. Bu yüzden burada memData'ya ancak başarılı bir çözme
-   sonrasında dokunuyoruz; herhangi bir hata olursa mevcut bellek verisi
-   OLDUĞU GİBİ bırakılır, ASLA boşaltılmaz. */
+   değiştirmiştir). storeKeyOku() IndexedDB'den okuduğu için asenkron olmak
+   zorunda, ama artık şifre çözme yok — sadece JSON.parse. Herhangi bir hata
+   olursa mevcut bellek verisi OLDUĞU GİBİ bırakılır, ASLA boşaltılmaz. */
 async function resumeYenidenYukle(){
-  if(!_pinKey){ return; } /* kilit açık değilse (giriş ekranındayız) dokunma */
   try{
     var raw = await storeKeyOku();
     if(raw){
-      var env = JSON.parse(raw);
-      if(env && env.enc===1){
-        var plaintext = await pinCoz(_pinKey, env.iv, env.ct);
-        memData = JSON.parse(plaintext);
+      var parsed = JSON.parse(raw);
+      if(parsed && parsed.enc!==1){
+        memData = parsed;
         memDataNormalizeVeGoc();
       }
     }
@@ -11390,7 +11219,7 @@ if("serviceWorker" in navigator){
     navigator.serviceWorker.register("sw.js").catch(function(e){ console.warn("sw register", e); });
   });
 }
-pinBoot();
+appBoot();
 </script>
 </body>
 </html>
