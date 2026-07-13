@@ -650,7 +650,7 @@ function hasatTartiGetir(oda, tur){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v346";
+var APP_VER = "v347";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -707,7 +707,31 @@ function memDataNormalizeVeGoc(){
   var _degKompostInd = kompostIndirmeGeriyeDonukDoldur(memData);
   var _degGorevMukerrer = gorevlerMukerrerleriBirlestir(memData);
   var _degSartliKural = sartliKurallarVarsayilanEkle(memData);
-  if(_degMigrasyon || _degTekil || _degKompostInd || _degGorevMukerrer || _degSartliKural) saveData();
+  var _degEkipDept = ekipVarsayilanDepartmanlarEkle(memData);
+  if(_degMigrasyon || _degTekil || _degKompostInd || _degGorevMukerrer || _degSartliKural || _degEkipDept) saveData();
+}
+/* TEK SEFERLİK GEÇİŞ: kullanıcı isteği — "ekibi departman departman ayır: en
+   üst yönetim, sonra Sevkiyat, İç Ekip, Dış Ekip" sırasıyla. Var olan İç/Dış
+   Ekip'in BAŞINA "Üst Yönetim" ve "Sevkiyat" eklenir (silinmez/taşınmaz —
+   üyeleri olduğu gibi kalır). Aynı adda bir ekip zaten varsa tekrar eklenmez.
+   _ekipDepartmanEklendi bayrağıyla SADECE BİR KEZ eklenir — kullanıcı
+   sonradan silerse bir daha geri gelmez. */
+function ekipVarsayilanDepartmanlarEkle(d){
+  if(!d) return false;
+  if(!d.settings) d.settings={};
+  if(d.settings._ekipDepartmanEklendi) return false;
+  d.settings._ekipDepartmanEklendi=true;
+  if(!Array.isArray(d.settings.ekipler) || !d.settings.ekipler.length){
+    d.settings.ekipler=[{id:"ic",ad:"İç Ekip"},{id:"dis",ad:"Dış Ekip"}];
+  }
+  var L=d.settings.ekipler;
+  function adVarMi(ad){ return L.some(function(e){ return (e.ad||"").toLocaleLowerCase("tr")===ad.toLocaleLowerCase("tr"); }); }
+  var basaEklenecek=[];
+  if(!adVarMi("Sevkiyat")) basaEklenecek.unshift({id:uid(), ad:"Sevkiyat"});
+  if(!adVarMi("Üst Yönetim")) basaEklenecek.unshift({id:uid(), ad:"Üst Yönetim"});
+  if(!basaEklenecek.length) return false;
+  d.settings.ekipler = basaEklenecek.concat(L);
+  return true;
 }
 /* TEK SEFERLİK GEÇİŞ: kullanıcı isteği — "kompost sıcaklığı 28°C üstündeyse
    tiftik/toprak serimi ertelenir" iki şartlı kural olarak otomatik tohumlanır.
@@ -4804,7 +4828,7 @@ function renderYoklama(){
   if(!personel.length){
     h += '<div class="empty"><div class="big">🧑‍🤝‍🧑</div><div>Henüz personel eklenmemiş.</div><div class="muted" style="margin-top:6px;">Ayarlar → Personel\'den ekleyebilirsin.</div></div>';
   } else {
-    personel.forEach(function(p){
+    function personKart(p){
       var y=kayitMap[p.id];
       var durum=y?y.durum:"";
       function pill(val,label,renk){
@@ -4813,8 +4837,8 @@ function renderYoklama(){
           +'style="flex:1; min-height:44px; border-radius:10px; border:1.5px solid '+renk+'; font-size:13.5px; font-weight:700; cursor:pointer; '
           +(on?('background:'+renk+'; color:#fff;'):('background:#fff; color:'+renk+';'))+'">'+esc(label)+'</button>';
       }
-      h += '<div class="card" style="padding:10px 12px;">'
-        + '<div style="font-weight:700; font-size:15px; margin-bottom:8px;">'+esc(p.ad)+' <span class="muted" style="font-weight:400; font-size:12px;">('+esc(ekipAdi(p.grup))+')</span></div>'
+      var out = '<div class="card" style="padding:10px 12px;">'
+        + '<div style="font-weight:700; font-size:15px; margin-bottom:8px;">'+esc(p.ad)+'</div>'
         + '<div style="display:flex; gap:8px;">'
           + pill("geldi","✓ Geldi","#1f7a4d")
           + pill("gelmedi","✗ Gelmedi","#c0291f")
@@ -4828,9 +4852,19 @@ function renderYoklama(){
             +'style="flex:1; min-height:38px; border-radius:8px; border:1.5px solid #c0291f; font-size:12.5px; font-weight:600; cursor:pointer; '
             +(on?'background:#c0291f; color:#fff;':'background:#fff; color:#c0291f;')+'">'+esc(YOKLAMA_GEREKCE_ETIKET[val])+'</button>';
         }).join("");
-        h += '<div style="display:flex; gap:6px; margin-top:8px;">'+gpills+'</div>';
+        out += '<div style="display:flex; gap:6px; margin-top:8px;">'+gpills+'</div>';
       }
-      h += '</div>';
+      out += '</div>';
+      return out;
+    }
+    /* Personel departman departman (getEkipler() sırasıyla: Üst Yönetim,
+       Sevkiyat, İç Ekip, Dış Ekip, ...) gruplanır — kullanıcı isteği:
+       "ekibi departman departman ayır". Üyesi olmayan departman gösterilmez. */
+    getEkipler().forEach(function(ek){
+      var uyeler=personel.filter(function(p){return p.grup===ek.id;});
+      if(!uyeler.length) return;
+      h += '<div class="sec-title" style="margin:14px 0 6px;">👥 '+esc(ek.ad)+'</div>';
+      uyeler.forEach(function(p){ h += personKart(p); });
     });
   }
 
