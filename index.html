@@ -532,16 +532,19 @@ var _settingsPendingSince=0; /* 0=bekleyen yerel değişiklik yok; aksi halde pu
    "snap" objesiyle doğrudan çağrılabilir). */
 function handleSettingsSnapshot(snap){
   if(!snap.exists){
-    /* Bulutta henüz ayar yok — yereldekini ilk kez gönder */
+    /* Bulutta henüz ayar yok — GERÇEKTEN yeni bir çiftlik demektir, bootwait
+       (varsa) artık güvenle "İlk Kurulum"a çözülebilir — yereldekini ilk
+       kez gönder */
     _settingsFirstSyncDone = true;
     fbPushSettings();
+    _bootWaitResolveIfNeeded();
     return;
   }
   var remote = snap.data();
-  if(!remote){ _settingsFirstSyncDone = true; return; }
+  if(!remote){ _settingsFirstSyncDone = true; _bootWaitResolveIfNeeded(); return; }
   var j = JSON.stringify(remote);
   _settingsFirstSyncDone = true; /* buluttan en az bir kez veri aldık — artık göndermek güvenli */
-  if(_syncedSettings===j) return; /* kendi yazdığımızın yankısı */
+  if(_syncedSettings===j){ _bootWaitResolveIfNeeded(); return; } /* kendi yazdığımızın yankısı */
   /* KRİTİK: d.settings TEK bir bulut dokümanı olarak, hiçbir alan-bazlı
      birleştirme YAPILMADAN (mergeCycle'ın aksine) senkronize ediliyor.
      Yerelde henüz buluta ULAŞMAMIŞ bir değişiklik varsa (fbPushSettings
@@ -554,11 +557,16 @@ function handleSettingsSnapshot(snap){
      hâline dönüyor" raporu tam olarak buradan geliyordu). Bekleyen yerel
      bir değişiklik varsa buluttan geleni KABUL ETMİYORUZ, bunun yerine
      kendi değişikliğimizi yeniden göndermeyi deniyoruz. */
-  if(_settingsPendingSince){ fbPushSettings(); return; }
+  if(_settingsPendingSince){ fbPushSettings(); _bootWaitResolveIfNeeded(); return; }
   _syncedSettings = j;
   var d=loadData();
   d.settings = remote;
   persistEncrypted(JSON.stringify(memData));
+  /* d.settings ARTIK gerçek bulut verisini taşıyor — bootwait (varsa) bu
+     GÜNCEL veriyle çözülsün ki isSetupNeeded() doğru karar versin. Çözüldüyse
+     loadRole()+render() zaten çağrıldı, alttaki render()'ı tekrar etmeye
+     gerek yok. */
+  if(_bootWaitResolveIfNeeded()) return;
   if(!isTyping()) render();
 }
 function fbPushSettings(){
@@ -589,7 +597,7 @@ function hasatTartiGetir(oda, tur){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v332";
+var APP_VER = "v333";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -2981,6 +2989,7 @@ function render(){
     }catch(e){
       console.warn("refreshSicaklik error:", e);
     }
+    if(view.name==="bootwait"){ try{ renderBootWait(); }catch(e){ console.error("renderBootWait error:", e); } return; }
     if(view.name==="setup"){ try{ renderSetup(); }catch(e){ console.error("renderSetup error:", e); } return; }
     if(!currentRole){
       try{ renderLogin(); }catch(e){ console.error("renderLogin error:", e); el("app").innerHTML='<div class="card" style="border:1.5px solid #c0291f;background:#fceaea;"><div style="font-weight:700;color:#c0291f;">❌ Login ekranı yükleme hatası</div></div>'; }
@@ -8819,7 +8828,59 @@ function isSetupNeeded(){
   return true;
 }
 function markSetupDone(){ try{ localStorage.setItem("utp_setup_done","1"); }catch(e){ console.warn("setup bayrağı kaydedilemedi", e); } }
-function loadRole(){ try{ if(isSetupNeeded()){ view={name:"setup", id:null}; return; } currentRole=localStorage.getItem("utp_role")||null; }catch(e){ currentRole=null; } if(currentRole && !ROLE_DEFS[currentRole]) currentRole=null; }
+function firebaseYapilandirilmisMi(){ return !!(typeof FIREBASE_CONFIG!=="undefined" && FIREBASE_CONFIG && FIREBASE_CONFIG.projectId); }
+/* KRİTİK: YENİ bir cihazda (örn. teknisyenin kendi telefonu, çiftlik zaten
+   kurulu) isSetupNeeded() SADECE yereldeki veriye bakıyordu — bulut henüz
+   ilk ayar senkronunu göndermeden (Firestore round-trip birkaç yüz ms bile
+   sürse) yerel veri boş olduğu için "kurulum gerekli" sanıp doğrudan "İlk
+   Kurulum" (yeni Yönetici/Firma Sahibi parolası) ekranını gösteriyordu —
+   oysa çiftliğin GERÇEK ayarları buluttan yolda. Biri bu ekrana yanlışlıkla
+   yeni parola girip kaydederse, gerçek çiftlik ayarlarının (reçete, roller,
+   vb.) üzerine yazma riski vardı (özellikle v331'deki senkron çakışma
+   koruması, artık YENİ yazılan bu yanlış ayarı "kendi düzenlemem" sayıp
+   gerçek bulut verisine karşı savunacaktı — iki düzeltme birlikte riski
+   büyütüyordu). Bulut yapılandırılmışsa VE ilk ayar senkronu henüz
+   gelmediyse, karara varmadan ÖNCE bekleriz (renderBootWait). En fazla
+   BOOT_WAIT_TIMEOUT kadar — bağlantı hiç gelmezse (gerçekten offline/yeni
+   kurulum), eski davranışa (yerel karara) döner, hiçbir kullanım senaryosu
+   kilitlenmez. */
+var _bootWaitPending=false;
+var BOOT_WAIT_TIMEOUT_MS=8000;
+function _bootWaitResolveIfNeeded(){
+  if(!_bootWaitPending) return false;
+  _bootWaitPending=false;
+  loadRole();
+  render();
+  return true;
+}
+function renderBootWait(){
+  el("hdrTitle").textContent="Bağlanıyor";
+  el("app").innerHTML='<div class="card" style="text-align:center; padding:40px 20px;"><span class="muted">Bulut ayarları kontrol ediliyor…</span></div>';
+}
+function loadRole(){
+  try{
+    if(isSetupNeeded()){
+      if(firebaseYapilandirilmisMi() && !_settingsFirstSyncDone){
+        view={name:"bootwait", id:null};
+        _bootWaitPending=true;
+        setTimeout(function(){
+          if(_bootWaitPending){ _bootWaitPending=false; view={name:"setup", id:null}; render(); }
+        }, BOOT_WAIT_TIMEOUT_MS);
+        return;
+      }
+      view={name:"setup", id:null};
+      return;
+    }
+    /* Kurulum gerekmiyor — ama view hâlâ "bootwait"ta kalmış olabilir (bu
+       fonksiyon _bootWaitResolveIfNeeded() üzerinden, bulut cevabı GERÇEKTEN
+       kurulu bir çiftlik olduğunu doğruladığı için çağrılmış olabilir).
+       view'ı normal akışa (login/uygulama) döndür, aksi halde ekran sonsuza
+       kadar "Bağlanıyor…" yazısında asılı kalır. */
+    if(view.name==="bootwait" || view.name==="setup") view={name:"bugun", id:null};
+    currentRole=localStorage.getItem("utp_role")||null;
+  }catch(e){ currentRole=null; }
+  if(currentRole && !ROLE_DEFS[currentRole]) currentRole=null;
+}
 function can(perm){ if(!currentRole) return false; var r=ROLE_DEFS[currentRole]; if(perm==="view") return true; return !!r[perm]; }
 function noPerm(){ toast("Bu işlem için yetkiniz yok"+(currentRole?" ("+ROLE_DEFS[currentRole].ad+")":"")); }
 function logout(){ logAudit("çıkış",""); currentRole=null; try{ localStorage.removeItem("utp_role"); }catch(e){ console.warn("rol silinemedi", e); } render(); }
