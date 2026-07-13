@@ -650,7 +650,7 @@ function hasatTartiGetir(oda, tur){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v353";
+var APP_VER = "v354";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -10478,30 +10478,57 @@ function protokolUygunlukHTML(){
   if(!body) body='<div class="muted">Henüz değerlendirilecek tamamlanmış protokol adımı yok.</div>';
   return sectionCard('📋 Protokol Uygunluğu', body);
 }
+/* Raporlar ekranı, tıpkı Planlama gibi üstte sabit sekmelerle bölündü —
+   eskiden tüm raporlar tek uzun sayfada alt alta diziliyordu (kullanıcı
+   isteği: "Raporlar bölümü çok uzadı, ayarlar gibi sekmelere ayır"). */
+var _raporKategori="hasat"; /* hasat (varsayılan) | analiz | protokol | disari */
+function raporKategoriDegistir(k){ _raporKategori=k; window.scrollTo(0,0); render(); }
 function renderRaporlar(){
   el("hdrTitle").textContent="Raporlar";
   var d=loadData();
   var aktif=(d.cycles||[]).filter(function(c){return !c.bosaltimTarihi;});
-  var h='<div class="card"><div class="sec-title" style="margin-top:0;">Akıllı analiz (kural tabanlı)</div>'
-    +'<div class="muted" style="margin-bottom:8px;">Veri anahtarı gerekmez, cihazda çalışır. Anormal sıcaklık, gecikme ve verim farkı gibi kalıpları tarar.</div>'
-    +akilliAnalizHTML(aktif)
-    +'</div>';
-  h+=haftalikHasatTahminiHTML();
-  h+=hasatRaporuHTML();
-  h+=protokolUygunlukHTML();
-  h+=ortalamaUretimSuresiHTML();
-  h+=uretimOgrenmesiHTML();
-  h+=dusukVerimliDongulerHTML();
-  h+='<div class="card"><div class="sec-title" style="margin-top:0;">Dışa aktar</div>'
-    +'<div class="muted" style="margin-bottom:8px;">Tek bir odanın PDF raporu için o odanın detay ekranındaki "Yazdır/PDF" butonunu kullan. Tüm tesis için:</div>'
-    +'<button class="btn small" onclick="printGenelRapor()">🖨️ Genel Rapor (PDF)</button> '
-    +'<button class="btn small" onclick="excelTumVerim()">📊 Tüm hasat/verim (Excel)</button> '
-    +'<button class="btn ghost small" onclick="backupJSON()">🗄️ Tüm veri (JSON)</button>'
-    +'<div class="muted" style="margin-top:8px;">PDF butonu yeni sekmede yazdırma ekranı açar; oradan "PDF olarak kaydet" seçebilirsin.</div></div>';
-  h+='<div class="card"><div class="sec-title" style="margin-top:0;">Diğer raporlar</div>'
-    +'<button class="btn ghost small" onclick="go(\'plan\')">📅 Kompost Planı</button> '
-    +(aktif.length?'<button class="btn ghost small" onclick="go(\'compare\',\''+esc(aktif[0].oda).replace(/'/g,"\\'")+'\')">📈 Oda Kıyaslama</button>':'')
-    +'<button class="btn ghost small" onclick="go(\'arsiv\')">📦 Arşiv</button></div>';
+
+  var KATS=[
+    {key:"hasat",    ic:"🌾", ad:"Hasat"},
+    {key:"analiz",   ic:"📊", ad:"Analiz"},
+    {key:"protokol", ic:"📋", ad:"Protokol"},
+    {key:"disari",   ic:"📤", ad:"Dışa Aktar"}
+  ];
+  var h='<div style="display:flex;gap:5px;margin-bottom:12px;">';
+  KATS.forEach(function(k){
+    var isAktif=(_raporKategori===k.key);
+    h+='<button class="btn '+(isAktif?'':'ghost')+'" style="flex:1;padding:10px 2px;font-size:12px;" onclick="raporKategoriDegistir(\''+k.key+'\')">'+k.ic+'<br>'+k.ad+'</button>';
+  });
+  h+='</div>';
+
+  if(_raporKategori==="hasat"){
+    h+=haftalikHasatTahminiHTML();
+    h+=hasatRaporuHTML();
+  }
+  else if(_raporKategori==="analiz"){
+    h+='<div class="card"><div class="sec-title" style="margin-top:0;">Akıllı analiz (kural tabanlı)</div>'
+      +'<div class="muted" style="margin-bottom:8px;">Veri anahtarı gerekmez, cihazda çalışır. Anormal sıcaklık, gecikme ve verim farkı gibi kalıpları tarar.</div>'
+      +akilliAnalizHTML(aktif)
+      +'</div>';
+    h+=uretimOgrenmesiHTML();
+    h+=dusukVerimliDongulerHTML();
+  }
+  else if(_raporKategori==="protokol"){
+    h+=protokolUygunlukHTML();
+    h+=ortalamaUretimSuresiHTML();
+  }
+  else if(_raporKategori==="disari"){
+    h+='<div class="card"><div class="sec-title" style="margin-top:0;">Dışa aktar</div>'
+      +'<div class="muted" style="margin-bottom:8px;">Tek bir odanın PDF raporu için o odanın detay ekranındaki "Yazdır/PDF" butonunu kullan. Tüm tesis için:</div>'
+      +'<button class="btn small" onclick="printGenelRapor()">🖨️ Genel Rapor (PDF)</button> '
+      +'<button class="btn small" onclick="excelTumVerim()">📊 Tüm hasat/verim (Excel)</button> '
+      +'<button class="btn ghost small" onclick="backupJSON()">🗄️ Tüm veri (JSON)</button>'
+      +'<div class="muted" style="margin-top:8px;">PDF butonu yeni sekmede yazdırma ekranı açar; oradan "PDF olarak kaydet" seçebilirsin.</div></div>';
+    h+='<div class="card"><div class="sec-title" style="margin-top:0;">Diğer raporlar</div>'
+      +'<button class="btn ghost small" onclick="go(\'plan\')">📅 Kompost Planı</button> '
+      +(aktif.length?'<button class="btn ghost small" onclick="go(\'compare\',\''+esc(aktif[0].oda).replace(/'/g,"\\'")+'\')">📈 Oda Kıyaslama</button>':'')
+      +'<button class="btn ghost small" onclick="go(\'arsiv\')">📦 Arşiv</button></div>';
+  }
   el("app").innerHTML=h;
 }
 function akilliAnalizHTML(aktif){
