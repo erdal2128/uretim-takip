@@ -650,7 +650,7 @@ function hasatTartiGetir(oda, tur){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v349";
+var APP_VER = "v351";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -709,7 +709,8 @@ function memDataNormalizeVeGoc(){
   var _degSartliKural = sartliKurallarVarsayilanEkle(memData);
   var _degEkipDept = ekipVarsayilanDepartmanlarEkle(memData);
   var _degFlasAkisi = flasAkisiVarsayilanEkle(memData);
-  if(_degMigrasyon || _degTekil || _degKompostInd || _degGorevMukerrer || _degSartliKural || _degEkipDept || _degFlasAkisi) saveData();
+  var _degFlas1Baglan = flas1DogrudanHavayaBagla(memData);
+  if(_degMigrasyon || _degTekil || _degKompostInd || _degGorevMukerrer || _degSartliKural || _degEkipDept || _degFlasAkisi || _degFlas1Baglan) saveData();
 }
 /* TEK SEFERLİK GEÇİŞ: kullanıcı isteği — "havaya başladıktan 11 gün sonra
    1. Flaş, 1. Flaş 5 gün sürer, bitince 5 gün 2. Flaş hazırlığı, 2. Flaş 5
@@ -738,6 +739,28 @@ function flasAkisiVarsayilanEkle(d){
     if(varsayilan){ P.push(protokolSatirKopyala(varsayilan)); eklendi=true; }
   });
   return eklendi;
+}
+/* DÜZELTME (her açılışta çalışır, tek seferlik bayrak GEREKMEZ — idempotent):
+   "1. Flaş" (flas1) adımı eskiden "hasat" rolüne (dolaylı, zincirli: flas1→
+   hasat→hava) referans veriyordu. Bazı çiftliklerde "hasat" rolü güvenilir
+   şekilde çözülemediği için (protokolRolleriTamamla'nın eski/genel amaçlı
+   bulanık metin eşleştirmesi — kullanıcı raporu: "1. Flaş boş geldi", oysa
+   aynı zincirden türeyen "2. Flaş"/"Boşaltma" doğru geliyordu, yani sorun
+   özellikle "hasat" rolünün KENDİSİNDEYDİ) "1. Flaş" sütunu hep "—"
+   gösteriyordu. Artık flas1 doğrudan "hava"ya (gün+11) bağlı — "hasat"
+   rolünden tamamen bağımsız, Hava sütunu kadar güvenilir. flasAkisiVarsayilanEkle
+   zaten flas1'i EKLEMİŞ olan çiftliklerde de (tek seferlik bayrak onu bir
+   daha çalıştırmasa da) bu düzeltme HER ZAMAN devreye girip eski ref:"hasat"
+   olan satırı düzeltir. */
+function flas1DogrudanHavayaBagla(d){
+  if(!d || !d.settings || !Array.isArray(d.settings.protokol)) return false;
+  var degisti=false;
+  d.settings.protokol.forEach(function(s){
+    if(s && !s.silindi && s.tip==="olay" && s.rol==="flas1" && s.ref==="hasat"){
+      s.ref="hava"; s.gun=11; degisti=true;
+    }
+  });
+  return degisti;
 }
 /* TEK SEFERLİK GEÇİŞ: kullanıcı isteği — "ekibi departman departman ayır: en
    üst yönetim, sonra Sevkiyat, İç Ekip, Dış Ekip" sırasıyla. Var olan İç/Dış
@@ -1414,7 +1437,7 @@ var PROTOKOL = [
   {ref:"hava", gun:11, tip:"olay", sahip:"ziraat", sure:5, rol:"hasat", txt:"Hasat başlar — 1.g sodyum → 2-3 seyreltme → 4-5 pik → 6 sıfırlama+kök temizliği+2000 lt su (2. 1000 lt'ye hidrojen peroksit). Hasat günü oda 17° (personel girer). Sıfırlama günü kompost 23°'ye çıkar, sonra her gün −1°; +2 gün 1000+1000 lt su (2.1000 lt gübre). CO₂: 1.flaş 2100-2400, 2.flaş 3000-3300. Ağırlıklı 2 flaş; kompost iyiyse 3. Boşaltım son flaşın sıfırlamasından sonra."},
   /* Flaş seviyesi — her biri kendi gerçekleşen tarihiyle onaylanır, zincir
      otomatik kayar (sabit takvim değil, gerçek üretim akışı takip edilir). */
-  {ref:"hasat", gun:0, tip:"olay", sahip:"ekip", rol:"flas1", txt:"1. Flaş"},
+  {ref:"hava", gun:11, tip:"olay", sahip:"ekip", rol:"flas1", txt:"1. Flaş"},
   {ref:"flas1", gun:5, tip:"olay", sahip:"ekip", rol:"flas1bitis", txt:"1. Flaş Bitişi (sıfırlama)"},
   {ref:"flas1bitis", gun:0, tip:"olay", sahip:"ziraat", rol:"flasarasi", txt:"Flaş Arası başlar"},
   {ref:"flasarasi", gun:5, tip:"olay", sahip:"ekip", rol:"flas2", txt:"2. Flaş"},
@@ -2805,23 +2828,26 @@ function beklenenHasat(c){
   var k=hasatKaymasi(c);
   return k.kayma ? addDays(baz,k.kayma) : baz;
 }
+/* kasaMin/kasaMax: kullanıcının verdiği ortalama günlük hasat (kasa) aralığı —
+   sadece gerçek hasat günlerinde (flas>0) dolu, hazırlık/boşaltma günlerinde 0.
+   Haftalık Hasat Tahmini raporunda (Raporlar) kullanılır. */
 var HASAT_PLAN = [
-  {gun:1, flas:1, asama:"Seyreltme"},
-  {gun:2, flas:1, asama:"Seyreltme"},
-  {gun:3, flas:1, asama:"Pik"},
-  {gun:4, flas:1, asama:"Pik"},
-  {gun:5, flas:1, asama:"Sıfırlama + kök temizliği"},
-  {gun:6, flas:0, asama:"2. flaşa hazırlık (1/5)"},
-  {gun:7, flas:0, asama:"2. flaşa hazırlık (2/5)"},
-  {gun:8, flas:0, asama:"2. flaşa hazırlık (3/5)"},
-  {gun:9, flas:0, asama:"2. flaşa hazırlık (4/5)"},
-  {gun:10, flas:0, asama:"2. flaşa hazırlık (5/5)"},
-  {gun:11, flas:2, asama:"Seyreltme"},
-  {gun:12, flas:2, asama:"Seyreltme"},
-  {gun:13, flas:2, asama:"Pik"},
-  {gun:14, flas:2, asama:"Pik"},
-  {gun:15, flas:2, asama:"Sıfırlama + kök temizliği"},
-  {gun:16, flas:0, asama:"Boşaltmaya hazır"}
+  {gun:1, flas:1, asama:"Seyreltme", kasaMin:20, kasaMax:30},
+  {gun:2, flas:1, asama:"Seyreltme", kasaMin:80, kasaMax:100},
+  {gun:3, flas:1, asama:"Pik", kasaMin:150, kasaMax:170},
+  {gun:4, flas:1, asama:"Pik", kasaMin:30, kasaMax:40},
+  {gun:5, flas:1, asama:"Sıfırlama + kök temizliği", kasaMin:10, kasaMax:15},
+  {gun:6, flas:0, asama:"2. flaşa hazırlık (1/5)", kasaMin:0, kasaMax:0},
+  {gun:7, flas:0, asama:"2. flaşa hazırlık (2/5)", kasaMin:0, kasaMax:0},
+  {gun:8, flas:0, asama:"2. flaşa hazırlık (3/5)", kasaMin:0, kasaMax:0},
+  {gun:9, flas:0, asama:"2. flaşa hazırlık (4/5)", kasaMin:0, kasaMax:0},
+  {gun:10, flas:0, asama:"2. flaşa hazırlık (5/5)", kasaMin:0, kasaMax:0},
+  {gun:11, flas:2, asama:"Seyreltme", kasaMin:15, kasaMax:20},
+  {gun:12, flas:2, asama:"Seyreltme", kasaMin:60, kasaMax:80},
+  {gun:13, flas:2, asama:"Pik", kasaMin:100, kasaMax:110},
+  {gun:14, flas:2, asama:"Pik", kasaMin:30, kasaMax:40},
+  {gun:15, flas:2, asama:"Sıfırlama + kök temizliği", kasaMin:10, kasaMax:15},
+  {gun:16, flas:0, asama:"Boşaltmaya hazır", kasaMin:0, kasaMax:0}
 ];
 function hasatBaslangic(c){
   if(c.hasat && c.hasat.length){ var ds=c.hasat.map(function(h){return h.tarih;}).filter(Boolean).sort(); if(ds.length) return ds[0]; }
@@ -2832,9 +2858,9 @@ function hasatAsama(c, iso){
   var hd=daysBetween(bas, iso); if(hd===null||hd<0) return null;
   var gun=hd+1, found=null;
   HASAT_PLAN.forEach(function(x){ if(x.gun===gun) found=x; });
-  if(!found && gun>16) found={gun:gun, flas:0, asama:"Boşaltmaya hazır"};
+  if(!found && gun>16) found={gun:gun, flas:0, asama:"Boşaltmaya hazır", kasaMin:0, kasaMax:0};
   if(!found) return null;
-  return {gun:gun, flas:found.flas, asama:found.asama};
+  return {gun:gun, flas:found.flas, asama:found.asama, kasaMin:found.kasaMin||0, kasaMax:found.kasaMax||0};
 }
 function hasatTakvimHTML(c){
   var bas=hasatBaslangic(c); if(!bas) return "";
@@ -2859,10 +2885,19 @@ function beklenenTakvim(c){
      planTarihiDegistirAc vb.) AYRI bir adım olarak yapılıyor — burada da aynı
      desen kullanılmalı, aksi halde "📅 Planla" ile değiştirilen tarih (örn.
      Toprak) bu takvimde yansımaz (KRİTİK BUG, düzeltildi). */
-  var roles = ['tiftik', 'toprak', 'tirmik', 'hava', 'hasat', 'flas1bitis', 'flas2', 'flas2bitis', 'bosaltma'];
-  var names = {tiftik:'Tiftik', toprak:'Toprak', tirmik:'Tırmık', hava:'Hava', hasat:'1. Flaş',
+  /* "1. Flaş" sütunu artık "hasat" rolündeki (genel "Hasat başlar" açıklama
+     satırı — protokolRolleriTamamla'nın eski/genel amaçlı bulanık metin
+     eşleştirmesine (regex) açık, bazı özelleştirilmiş protokollerde yanlış
+     satıra bağlanabiliyordu) yerine doğrudan "flas1" rolünden (protokoldeki
+     asıl "1. Flaş" satırı, sadece kesin rol eşleşmesiyle bulunur, hiçbir
+     zaman metin taramasıyla yanlış satıra bağlanmaz) okunuyor — flas2/
+     flas2bitis/bosaltma zaten flas1 üzerinden zincirlendiği için bu, "2.
+     Flaş"/"Boşaltma" doğru gelirken "1. Flaş"ın "—" kalması sorununu
+     çözer. */
+  var roles = ['tiftik', 'toprak', 'tirmik', 'hava', 'flas1', 'flas1bitis', 'flas2', 'flas2bitis', 'bosaltma'];
+  var names = {tiftik:'Tiftik', toprak:'Toprak', tirmik:'Tırmık', hava:'Hava', flas1:'1. Flaş',
     flas1bitis:'1. Flaş Bitişi', flas2:'2. Flaş', flas2bitis:'2. Flaş Bitişi', bosaltma:'Boşaltma'};
-  var gerçekler = {tiftik:c.tiftikTarihi, toprak:c.toprakTarihi, tirmik:c.tirmikTarihi, hava:c.havaBaslangic, hasat:null,
+  var gerçekler = {tiftik:c.tiftikTarihi, toprak:c.toprakTarihi, tirmik:c.tirmikTarihi, hava:c.havaBaslangic, flas1:null,
     flas1bitis:null, flas2:null, flas2bitis:null, bosaltma:c.bosaltimTarihi};
   
   var result = [];
@@ -10285,6 +10320,55 @@ function hasatRaporuHTML(){
   }
   return sectionCard('🌾 Hasat Raporu (geçmişe dönük)', body);
 }
+/* Haftalık Hasat Tahmini — önümüzdeki 7 gün için hangi odanın hangi flaş
+   gününde olacağını (hasatAsama) ve o güne ait ortalama kasa aralığını
+   (HASAT_PLAN.kasaMin/kasaMax) birleştirip gün gün + oda oda + haftalık
+   toplam tahmini kasa (ve kg) gösterir. Kullanıcının verdiği ortalama
+   günlük hasat rakamlarına dayalı kaba bir tahmindir, kesin değildir. */
+function haftalikHasatTahminiHTML(){
+  var d=loadData();
+  var S=getSet();
+  var aktif=(d.cycles||[]).filter(function(c){return !c.bosaltimTarihi;});
+  var today=todayISO();
+  var gunler=[];
+  for(var i=0;i<7;i++) gunler.push(addDays(today,i));
+
+  var toplamMin=0, toplamMax=0;
+  var body='';
+  var hicHasatYok=true;
+  gunler.forEach(function(iso){
+    var satirlar=[];
+    var gunMin=0, gunMax=0;
+    aktif.forEach(function(c){
+      var a=hasatAsama(c, iso);
+      if(!a || a.flas<=0 || (a.kasaMin<=0 && a.kasaMax<=0)) return;
+      satirlar.push({oda:c.oda, flas:a.flas, gun:a.gun, min:a.kasaMin, max:a.kasaMax});
+      gunMin+=a.kasaMin; gunMax+=a.kasaMax;
+    });
+    if(!satirlar.length) return;
+    hicHasatYok=false;
+    toplamMin+=gunMin; toplamMax+=gunMax;
+    satirlar.sort(function(x,y){ return y.max-x.max; });
+    body+='<div style="margin-top:10px;padding-top:8px;border-top:1px solid #eee;">'
+      +'<div style="font-weight:700;">'+fmtDate(iso)+' '+esc(gunAdi(iso))+(iso===today?' <span class="muted" style="font-weight:400;">(bugün)</span>':'')+'</div>';
+    satirlar.forEach(function(s){
+      var flasGunGoreli = (s.flas===1?s.gun:s.gun-10); /* 2.flaş için HASAT_PLAN'daki 11-15 -> "1-5. gün" olarak göster */
+      body+='<div style="display:flex;justify-content:space-between;padding:3px 0;font-size:13px;">'
+        +'<span><b>'+esc(s.oda)+'</b> <span class="muted">('+s.flas+'. Flaş, '+flasGunGoreli+'. gün)</span></span>'
+        +'<span class="note">'+s.min+'-'+s.max+' kasa</span></div>';
+    });
+    body+='<div style="display:flex;justify-content:space-between;font-size:12.5px;font-weight:700;margin-top:3px;"><span>Gün toplamı</span><span>'+gunMin+'-'+gunMax+' kasa</span></div>';
+  });
+
+  if(hicHasatYok){
+    return sectionCard('📦 Haftalık Hasat Tahmini', '<div class="muted">Önümüzdeki 7 günde tahmini hasat günü yok.</div>');
+  }
+  body+='<div style="display:flex;justify-content:space-between;margin-top:12px;padding-top:10px;border-top:2px solid var(--green);font-size:15px;font-weight:700;">'
+    +'<span>Haftalık toplam tahmini</span><span>'+toplamMin+'-'+toplamMax+' kasa</span></div>'
+    +'<div class="muted" style="text-align:right;font-size:12px;">(~'+(toplamMin*S.kasaAgirlik).toFixed(0)+'-'+(toplamMax*S.kasaAgirlik).toFixed(0)+' kg)</div>'
+    +'<div class="muted" style="margin-top:8px;font-size:11.5px;">Flaş gününe göre ortalama kasa aralıklarına dayalı kaba tahmindir, kesin değildir.</div>';
+  return sectionCard('📦 Haftalık Hasat Tahmini (önümüzdeki 7 gün)', body);
+}
 /* Protokol Uygunluğu — firma bazlı + oda bazlı. "Başarı" = erken + zamanında +
    geç-ama-haklı-sebepli (c.erteleSebep="biyolojik" — sarım/gelişme yavaşsa puan
    kırılmaz, odaPerformans() ile AYNI mantık). Sadece FİİLEN YAPILMIŞ adımlar
@@ -10339,6 +10423,7 @@ function renderRaporlar(){
     +'<div class="muted" style="margin-bottom:8px;">Veri anahtarı gerekmez, cihazda çalışır. Anormal sıcaklık, gecikme ve verim farkı gibi kalıpları tarar.</div>'
     +akilliAnalizHTML(aktif)
     +'</div>';
+  h+=haftalikHasatTahminiHTML();
   h+=hasatRaporuHTML();
   h+=protokolUygunlukHTML();
   h+=ortalamaUretimSuresiHTML();
