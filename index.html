@@ -490,7 +490,7 @@ function hasatTartiGetir(oda, tur){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v328";
+var APP_VER = "v329";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -6722,7 +6722,23 @@ function sulamaMetniGuncelle(selectId, dozId, targetTextId){
   var ilac=sel.value, d=parseInt(doz.value,10)||0;
   if(ilac && d>0) target.value = d+" ml "+ilac;
   else if(ilac && d===0) target.value = ilac;
-  /* ilaç seçilmemişse mevcut metne dokunma — elle not girilebilsin */
+  /* KRİTİK: dropdown "— ilaç yok / elle yaz —"e (boş değer) geri alınırsa metni
+     TEMİZLE. Eskiden burada hiçbir şey yapılmıyordu ("elle not girilebilsin"
+     diye) — ama o ana kadar zaten bu picker'ın kendisi metni ezmiş oluyordu
+     (yukarıdaki satırlar), yani o noktada korunacak "elle yazılmış" bir metin
+     kalmıyordu. Sonuç: yanlış ilaç/doz seçilince İPTAL ETMENİN hiçbir yolu
+     yoktu — kullanıcı elle metin kutusuna girip silmek zorunda kalıyordu. */
+  else if(!ilac) target.value = "";
+}
+/* Sulama/İlaçlama alanını + picker'ı (ilaç seçimi, doz slider'ı) tek dokunuşla
+   sıfırlar — yanlış girilen bir değeri elle metin kutusuna girip silmek yerine
+   tek bir "✕ Temizle" butonuyla iptal edebilmek için. */
+function sulamaTemizle(selectId, dozId, targetTextId){
+  var sel=el(selectId), doz=el(dozId), target=el(targetTextId), lbl=el(dozId+"_lbl");
+  if(target) target.value="";
+  if(sel) sel.value="";
+  if(doz) doz.value="0";
+  if(lbl) lbl.textContent="0 ml";
 }
 function addGunluk(id){
   if(!can("edit")) return noPerm();
@@ -7102,7 +7118,8 @@ function turOdaKartIcHTML(c, ge, showExtra){
         +ilacDozPickerHTML('tilac_'+c.id, 'tdoz_'+c.id, 'tsulama_'+c.id)
         +'<label>Sulama / İlaçlama (yukarıdan seçince otomatik dolar, elle de yazabilirsin)</label>'
         +'<div style="display:flex; gap:6px;"><input type="text" id="tsulama_'+c.id+'" class="tur_sulama" placeholder="örn. + 250 Serenade" style="flex:1;" value="'+esc(ge.sulama||"")+'">'
-        +'<button class="btn ghost small" style="white-space:nowrap;" onclick="turProtokol(\''+c.id+'\')">Protokol</button></div>')
+        +'<button class="btn ghost small" style="white-space:nowrap;" onclick="turProtokol(\''+c.id+'\')">Protokol</button>'
+        +'<button class="btn ghost small" style="white-space:nowrap;" onclick="sulamaTemizle(\'tilac_'+c.id+'\',\'tdoz_'+c.id+'\',\'tsulama_'+c.id+'\')">✕ Temizle</button></div>')
       : '<div class="muted" style="padding:8px 0; font-style:italic;">🚫 Poşet henüz açılmadı — sulama/ilaçlama girişi kapalı.</div>'
         +'<input type="hidden" class="tur_su" value=""><input type="hidden" id="tsulama_'+c.id+'" class="tur_sulama" value="'+esc(ge.sulama||"")+'">')
     +turSiradakiAdimHTML(c)
