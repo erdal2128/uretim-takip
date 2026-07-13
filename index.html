@@ -597,7 +597,7 @@ function hasatTartiGetir(oda, tur){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v339";
+var APP_VER = "v340";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -1199,7 +1199,12 @@ function gorevTopluMesajOlustur(){
   getGorevler().filter(function(g){return !g.done && g.tarih;}).forEach(function(g){
     if(!_gorevSecili["gg|"+g.id]) return;
     var isimler=atamaIsimListesi(g.atama||"");
-    var satir="📅 "+fmtDate(g.tarih)+" · 🧹 "+kisaGorevAdi(g.baslik||"");
+    /* "Oda B-1 · Oda boşaltma/yıkama" kalıbındaki genel görev başlıkları —
+       kisaGorevAdi() " · "de İLK eşleşmede kestiği için asıl iş türünü
+       sessizce atıyordu (bkz. gorevPlanlaGonder'daki aynı düzeltme). */
+    var _baslik=g.baslik||"", _gOda="", _gIs=_baslik;
+    if(_baslik.indexOf(" · ")>=0){ var _p=_baslik.split(" · "); _gOda=_p[0]; _gIs=_p.slice(1).join(" · "); }
+    var satir="📅 "+fmtDate(g.tarih)+" · 🧹 "+(_gOda?("🏠"+_gOda+": "):"")+kisaGorevAdi(_gIs);
     if(isimler.length) satir+="\n   👤 "+isimler.join(", ");
     lines.push(satir);
   });
@@ -1218,10 +1223,22 @@ function gorevTopluGonder(){
 function gorevPlanlaGonder(oda, txt, atamaVal, tarihISO){
   var isimler=atamaIsimListesi(atamaVal);
   if(!isimler.length){ toast("Önce personel/ekip seç"); return; }
+  /* Genel (oda'ya bağlı olmayan) görevlerin başlığı "konum · iş" kalıbında
+     kaydediliyor (bkz. gorevEkleForm: baslik=konum+" · "+is) — bu tip
+     görevlerde oda parametresi hep boş geliyordu. kisaGorevAdi() " · "de
+     İLK eşleşmede kesiyordu, bu da konumu tutup asıl İŞ TÜRÜNÜ sessizce
+     atıyordu (kullanıcı raporu: "görev yeri çıkıyor ama iş türü çıkmıyor").
+     Konum boşsa ve metin bu kalıbı taşıyorsa, ikisini burada ayırıyoruz. */
+  var gosterOda=oda, gosterIs=txt;
+  if(!gosterOda && txt && txt.indexOf(" · ")>=0){
+    var _parcalar=(""+txt).split(" · ");
+    gosterOda=_parcalar[0];
+    gosterIs=_parcalar.slice(1).join(" · ");
+  }
   var mesaj="📋 GÖREV\n\n"
     +"📅 "+fmtDate(tarihISO||todayISO())+"\n"
-    +"🏠 "+(oda||"")+"\n"
-    +"🔧 "+kisaGorevAdi(txt)+"\n"
+    +"🏠 "+(gosterOda||"")+"\n"
+    +"🔧 "+kisaGorevAdi(gosterIs)+"\n"
     +"👤 "+isimler.join(", ");
   /* Not: chat.whatsapp.com grup davet linkleri metin ön-doldurmayı desteklemiyor.
      wa.me/?text= WhatsApp'ı mesaj hazır açar, hangi sohbete gönderileceğini kullanıcı seçer. */
