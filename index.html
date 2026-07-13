@@ -597,7 +597,7 @@ function hasatTartiGetir(oda, tur){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v340";
+var APP_VER = "v341";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -7807,14 +7807,19 @@ function kompostChartSVG(c){
     if(od!==null||ko!==null) T.push({g:g,oda:od,komp:ko});
     var a=numParse(r.co2alt),u=numParse(r.co2ust);
     if(a!==null||u!==null) CO.push({g:g,alt:(a!==null?a:u),ust:(u!==null?u:a)});
-    if(r.sulama) S.push(g);
+    var suMik=numParse(r.su)||0;
+    if(r.sulama || suMik>0){
+      var ayrS=gunlukSatirAyristir(r);
+      var etiketS = ayrS.ilac.length ? ayrS.ilac.join(", ") : (suMik>0 ? "su" : "");
+      S.push({g:g, su:suMik, etiket:etiketS});
+    }
   });
   if(!T.length && !CO.length) return '<div style="color:#777;font-size:11px;">Grafik i\u00e7in \u00f6l\u00e7\u00fcm yok.</div>';
   var W=760,H=320,padL=44,padR=54,padT=16,padB=48;
   var odaPts=T.filter(function(p){return p.oda!==null;}).map(function(p){return{g:p.g,v:p.oda};}).sort(function(a,b){return a.g-b.g;});
   var kompPts=T.filter(function(p){return p.komp!==null;}).map(function(p){return{g:p.g,v:p.komp};}).sort(function(a,b){return a.g-b.g;});
   CO.sort(function(a,b){return a.g-b.g;});
-  var gall=[]; T.forEach(function(p){gall.push(p.g);}); CO.forEach(function(p){gall.push(p.g);}); S.forEach(function(g){gall.push(g);});
+  var gall=[]; T.forEach(function(p){gall.push(p.g);}); CO.forEach(function(p){gall.push(p.g);}); S.forEach(function(s){gall.push(s.g);});
   var gmin=Math.min.apply(null,gall), gmax=Math.max.apply(null,gall); if(gmax===gmin) gmax=gmin+1;
   var tv=[]; odaPts.concat(kompPts).forEach(function(p){tv.push(p.v);});
   var tmin,tmax; if(tv.length){tmin=Math.floor(Math.min.apply(null,tv)-1);tmax=Math.ceil(Math.max.apply(null,tv)+1);}else{tmin=18;tmax=28;} if(tmax===tmin)tmax=tmin+1;
@@ -7830,7 +7835,20 @@ function kompostChartSVG(c){
   var tstep=Math.max(1,Math.round((tmax-tmin)/5));
   for(var t=tmin;t<=tmax;t+=tstep){var y=YT(t);svg+='<line x1="'+padL+'" y1="'+y+'" x2="'+(W-padR)+'" y2="'+y+'" stroke="#ececec"/><text x="'+(padL-5)+'" y="'+(y+3)+'" font-size="10" text-anchor="end" fill="#2f6b4f">'+t+'\u00b0</text>';}
   if(hasCo){var cstep=Math.max(1,Math.round((cmax-cmin)/5));for(var cc=cmin;cc<=cmax;cc+=cstep){var yc=YC(cc);svg+='<text x="'+(W-padR+5)+'" y="'+(yc+3)+'" font-size="9" text-anchor="start" fill="#c47a1a">'+cc+'</text>';}}
-  S.forEach(function(g){var x=X(g);svg+='<line x1="'+x+'" y1="'+padT+'" x2="'+x+'" y2="'+(H-padB)+'" stroke="#bcdcff" stroke-dasharray="3,3"/><circle cx="'+x+'" cy="'+(H-padB)+'" r="3" fill="#3b82c4"/>';});
+  /* Sulama/ilaçlama: gün ekseninde küçük çubuklar (yükseklik = verilen su
+     miktarı, 0 lt ise minimum görünür yükseklik) — üstünde o gün ne verildiği
+     yazar (ilaçlama varsa ilaç adları, yoksa "su"). */
+  if(S.length){
+    var barBase=H-padB, barMaxH=54, barW=6;
+    var suMax=Math.max.apply(null, S.map(function(s){return s.su;}).concat([1]));
+    S.forEach(function(s){
+      var x=X(s.g);
+      var barH=s.su>0 ? Math.max(4,(s.su/suMax)*barMaxH) : 4;
+      var y=barBase-barH;
+      svg+='<rect x="'+(x-barW/2)+'" y="'+y+'" width="'+barW+'" height="'+barH+'" fill="#3b82c4" fill-opacity="0.55" stroke="#2f6ea3" stroke-width="0.6"/>';
+      if(s.etiket) svg+='<text x="'+(x+3)+'" y="'+(y-3)+'" font-size="8" fill="#1d4ed8" text-anchor="start" transform="rotate(-60 '+(x+3)+' '+(y-3)+')">'+esc(s.etiket)+'</text>';
+    });
+  }
   var allg=[]; odaPts.concat(kompPts).forEach(function(p){allg.push(p.g);}); CO.forEach(function(p){allg.push(p.g);}); allg=allg.filter(function(v,i,a){return a.indexOf(v)===i;}).sort(function(a,b){return a-b;});
   var everyX=Math.ceil(allg.length/14)||1;
   allg.forEach(function(g,i){if(i%everyX===0)svg+='<text x="'+X(g)+'" y="'+(H-padB+15)+'" font-size="9" text-anchor="middle" fill="#555">'+g+'</text>';});
@@ -7853,7 +7871,7 @@ function kompostChartSVG(c){
     +'<span style="color:#14583a;">\u25cf Kompost \u00b0C</span> &nbsp; '
     +'<span style="color:#1f9e75;">- - Oda \u00b0C</span> &nbsp; '
     +(hasCo?'<span style="color:#d98a1f;">\u25a0 CO\u2082 alt-\u00fcst band\u0131 (sa\u011f eksen)</span> &nbsp; ':'')
-    +'<span style="color:#3b82c4;">\u25cf sulama</span> &nbsp; '
+    +'<span style="color:#3b82c4;">\u25ae sulama/ila\u00e7lama (\u00e7ubuk = miktar, \u00fcstte ne verildi\u011fi yazar)</span> &nbsp; '
     +'<span style="color:#7aa886;">\u25a0 hedef 24-26\u00b0</span> &nbsp; '
     +'<span style="color:#d98a1f;">- - 21/28 kritik</span> &nbsp; <span style="color:#c0291f;">- - 18/30 tehlike</span></div>';
   return '<svg width="'+W+'" height="'+H+'" viewBox="0 0 '+W+' '+H+'" xmlns="http://www.w3.org/2000/svg" style="max-width:100%;border:1px solid #ccc;">'+svg+'</svg>'+lg;
@@ -7894,14 +7912,27 @@ function suDegeriGoster(su){
   return temizMi ? ('<b>'+esc(su)+' lt su</b>') : esc(su);
 }
 function gunlukSatirAyristir(r){
-  var segments=(r&&r.sulama||"").split(/\s*(?:·|\+)\s*/).map(function(s){return s.trim();}).filter(Boolean);
+  /* "+" sadece boşluklu kullanıldığında ayraç sayılır — "Hava+1:" gibi
+     protokol referans etiketlerinin ortasındaki bitişik "+" bölünmesin. */
+  var segments=(r&&r.sulama||"").split(/\s*·\s*|\s+\+\s+/).map(function(s){return s.trim();}).filter(Boolean);
   var uretim=[], ilac=[], sulama=[];
   var ilacAdlari=getIlacList().map(function(x){return (x.ad||"").toLocaleLowerCase("tr");}).filter(Boolean);
   segments.forEach(function(seg){
     var segL=seg.toLocaleLowerCase("tr");
     var uretimMi = /yap[ıi]ld[ıi]\s*$|ertelendi|erken çekildi|kontrol sonucu/i.test(seg);
     if(uretimMi){ uretim.push(seg); return; }
-    var ilacMi = ilacAdlari.some(function(ad){ return segL.indexOf(ad)>=0; }) || /\bml\b|\bgr\b|\bkg\b/i.test(seg);
+    /* "su" kelimesi geçen bir parça sulamadır. Miktar/rakam içeren ama "su"
+       kelimesi GEÇMEYEN bir parça (örn. "2 lt formaldehit", "500 ml insektisit")
+       ml/gr/kg birimi olmasa bile (formaldehit gibi "lt" ile dozlanan kimyasallar
+       dahil) ilaçlama sayılır — eskiden sadece ml/gr/kg birimi veya Ayarlar'daki
+       İlaç Listesi'nde kayıtlı bir ad geçmesi aranıyordu, bu yüzden protokol
+       metnindeki "2 lt formaldehit" gibi satırlar (formaldehit listede kayıtlı
+       değilse) yanlışlıkla Sulama sütununa düşüyordu. */
+    var suMi = /\bsu\b/i.test(seg);
+    var dozluMu = /\d/.test(seg);
+    var ilacMi = ilacAdlari.some(function(ad){ return segL.indexOf(ad)>=0; })
+      || /\bml\b|\bgr\b|\bkg\b/i.test(seg)
+      || (dozluMu && !suMi);
     if(ilacMi){ ilac.push(seg); }
     else { sulama.push(seg); }
   });
