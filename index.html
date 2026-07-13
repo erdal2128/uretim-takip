@@ -597,7 +597,7 @@ function hasatTartiGetir(oda, tur){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v342";
+var APP_VER = "v343";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -7813,15 +7813,15 @@ function kompostChartSVG(c){
     if(od!==null||ko!==null) T.push({g:g,oda:od,komp:ko});
     var a=numParse(r.co2alt),u=numParse(r.co2ust);
     if(a!==null||u!==null) CO.push({g:g,alt:(a!==null?a:u),ust:(u!==null?u:a)});
-    var suMik=numParse(r.su)||0;
-    if(r.sulama || suMik>0){
+    if(r.sulama || r.su){
       var ayrS=gunlukSatirAyristir(r);
+      var suMik=gunlukSuMiktari(r);
       var etiketS = ayrS.ilac.length ? ayrS.ilac.join(", ") : (suMik>0 ? "su" : "");
-      S.push({g:g, su:suMik, etiket:etiketS});
+      if(suMik>0 || etiketS) S.push({g:g, su:suMik, etiket:etiketS});
     }
   });
   if(!T.length && !CO.length) return '<div style="color:#777;font-size:11px;">Grafik i\u00e7in \u00f6l\u00e7\u00fcm yok.</div>';
-  var W=760,H=320,padL=44,padR=54,padT=16,padB=48;
+  var W=760,H=320,padL=44,padR=54,padT=16,padB=64;
   var odaPts=T.filter(function(p){return p.oda!==null;}).map(function(p){return{g:p.g,v:p.oda};}).sort(function(a,b){return a.g-b.g;});
   var kompPts=T.filter(function(p){return p.komp!==null;}).map(function(p){return{g:p.g,v:p.komp};}).sort(function(a,b){return a.g-b.g;});
   CO.sort(function(a,b){return a.g-b.g;});
@@ -7857,7 +7857,30 @@ function kompostChartSVG(c){
   }
   var allg=[]; odaPts.concat(kompPts).forEach(function(p){allg.push(p.g);}); CO.forEach(function(p){allg.push(p.g);}); allg=allg.filter(function(v,i,a){return a.indexOf(v)===i;}).sort(function(a,b){return a-b;});
   var everyX=Math.ceil(allg.length/14)||1;
-  allg.forEach(function(g,i){if(i%everyX===0)svg+='<text x="'+X(g)+'" y="'+(H-padB+15)+'" font-size="9" text-anchor="middle" fill="#555">'+g+'</text>';});
+  allg.forEach(function(g,i){if(i%everyX===0)svg+='<text x="'+X(g)+'" y="'+(H-padB+29)+'" font-size="9" text-anchor="middle" fill="#555">'+g+'</text>';});
+  /* Dönem şeritleri: gün ekseninin hemen altında hangi günlerin hangi üretim
+     döneminde (Kuluçka, Toprak dönemi, 1./2. Misel, Hava dönemi vb.) olduğunu
+     gösteren renkli bant + etiket — kullanıcı isteği: "günlerin altına
+     dönemleri ayırmak gerekir, kuluçka dönemi toprak dönemi gibi". */
+  var faz=phaseList(c).map(function(f){
+    if(!f.tarih) return null;
+    var fg=gunNo(c,f.tarih); if(fg==="") return null;
+    return {ad:f.ad, g:fg, cls:f.cls};
+  }).filter(Boolean).sort(function(a,b){return a.g-b.g;});
+  var fazTemiz=[]; faz.forEach(function(f){ if(!fazTemiz.length || fazTemiz[fazTemiz.length-1].g!==f.g) fazTemiz.push(f); });
+  var FAZ_RENK={"b-amber":"#f5e2b8","b-teal":"#bfe3d6","b-harvest":"#f3c9a0","b-gray":"#ddd"};
+  if(fazTemiz.length){
+    var stripY=H-padB+2, stripH=14;
+    for(var fi=0; fi<fazTemiz.length; fi++){
+      if(fazTemiz[fi].g>gmax) break;
+      var g0=Math.max(fazTemiz[fi].g,gmin), g1=(fi+1<fazTemiz.length)?Math.min(fazTemiz[fi+1].g,gmax):gmax;
+      if(g1<=g0 && fi<fazTemiz.length-1) continue;
+      var x0=X(g0), x1=X(g1);
+      if(x1<=x0) x1=x0+2;
+      svg+='<rect x="'+x0+'" y="'+stripY+'" width="'+(x1-x0)+'" height="'+stripH+'" fill="'+(FAZ_RENK[fazTemiz[fi].cls]||"#eee")+'" opacity="0.85"/>';
+      if(x1-x0>26) svg+='<text x="'+((x0+x1)/2)+'" y="'+(stripY+10.5)+'" font-size="8" text-anchor="middle" fill="#4a4a3f">'+esc(fazTemiz[fi].ad.replace(" dönemi","").replace(" gelişim",""))+'</text>';
+    }
+  }
   /* CO2 band (alt-ust) */
   if(hasCo && CO.length>=1){
     var top=CO.map(function(p){return X(p.g)+","+YC(p.ust);});
@@ -7917,32 +7940,76 @@ function suDegeriGoster(su){
   var temizMi=/^\d+([.,]\d+)?$/.test((""+su).trim());
   return temizMi ? ('<b>'+esc(su)+' lt su</b>') : esc(su);
 }
+/* PDF/rapor'daki Sulama sütunu için — suDegeriGoster'ın aksine, sayısal
+   OLMAYAN (eski/legacy, yanlışlıkla ilaç metni girilmiş) Su değerini burada
+   AYRICA göstermez: o metin artık gunlukSatirAyristir tarafından Sulama/İlaç
+   metniyle birlikte sınıflandırılıp doğru sütuna (ayr.sulama/ayr.ilac)
+   ekleniyor — burada tekrar gösterilirse hem yanlış sütunda hem de iki kez
+   görünürdü. suDegeriGoster'ın kendisi diğer (Günlük listesi) ekranda ham
+   alanı olduğu gibi göstermeye devam ettiği için değiştirilmedi. */
+function suDegeriTemiz(su){
+  var temizMi=/^\d+([.,]\d+)?$/.test((""+(su||"")).trim());
+  if(!temizMi) return "";
+  var n=numParse(su);
+  return (n>0) ? ('<b>'+esc(su)+' lt su</b>') : "";
+}
 function gunlukSatirAyristir(r){
+  /* Su alanı normalde sadece sayı olmalı (slider'dan gelir) ama eski/legacy
+     kayıtlarda serbest metin de olabilir ("250 ml serenade" gibi, yanlışlıkla
+     Su kutusuna yazılmış) — böyle bir metin varsa Sulama/İlaçlama metniyle
+     BİRLİKTE aynı sınıflandırmadan geçirilir. Eskiden bu metin suDegeriGoster
+     ile olduğu gibi (etiketsiz) Sulama sütununda gösteriliyordu — bu yüzden
+     "Su" kutusuna yanlışlıkla girilmiş bir ilaç adı hep Sulama'da, buna
+     karşılık asıl sulama miktarı (Sulama/İlaç kutusuna "500 lt" diye
+     girilmiş) yanlışlıkla İlaçlama'da görünüyordu. */
+  var suRaw=(r&&r.su)||"";
+  var suSayisalMi=/^\d+([.,]\d+)?$/.test((""+suRaw).trim());
+  var metin=(r&&r.sulama)||"";
+  if(!suSayisalMi && suRaw) metin = metin ? (metin+" · "+suRaw) : (""+suRaw);
   /* "+" sadece boşluklu kullanıldığında ayraç sayılır — "Hava+1:" gibi
      protokol referans etiketlerinin ortasındaki bitişik "+" bölünmesin. */
-  var segments=(r&&r.sulama||"").split(/\s*·\s*|\s+\+\s+/).map(function(s){return s.trim();}).filter(Boolean);
+  var segments=metin.split(/\s*·\s*|\s+\+\s+/).map(function(s){return s.trim();}).filter(Boolean);
   var uretim=[], ilac=[], sulama=[];
   var ilacAdlari=getIlacList().map(function(x){return (x.ad||"").toLocaleLowerCase("tr");}).filter(Boolean);
   segments.forEach(function(seg){
     var segL=seg.toLocaleLowerCase("tr");
     var uretimMi = /yap[ıi]ld[ıi]\s*$|ertelendi|erken çekildi|kontrol sonucu/i.test(seg);
     if(uretimMi){ uretim.push(seg); return; }
-    /* "su" kelimesi geçen bir parça sulamadır. Miktar/rakam içeren ama "su"
-       kelimesi GEÇMEYEN bir parça (örn. "2 lt formaldehit", "500 ml insektisit")
-       ml/gr/kg birimi olmasa bile (formaldehit gibi "lt" ile dozlanan kimyasallar
-       dahil) ilaçlama sayılır — eskiden sadece ml/gr/kg birimi veya Ayarlar'daki
-       İlaç Listesi'nde kayıtlı bir ad geçmesi aranıyordu, bu yüzden protokol
-       metnindeki "2 lt formaldehit" gibi satırlar (formaldehit listede kayıtlı
-       değilse) yanlışlıkla Sulama sütununa düşüyordu. */
-    var suMi = /\bsu\b/i.test(seg);
-    var dozluMu = /\d/.test(seg);
-    var ilacMi = ilacAdlari.some(function(ad){ return segL.indexOf(ad)>=0; })
-      || /\bml\b|\bgr\b|\bkg\b/i.test(seg)
-      || (dozluMu && !suMi);
-    if(ilacMi){ ilac.push(seg); }
-    else { sulama.push(seg); }
+    if(ilacAdlari.some(function(ad){ return segL.indexOf(ad)>=0; })){ ilac.push(seg); return; }
+    /* Miktar + (varsa) birim + (varsa) madde adı ayrıştırılır: "500 lt" gibi
+       SADECE miktar+birim (arkasında madde adı YOK) düz sulama okumasıdır;
+       "250 ml serenade" veya "2 lt formaldehit" gibi miktardan SONRA bir
+       madde adı geçiyorsa ilaçlamadır — birim ml/gr/kg/lt fark etmez
+       (formaldehit gibi litreyle dozlanan kimyasallar da dahil). */
+    var m=/^(\d+(?:[.,]\d+)?)\s*(ml|gr|kg|lt|litre)?\s*(.*)$/i.exec(seg);
+    if(m){
+      var isim=(m[3]||"").trim().toLocaleLowerCase("tr");
+      if(!isim || isim==="su" || /^su\b/.test(isim)){ sulama.push(seg); }
+      else { ilac.push(seg); }
+      return;
+    }
+    if(/\bml\b|\bgr\b|\bkg\b/i.test(seg)){ ilac.push(seg); return; }
+    sulama.push(seg);
   });
   return {uretim:uretim, ilac:ilac, sulama:sulama};
+}
+/* Grafikteki sulama çubuğunun yüksekliği için "gerçek" litre miktarı — Su
+   alanı temiz sayıysa doğrudan o, değilse (eski/legacy kayıt, Su kutusuna
+   yanlışlıkla ilaç metni girilmiş) Sulama/İlaç metnindeki düz sulama
+   parçalarından (yukarıdaki ayrıştırmanın "sulama" kovası) miktar okunur —
+   aksi halde aynı "500 lt" etiketli günler farklı (ve YANLIŞ) yüksekliklerde
+   çubuk çiziyordu, çünkü yükseklik hep ham r.su'dan geliyordu. */
+function gunlukSuMiktari(r){
+  var suRaw=(r&&r.su)||"";
+  var temizMi=/^\d+([.,]\d+)?$/.test((""+suRaw).trim());
+  if(temizMi){ var n=numParse(suRaw); return n>0?n:0; }
+  var ayr=gunlukSatirAyristir(r);
+  var best=0;
+  ayr.sulama.forEach(function(seg){
+    var m=/^(\d+(?:[.,]\d+)?)/.exec(seg.trim());
+    if(m){ var v=parseFloat(m[1].replace(",",".")); if(v>best) best=v; }
+  });
+  return best;
 }
 function buildPrintHTML(c){
   var rows="";
@@ -7953,7 +8020,8 @@ function buildPrintHTML(c){
     var og=ortuGun(c,r.tarih);
     var co2=(r.co2alt||r.co2ust)?((r.co2alt||"")+"-"+(r.co2ust||"")):"";
     var ayr=gunlukSatirAyristir(r);
-    var suHucre = suDegeriGoster(r.su) + ((numParse(r.su)>0&&ayr.sulama.length)?' · ':'') + esc(ayr.sulama.join(" · "));
+    var suTemiz = suDegeriTemiz(r.su);
+    var suHucre = suTemiz + ((suTemiz&&ayr.sulama.length)?' · ':'') + esc(ayr.sulama.join(" · "));
     var uretimHucre=(uretimTarihMap[r.tarih]||[]).concat(ayr.uretim).join(" · ");
     rows+='<tr><td>'+fmtDate(r.tarih)+'</td><td>'+gunNo(c,r.tarih)+'</td><td>'+(og!==null?og:"")+'</td><td>'+esc(r.odaC)+'</td><td>'+esc(r.kompostC)+'</td><td>'+esc(co2)+'</td>'
       +'<td style="text-align:left">'+esc(uretimHucre)+'</td>'
