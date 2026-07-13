@@ -244,6 +244,18 @@ function fbPushDirtyGorev(){
   });
 }
 function fbDeleteGorev(id){ if(FB.ready && FB.gorevColl){ delete _syncedG[id]; FB.gorevColl.doc(id).delete().catch(function(e){ console.warn("deleteG",e); fbSetStatus("hata"); }); } }
+/* gorevlerMukerrerleriBirlestir()'in kuyruğa aldığı fazlalık bulut dokümanlarını
+   siler — bkz. o fonksiyondaki yorum. Bulut hazır değilse sessizce vazgeçer,
+   kuyruk (memData._gorevMukerrerSil) diskte kalır, bir sonraki fırsatta
+   (30sn'lik senkron döngüsü / bulut bağlantısı kurulunca) tekrar denenir. */
+function gorevMukerrerBulutTemizle(){
+  if(!FB.ready || !FB.gorevColl) return;
+  var d=loadData();
+  if(!Array.isArray(d._gorevMukerrerSil) || !d._gorevMukerrerSil.length) return;
+  d._gorevMukerrerSil.forEach(function(id){ fbDeleteGorev(id); });
+  d._gorevMukerrerSil=[];
+  saveData();
+}
 /* ---- Eşzamanlı düzenleme: döngü birleştirme (veri kaybı olmasın) ---- */
 function mergeArr(localArr, remoteArr, keyFn, preferLocal){
   var map={}, order=[];
@@ -327,6 +339,9 @@ function fbInitAfterAuth(){
     /* Bulut bağlantısı kurulur kurulmaz (uygulama her açılışında) sessiz bir
        yedek dene — kullanıcı "her açılışta buluta yedekle" istedi. */
     setTimeout(cloudYedekAcilista, 1500);
+    /* Bulut bağlantısı kurulur kurulmaz, geriye dönük mükerrer görev
+       temizliğinin kuyruğa aldığı fazlalık dokümanları da sil. */
+    setTimeout(gorevMukerrerBulutTemizle, 1500);
     FB.coll.onSnapshot({includeMetadataChanges:true}, function(snap){
       loadData();
       var realChange=false, needPush=false;
@@ -414,6 +429,13 @@ function fbInitAfterAuth(){
         var cloud={}; snap.forEach(function(dd){ cloud[dd.id]=1; });
         ((memData.gorevler)||[]).forEach(function(g){ if(!cloud[g.id]){ _syncedG[g.id]=cycleJSON(g); FB.gorevColl.doc(g.id).set(fbClean(g)).catch(function(e){ console.warn("ilk senkron setG",e); _syncFailCount++; fbSetStatus("hata"); }); } });
       }
+      /* Buluttan gelen veri, daha önce cihazda birleştirilmiş ama buluttan
+         henüz silinmemiş bir mükerrer görevi geri getirmiş olabilir (bkz.
+         gorevlerMukerrerleriBirlestir yorumu) — hemen tekrar birleştir ve
+         fazlalığı yeniden silme kuyruğuna al, kullanıcı ekranda tekrar
+         kopya görmesin. */
+      if(gorevlerMukerrerleriBirlestir(memData)) saveData();
+      gorevMukerrerBulutTemizle();
       persistEncrypted(JSON.stringify(memData));
       if(realChange && !isTyping()) render();
     }, function(err){ console.warn("snapshotG",err); });
@@ -490,7 +512,7 @@ function hasatTartiGetir(oda, tur){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v329";
+var APP_VER = "v330";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -574,6 +596,15 @@ function gorevlerMukerrerleriBirlestir(d){
       var arr=atamaParse(ana.atama||"");
       for(var i=1;i<grup.length;i++){
         atamaParse(grup[i].atama||"").forEach(function(a){ if(arr.indexOf(a)<0) arr.push(a); });
+        /* KRİTİK: genel görevler tek tek ayrı Firestore dokümanı olarak da
+           senkronize ediliyor (gorevColl). Burada sadece memData.gorevler'den
+           silmek YETMEZ — buluttaki fazlalık doküman duruyor olsa, bir sonraki
+           onSnapshot'ta (özellikle her açılışın İLK anlık görüntüsünde, "added"
+           olarak) sessizce GERİ GELİYORDU — kullanıcı düzeltmenin hiç işe
+           yaramadığını görüyordu ("bu düzelmemiş"). Silinecek fazlalık ID'leri
+           kuyruğa al, buluta bağlantı olur olmaz gorevMukerrerBulutTemizle()
+           gerçek silmeyi yapsın. */
+        if(grup[i].id){ if(!d._gorevMukerrerSil) d._gorevMukerrerSil=[]; if(d._gorevMukerrerSil.indexOf(grup[i].id)<0) d._gorevMukerrerSil.push(grup[i].id); }
       }
       ana.atama=arr.join(",");
       yeni.push(ana);
@@ -11205,7 +11236,7 @@ if(_veriOkumaHatasi){
 }
 autoSnapshotThrottled();
 /* Başarısız senkron denemelerini periyodik olarak tekrar dene (internet geri gelince otomatik kurtarır) */
-setInterval(function(){ if(FB.ready){ fbPushDirty(); fbPushDirtyGorev(); fbPushSettings(); cloudYedekTetikle(); } }, 30000);
+setInterval(function(){ if(FB.ready){ fbPushDirty(); fbPushDirtyGorev(); fbPushSettings(); cloudYedekTetikle(); gorevMukerrerBulutTemizle(); } }, 30000);
 setInterval(updateCloudBakBadge, 60000);
 }
 if("serviceWorker" in navigator){
