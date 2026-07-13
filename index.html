@@ -457,24 +457,8 @@ function fbInitAfterAuth(){
     /* Ayarlar (firmalar, protokol, oda m², sıcaklık sınırları, konumlar, görev türleri, personel vb.)
        — tek bir belge olarak senkronize edilir, tüm cihazlar aynı ayarları görür. */
     FB.settingsDoc = db.collection("farms").doc(FARM_CODE).collection("meta").doc("settings");
-    FB.settingsDoc.onSnapshot({includeMetadataChanges:true}, function(snap){
-      if(!snap.exists){
-        /* Bulutta henüz ayar yok — yereldekini ilk kez gönder */
-        _settingsFirstSyncDone = true;
-        fbPushSettings();
-        return;
-      }
-      var remote = snap.data();
-      if(!remote){ _settingsFirstSyncDone = true; return; }
-      var j = JSON.stringify(remote);
-      _settingsFirstSyncDone = true; /* buluttan en az bir kez veri aldık — artık göndermek güvenli */
-      if(_syncedSettings===j) return; /* kendi yazdığımızın yankısı */
-      _syncedSettings = j;
-      var d=loadData();
-      d.settings = remote;
-      persistEncrypted(JSON.stringify(memData));
-      if(!isTyping()) render();
-    }, function(err){ console.warn("snapshotSettings",err); _settingsFirstSyncDone = true; });
+    FB.settingsDoc.onSnapshot({includeMetadataChanges:true}, handleSettingsSnapshot,
+      function(err){ console.warn("snapshotSettings",err); _settingsFirstSyncDone = true; });
     /* NOT: Önceden burada "6 sn sonra ne olursa olsun izin ver" diye bir güvenlik ağı vardı.
        Bu, zayıf sinyalli bir cihazın henüz güncel bulut ayarlarını görmeden kendi eski/yerel
        ayarlarını buluta basmasına ve başka bir cihazın az önce yaptığı değişikliği ezmesine
@@ -486,14 +470,51 @@ function fbInitAfterAuth(){
 }
 var _syncedSettings=null;
 var _settingsFirstSyncDone=false; /* buluttan en az bir kez güncel ayar alınana kadar YEREL ayarları buluta göndermeyi engeller — eski veri yeniyi ezmesin */
+var _settingsPendingSince=0; /* 0=bekleyen yerel değişiklik yok; aksi halde push'un .set() ile ONAYLANMASINI bekliyoruz — bkz. handleSettingsSnapshot yorumu */
+/* farms/{FARM_CODE}/meta/settings dokümanının onSnapshot işleyicisi — test
+   edilebilsin diye adlandırılmış bir fonksiyon olarak ayrıldı (sahte bir
+   "snap" objesiyle doğrudan çağrılabilir). */
+function handleSettingsSnapshot(snap){
+  if(!snap.exists){
+    /* Bulutta henüz ayar yok — yereldekini ilk kez gönder */
+    _settingsFirstSyncDone = true;
+    fbPushSettings();
+    return;
+  }
+  var remote = snap.data();
+  if(!remote){ _settingsFirstSyncDone = true; return; }
+  var j = JSON.stringify(remote);
+  _settingsFirstSyncDone = true; /* buluttan en az bir kez veri aldık — artık göndermek güvenli */
+  if(_syncedSettings===j) return; /* kendi yazdığımızın yankısı */
+  /* KRİTİK: d.settings TEK bir bulut dokümanı olarak, hiçbir alan-bazlı
+     birleştirme YAPILMADAN (mergeCycle'ın aksine) senkronize ediliyor.
+     Yerelde henüz buluta ULAŞMAMIŞ bir değişiklik varsa (fbPushSettings
+     hâlâ bekliyor — örn. reçete satırına az önce "su" eklendi, Kaydet'e
+     basıldı ama .set() henüz dönmedi), buluttan bu anda gelen anlık
+     görüntü büyük ihtimalle O DEĞİŞİKLİKTEN ÖNCEKİ hali taşıyor. Eskiden
+     burada koşulsuz "d.settings=remote" yapılıyordu — kullanıcı Kaydet'e
+     basıp "Kaydedildi" görse bile, hemen ardından gelen bu eski anlık
+     görüntü değişikliği SESSİZCE siliyordu ("kaydediyorum ama yine eski
+     hâline dönüyor" raporu tam olarak buradan geliyordu). Bekleyen yerel
+     bir değişiklik varsa buluttan geleni KABUL ETMİYORUZ, bunun yerine
+     kendi değişikliğimizi yeniden göndermeyi deniyoruz. */
+  if(_settingsPendingSince){ fbPushSettings(); return; }
+  _syncedSettings = j;
+  var d=loadData();
+  d.settings = remote;
+  persistEncrypted(JSON.stringify(memData));
+  if(!isTyping()) render();
+}
 function fbPushSettings(){
   if(!FB.ready || !FB.settingsDoc) return;
   if(!_settingsFirstSyncDone) return; /* henüz buluttaki güncel hali görmedik — göndermek riskli, bekle */
   var d=loadData(); if(!d.settings) d.settings={};
   var j=JSON.stringify(d.settings);
   if(_syncedSettings===j) return;
+  if(!_settingsPendingSince) _settingsPendingSince=Date.now();
   FB.settingsDoc.set(fbClean(d.settings)).then(function(){
     _syncedSettings=j;
+    _settingsPendingSince=0;
   }).catch(function(e){ console.warn("setSettings",e); fbSetStatus("hata"); });
 }
 
@@ -512,7 +533,7 @@ function hasatTartiGetir(oda, tur){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v330";
+var APP_VER = "v331";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
