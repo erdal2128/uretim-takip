@@ -597,7 +597,7 @@ function hasatTartiGetir(oda, tur){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v338";
+var APP_VER = "v339";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -7266,9 +7266,27 @@ function turOdaKartIcHTML(c, ge, showExtra){
     +((airStarted(c)||!!(ge.co2alt||ge.co2ust))?('<div class="field-row"><div><label>CO₂ alt</label><input type="number" inputmode="numeric" class="tur_co2a" value="'+esc(ge.co2alt||"")+'"'+oi+'></div>'
     +'<div><label>CO₂ üst</label><input type="number" inputmode="numeric" class="tur_co2u" value="'+esc(ge.co2ust||"")+'"'+oi+'></div></div>'):'')
     +(showSu?((function(){
+        var _ot=_turTarihVal||todayISO();
+        /* Sarım kontrolü gereken bir ilaç adımı (formaldehit) bugüne denk
+           geliyorsa ve henüz "Evet" cevaplanmadıysa, normal öneri kutusu
+           yerine Evet/Hayır sorusu gösterilir — kullanıcı isteği: "sarım
+           toprağa geçmedi ise o günkü sulama ve ilaçlama 1 gün ertelensin,
+           1 gün sonra yine geçmedi ise geçene kadar ertelensin". "Hayır"
+           seçilince adımın kendi ertelemesi +1 gün artar (protokolOneri artık
+           bunu okuyor) — ertesi gün soru otomatik tekrar sorulur. */
+        var _sarim = bugunSarimKontroluGerekliMi(c, _ot);
+        var _sarimCevap = (_sarim && c.sarimKontrol && c.sarimKontrol["p"+_sarim.idx] && c.sarimKontrol["p"+_sarim.idx].tarih===_ot) ? c.sarimKontrol["p"+_sarim.idx].cevap : null;
+        if(_sarim && _sarimCevap!=="evet"){
+          return '<div style="margin:4px 0; padding:9px; background:#fff3e0; border:1.5px solid #e8a33d; border-radius:8px;">'
+            +'<div style="font-size:13.5px; font-weight:700; color:#8a5a1f;">🍄 Sarım toprağa geçti mi?</div>'
+            +'<div style="font-size:12.5px; color:#8a5a1f; margin:3px 0 8px;">Bugün "'+esc(_sarim.s.txt)+'" günü — sarım geçmediyse uygulama 1 gün ertelenir.</div>'
+            +'<div style="display:flex; gap:8px;">'
+            +'<button class="btn small" style="flex:1;background:var(--green);color:#fff;border:none;" onclick="sarimSoruCevapla(\''+c.id+'\','+_sarim.idx+',\'evet\')">✓ Evet, geçti</button>'
+            +'<button class="btn small ghost" style="flex:1;" onclick="sarimSoruCevapla(\''+c.id+'\','+_sarim.idx+',\'hayir\')">✗ Hayır, ertele</button>'
+            +'</div></div>';
+        }
         /* Günün protokol önerisi OTOMATİK görünür — mühendis butonu bilmese de görür.
            Dokununca sulama alanına dolar (turProtokol confirm'li akışı kullanır). */
-        var _ot=_turTarihVal||todayISO();
         var _on=protokolOneri(c,_ot);
         return _on?('<div onclick="turProtokol(\''+c.id+'\')" style="cursor:pointer; margin:4px 0; padding:7px 9px; background:#e8f3ff; border:1px solid #b9d7f5; border-radius:8px; font-size:13.5px; color:#1d4ed8;">💧 <b>Bugün protokol:</b> '+esc(_on)+' <span class="muted" style="font-size:11.5px;">(dokun → aşağıya dolsun)</span></div>'):'';
       })()
@@ -10960,7 +10978,15 @@ function protokolOneri(c, iso){
       return;
     }
     var dt=protokolTarih(c,s); if(!dt) return;
-    
+    /* KRİTİK: ilaç/su adımlarının KENDİ ertelemesi (c.ertele["p"+idx]) eskiden
+       hiç uygulanmıyordu — sarım toprağa geçmediyse formaldehit gününü 1 gün
+       ertelemek gibi bir aksiyonun hiçbir etkisi olmuyordu (bkz.
+       sarimSoruCevapla). protokolTarih() SADECE referans zincirindeki ÖNCEKİ
+       adımların ertelemesini taşır, adımın KENDİ ertelemesini SSOT deseni
+       gereği çağıran ekler — burada da aynı desen uygulanıyor. */
+    var _ert=(c.ertele && c.ertele["p"+idx])||0;
+    if(_ert) dt=addDays(dt,_ert);
+
     /* YALNIZCA bugün için sulama/ilaç — eski tarihlerde değil */
     if(dt!==iso) return;
     
@@ -10997,6 +11023,46 @@ function protokolOneri(c, iso){
     out.push(metin);
   });
   return out.join(" + ");
+}
+/* "Sarım kontrolü" gereken ilaç adımı: formaldehit uygulaması, sarım
+   toprağa henüz geçmediyse 1 gün ertelenmeli (kullanıcı isteği). Metin
+   eşleşmesi (protokol satırının txt'inde "formaldehit" geçiyorsa) — bu satır
+   varsayılan protokolde zaten tek, kullanıcı yeniden adlandırırsa da "kök
+   kelime" korunduğu sürece çalışmaya devam eder. */
+function sarimKontrolluMu(s){ return !!(s && s.tip==="ilac" && /formaldehit/i.test(s.txt||"")); }
+/* Bugün için sarım-kontrollü bir ilaç adımı var mı (ertele dahil edilmiş
+   gerçek tarihiyle) — varsa {idx,s} döner, yoksa null. */
+function bugunSarimKontroluGerekliMi(c, iso){
+  var out=null;
+  getProtokol().forEach(function(s,idx){
+    if(out || s.silindi || !sarimKontrolluMu(s)) return;
+    var base=protokolTarih(c,s); if(!base) return;
+    var ert=(c.ertele && c.ertele["p"+idx])||0;
+    var dt=ert?addDays(base,ert):base;
+    if(dt===iso) out={idx:idx, s:s};
+  });
+  return out;
+}
+/* Evet/Hayır cevabı — Hayır ise adımın KENDİ ertelemesini +1 gün artırır
+   (protokolOneri artık bunu okuyor, bkz. yukarıdaki yorum). Ertesi gün adım
+   yine bugüne denk geleceği için (yeni ertelenmiş tarihiyle), sarım hâlâ
+   geçmediyse soru tekrar sorulur — "geçene kadar ertelenir" tam olarak
+   böyle sağlanıyor. Evet ise sadece bugüne cevap kaydedilir, adım normal
+   şekilde (protokolOneri ile) önerilir. */
+function sarimSoruCevapla(cid, idx, cevap){
+  if(!can("edit")) return noPerm();
+  var c=loadData().cycles.find(function(x){return x.id===cid;}); if(!c) return;
+  var st=getProtokol()[idx];
+  if(!c.sarimKontrol) c.sarimKontrol={};
+  c.sarimKontrol["p"+idx]={tarih:todayISO(), cevap:cevap};
+  if(cevap==="hayir"){
+    if(!c.ertele) c.ertele={};
+    c.ertele["p"+idx]=(c.ertele["p"+idx]||0)+1;
+    gunlukGorevNotEkle(c, (st?st.txt:"Formaldehit")+" — sarım toprağa geçmediği için 1 gün ertelendi");
+    touchCycle(c); saveData(); toast("Yarına ertelendi"); render();
+  } else {
+    touchCycle(c); saveData(); toast("Kaydedildi — bugünkü uygulama devam edebilir"); render();
+  }
 }
 function turProtokol(cid){
   var t=el("tur_tarih").value; if(!t){ toast("Önce tarih seç"); return; }
