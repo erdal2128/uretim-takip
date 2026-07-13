@@ -147,18 +147,21 @@ var FIREBASE_CONFIG = {
 var FARM_CODE = "merkez";
 /* ======================================================================= */
 
-var FB = { ready:false, coll:null, gorevColl:null, hasatColl:null, firstServer:false, firstServerG:false };
+var FB = { ready:false, coll:null, gorevColl:null, arizaColl:null, hasatColl:null, firstServer:false, firstServerG:false, firstServerA:false };
 var _synced = {};
 var _syncedG = {};
+var _syncedA = {};
 function cycleJSON(c){ return JSON.stringify(c); }
 function fbClean(c){ return JSON.parse(JSON.stringify(c)); }
 function rebuildSynced(){ _synced={}; ((memData&&memData.cycles)||[]).forEach(function(c){ _synced[c.id]=cycleJSON(c); }); }
 function rebuildSyncedG(){ _syncedG={}; ((memData&&memData.gorevler)||[]).forEach(function(g){ _syncedG[g.id]=cycleJSON(g); }); }
+function rebuildSyncedA(){ _syncedA={}; ((memData&&memData.arizalar)||[]).forEach(function(a){ _syncedA[a.id]=cycleJSON(a); }); }
 function isTyping(){ var a=document.activeElement; return !!(a && /^(INPUT|SELECT|TEXTAREA)$/.test(a.tagName)); }
 function fbPendingCount(){
   var n=0;
   ((memData&&memData.cycles)||[]).forEach(function(c){ if(_synced[c.id]!==cycleJSON(c)) n++; });
   ((memData&&memData.gorevler)||[]).forEach(function(g){ if(_syncedG[g.id]!==cycleJSON(g)) n++; });
+  ((memData&&memData.arizalar)||[]).forEach(function(a){ if(_syncedA[a.id]!==cycleJSON(a)) n++; });
   return n;
 }
 function fbSetStatus(s){
@@ -244,6 +247,29 @@ function fbPushDirtyGorev(){
   });
 }
 function fbDeleteGorev(id){ if(FB.ready && FB.gorevColl){ delete _syncedG[id]; FB.gorevColl.doc(id).delete().catch(function(e){ console.warn("deleteG",e); fbSetStatus("hata"); }); } }
+/* Arızalar (d.arizalar) — KRİTİK: eskiden hiç buluta senkronize edilmiyordu,
+   sadece o anki cihazın localStorage'ında kalıyordu. Teknisyenin ekranı,
+   Arızalar sekmesinin TEK amacı olduğu için bu, "yöneticinin bildirdiği arıza
+   teknisyende hiç görünmüyor" hatasının doğrudan sebebiydi — iki cihaz aynı
+   veriyi paylaşmıyordu. gorevler ile birebir aynı desen: kendi Firestore
+   koleksiyonu, her arıza kendi dokümanı. */
+function fbPushDirtyAriza(){
+  if(!FB.ready || !FB.arizaColl) return;
+  ((memData&&memData.arizalar)||[]).forEach(function(a){
+    var j=cycleJSON(a);
+    if(_syncedA[a.id]!==j){
+      FB.arizaColl.doc(a.id).set(fbClean(a)).then(function(){
+        _syncedA[a.id]=j;
+        if(_syncFailCount>0){ _syncFailCount=0; fbSetStatus("synced"); }
+      }).catch(function(e){
+        console.warn("setA",e);
+        _syncFailCount++;
+        fbSetStatus("hata");
+      });
+    }
+  });
+}
+function fbDeleteAriza(id){ if(FB.ready && FB.arizaColl){ delete _syncedA[id]; FB.arizaColl.doc(id).delete().catch(function(e){ console.warn("deleteA",e); fbSetStatus("hata"); }); } }
 /* gorevlerMukerrerleriBirlestir()'in kuyruğa aldığı fazlalık bulut dokümanlarını
    siler — bkz. o fonksiyondaki yorum. Bulut hazır değilse sessizce vazgeçer,
    kuyruk (memData._gorevMukerrerSil) diskte kalır, bir sonraki fırsatta
@@ -333,9 +359,11 @@ function fbInitAfterAuth(){
     FB.db=db;
     FB.coll=db.collection("farms").doc(FARM_CODE).collection("cycles");
     FB.gorevColl=db.collection("farms").doc(FARM_CODE).collection("gorevler");
+    FB.arizaColl=db.collection("farms").doc(FARM_CODE).collection("arizalar");
     FB.ready=true;
     rebuildSynced();
     rebuildSyncedG();
+    rebuildSyncedA();
     /* Bulut bağlantısı kurulur kurulmaz (uygulama her açılışında) sessiz bir
        yedek dene — kullanıcı "her açılışta buluta yedekle" istedi. */
     setTimeout(cloudYedekAcilista, 1500);
@@ -440,6 +468,34 @@ function fbInitAfterAuth(){
       if(realChange && !isTyping()) render();
     }, function(err){ console.warn("snapshotG",err); });
 
+    FB.arizaColl.onSnapshot({includeMetadataChanges:true}, function(snap){
+      loadData();
+      var realChange=false;
+      snap.docChanges().forEach(function(ch){
+        var data=ch.doc.data();
+        if(ch.type==="removed"){
+          if(_syncedA[data.id]!==undefined) realChange=true;
+          memData.arizalar=(memData.arizalar||[]).filter(function(x){return x.id!==data.id;});
+          delete _syncedA[data.id];
+        } else {
+          var nj=cycleJSON(data);
+          if(_syncedA[data.id]!==nj) realChange=true;
+          if(!memData.arizalar) memData.arizalar=[];
+          var li=-1;
+          for(var i=0;i<memData.arizalar.length;i++){ if(memData.arizalar[i].id===data.id){ li=i; break; } }
+          if(li>=0) memData.arizalar[li]=data; else memData.arizalar.push(data);
+          _syncedA[data.id]=nj;
+        }
+      });
+      if(!FB.firstServerA && !snap.metadata.fromCache){
+        FB.firstServerA=true;
+        var cloud={}; snap.forEach(function(dd){ cloud[dd.id]=1; });
+        ((memData.arizalar)||[]).forEach(function(a){ if(!cloud[a.id]){ _syncedA[a.id]=cycleJSON(a); FB.arizaColl.doc(a.id).set(fbClean(a)).catch(function(e){ console.warn("ilk senkron setA",e); _syncFailCount++; fbSetStatus("hata"); }); } });
+      }
+      persistEncrypted(JSON.stringify(memData));
+      if(realChange && !isTyping()) render();
+    }, function(err){ console.warn("snapshotA",err); });
+
     /* Hasat Takip'ten gelen tartı verileri (salt-okunur) */
     FB.hasatColl = db.collection("farms").doc(FARM_CODE).collection("hasat_tarti");
     FB.hasatColl.onSnapshot({includeMetadataChanges:true}, function(snap){
@@ -533,7 +589,7 @@ function hasatTartiGetir(oda, tur){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v331";
+var APP_VER = "v332";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -581,6 +637,7 @@ function memDataNormalizeVeGoc(){
   if(!Array.isArray(memData.cycles)) memData.cycles = [];
   if(!memData.settings || typeof memData.settings !== "object") memData.settings = {};
   if(!Array.isArray(memData.gorevler)) memData.gorevler = [];
+  if(!Array.isArray(memData.arizalar)) memData.arizalar = [];
   gunlukKayitlariniBirlestir();
   /* Tekrar eden günlük notları ("Yarına planlandı · Yarına planlandı" gibi) temizle.
      Oturum başına bir kez; hem eski v173 kayıtlarını hem senkron duplicate'lerini düzeltir. */
@@ -754,6 +811,7 @@ function saveData(){
   persistEncrypted(JSON.stringify(memData));
   fbPushDirty();
   fbPushDirtyGorev();
+  fbPushDirtyAriza();
   fbPushSettings();
   autoSnapshotThrottled();
   cloudYedekTetikle();
@@ -3391,6 +3449,7 @@ function arizaSil(id){
   if(!confirm("Bu arıza kaydı silinsin mi?")) return;
   var d=loadData();
   d.arizalar=d.arizalar.filter(function(x){return x.id!==id;});
+  fbDeleteAriza(id);
   saveData();
   try{ localStorage.removeItem(arizaFotoKey(id)); }catch(e){ console.warn("arıza fotoğrafı silinemedi", e); }
   toast("Silindi"); render();
@@ -11257,7 +11316,7 @@ if(_veriOkumaHatasi){
 }
 autoSnapshotThrottled();
 /* Başarısız senkron denemelerini periyodik olarak tekrar dene (internet geri gelince otomatik kurtarır) */
-setInterval(function(){ if(FB.ready){ fbPushDirty(); fbPushDirtyGorev(); fbPushSettings(); cloudYedekTetikle(); gorevMukerrerBulutTemizle(); } }, 30000);
+setInterval(function(){ if(FB.ready){ fbPushDirty(); fbPushDirtyGorev(); fbPushDirtyAriza(); fbPushSettings(); cloudYedekTetikle(); gorevMukerrerBulutTemizle(); } }, 30000);
 setInterval(updateCloudBakBadge, 60000);
 }
 if("serviceWorker" in navigator){
