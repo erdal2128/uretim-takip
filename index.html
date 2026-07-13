@@ -459,7 +459,7 @@ function hasatTartiGetir(oda, tur){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v326";
+var APP_VER = "v327";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -9761,8 +9761,18 @@ function renderYedekleme(){
     +'<div class="muted" style="margin-bottom:8px;">'+(lcb?('Son bulut yedeği: '+fmtDateTime(+lcb)):'Henüz bulut yedeği alınmadı.')+'</div>'
     +'<button class="btn ghost small" onclick="cloudYedekZorla()">☁️ Şimdi buluta yedekle</button> '
     +'<button class="btn ghost small" onclick="cloudYedekleriGetir()">🔄 Bulut yedeklerini listele</button>';
-  if(_cloudBakList===null){ /* henüz listelenmedi */ }
-  else if(!_cloudBakList.length){ h+='<div class="muted" style="margin-top:10px;">Bulutta henüz yedek yok (veya bağlantı yok).</div>'; }
+  if(_cloudBakList===null && !_cloudBakErr && FB.ready && !_cloudBakFetching){
+    /* Ekran açılır açılmaz otomatik dene — eskiden kullanıcı "🔄 Bulut
+       yedeklerini listele"ye basmadan liste hiç görünmüyordu. */
+    cloudYedekleriGetir(true);
+  }
+  if(_cloudBakErr){
+    h+='<div class="muted" style="margin-top:10px;color:#c0291f;">⚠️ Bulut yedekleri listelenemedi: '+esc(_cloudBakErr)+'</div>'
+      +'<button class="btn ghost small" style="margin-top:6px;" onclick="cloudYedekleriGetir()">Tekrar dene</button>';
+  }
+  else if(_cloudBakFetching){ h+='<div class="muted" style="margin-top:10px;">Yükleniyor...</div>'; }
+  else if(_cloudBakList===null){ h+='<div class="muted" style="margin-top:10px;">Bulut bağlantısı yok — internet gelince "🔄 Bulut yedeklerini listele"ye bas.</div>'; }
+  else if(!_cloudBakList.length){ h+='<div class="muted" style="margin-top:10px;">Bulutta henüz yedek yok.</div>'; }
   else {
     h+='<div style="margin-top:10px;">';
     _cloudBakList.forEach(function(x){
@@ -9825,18 +9835,37 @@ function cloudYedekAcilista(){
     if(typeof view!=="undefined" && view && view.name==="yedekleme") render();
   }).catch(function(e){ console.warn("açılış bulut yedeği başarısız", e); });
 }
-function cloudYedekleriGetir(){
-  if(!FB.ready || !FB.db){ toast("Bulut bağlantısı yok"); return; }
+var _cloudBakFetching=false;
+var _cloudBakErr=null;
+/* sessiz: renderYedekleme() ekrana girer girmez otomatik çağırdığında true —
+   "Yükleniyor..." toast'ı basmaz, sadece elle "🔄 Bulut yedeklerini listele"
+   tıklanınca gösterilir. Hem otomatik hem elle çağrıda hata olursa _cloudBakErr
+   set edilir ve renderYedekleme() bunu KALICI bir mesaj+"Tekrar dene" olarak
+   gösterir — eskiden hata olunca 1.8sn'lik toast dışında hiçbir şey görünmüyordu,
+   kullanıcı ekranı sonradan açtığında (toast kaybolduktan sonra) "liste hiç
+   çıkmıyor" gibi görünüyordu (bkz. kullanıcı raporu). */
+function cloudYedekleriGetir(sessiz){
+  if(!FB.ready || !FB.db){ if(!sessiz) toast("Bulut bağlantısı yok"); _cloudBakErr="Bulut bağlantısı yok"; return; }
+  if(_cloudBakFetching) return;
+  _cloudBakFetching=true;
   var refBase=FB.db.collection("farms").doc(FARM_CODE).collection("yedekler");
-  toast("Yükleniyor...");
+  if(!sessiz) toast("Yükleniyor...");
   refBase.where(firebase.firestore.FieldPath.documentId(), ">=", "aktif_")
     .where(firebase.firestore.FieldPath.documentId(), "<", "aktif_~")
     .get().then(function(snap){
       var list=[];
       snap.forEach(function(doc){ list.push({olayId:doc.id.replace("aktif_",""), ts:doc.data().ts, gun:doc.data().gun}); });
       _cloudBakList=list.sort(function(a,b){ return (b.ts||"").localeCompare(a.ts||""); });
+      _cloudBakErr=null;
+      _cloudBakFetching=false;
       render();
-    }).catch(function(e){ console.warn("bulut yedekleri listelenemedi", e); toast("Bulut yedekleri listelenemedi"); });
+    }).catch(function(e){
+      console.warn("bulut yedekleri listelenemedi", e);
+      _cloudBakErr=(e&&e.message)||"bilinmeyen hata";
+      _cloudBakFetching=false;
+      if(!sessiz) toast("Bulut yedekleri listelenemedi");
+      render();
+    });
 }
 function cloudYedektenGeriYukle(olayId){
   if(!can("manage")) return noPerm();
