@@ -650,7 +650,7 @@ function hasatTartiGetir(oda, tur){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v360";
+var APP_VER = "v361";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -7397,78 +7397,79 @@ function sulamaTemizle(selectId, dozId, targetTextId){
    fonksiyonlar o kararı Tur'a gitmeden, tek bir dokunuşla kaydeder. Sonuç,
    gun.sulamaDurum alanında "degistirildi"/"iptal" olarak SSOT'a (c.gunluk) yazılır
    — Bugünkü Görevler, Gün Sonu Özeti ve CSV/PDF raporları aynı alandan okur. */
-function sulamaGorevDegistirAc(cid){
+function sulamaGorevDegistirAc(cid, tarih){
   var wm=el("warnModal"); if(!wm) return;
   var c=loadData().cycles.find(function(x){return x.id===cid;}); if(!c) return;
-  var bugun=todayISO();
-  var gun=(c.gunluk||[]).find(function(g){return g.tarih===bugun;});
+  tarih = tarih || todayISO();
+  var gun=(c.gunluk||[]).find(function(g){return g.tarih===tarih;});
   var mevcut = (gun && ((gun.sulama||"").trim() || numParse(gun.su)>0))
     ? ((numParse(gun.su)>0?gun.su+" lt su":"")+(gun.sulama?(" "+gun.sulama):"")).trim()
-    : (protokolOneri(c,bugun)||"");
+    : (protokolOneri(c,tarih)||"");
   wm.innerHTML='<div class="modal-bg" onclick="if(event.target===this) closeWarnBox();"><div class="modal">'
     +'<div style="font-weight:700;font-size:17px;margin-bottom:4px;">'+esc(c.oda)+' — Sulamayı değiştir</div>'
-    +'<div class="muted" style="font-size:12px;margin-bottom:10px;">Planlanan: '+esc(mevcut||"—")+'. Bugün gerçekte ne uygulanacaksa (veya uygulandıysa) onu yaz.</div>'
+    +'<div class="muted" style="font-size:12px;margin-bottom:10px;">'+fmtDate(tarih)+' için planlanan: '+esc(mevcut||"—")+'. Gerçekte ne uygulanacaksa (veya uygulandıysa) onu yaz.</div>'
     +'<label>Uygulanacak sulama / ilaçlama</label><input type="text" id="sgd_yeni" value="'+esc(mevcut)+'" placeholder="örn. 250 lt su">'
     +'<label style="margin-top:8px;display:block;">Değişiklik nedeni (zorunlu)</label><textarea id="sgd_neden" rows="2" placeholder="örn. Nem yüksek olduğu için azaltıldı"></textarea>'
-    +'<div class="row" style="margin-top:14px;"><button class="btn" onclick="sulamaGorevDegistirKaydet(\''+cid+'\')">Kaydet</button>'
+    +'<div class="row" style="margin-top:14px;"><button class="btn" onclick="sulamaGorevDegistirKaydet(\''+cid+'\',\''+tarih+'\')">Kaydet</button>'
     +'<button class="btn ghost" onclick="closeWarnBox()">Vazgeç</button></div>'
     +'</div></div>';
 }
-function sulamaGorevDegistirKaydet(cid){
+function sulamaGorevDegistirKaydet(cid, tarih){
   if(!can("edit")) return noPerm();
   var c=loadData().cycles.find(function(x){return x.id===cid;}); if(!c) return;
+  tarih = tarih || todayISO();
   var yeni=(el("sgd_yeni")&&el("sgd_yeni").value.trim())||"";
   var neden=(el("sgd_neden")&&el("sgd_neden").value.trim())||"";
   if(!yeni){ toast("Uygulanan sulama/ilaç bilgisini yaz"); return; }
   if(!neden){ toast("Değişiklik nedeni zorunlu"); return; }
-  var bugun=todayISO();
-  var oneri=protokolOneri(c,bugun)||"";
+  var oneri=protokolOneri(c,tarih)||"";
   if(!c.gunluk) c.gunluk=[];
-  var gun=c.gunluk.find(function(g){return g.tarih===bugun;});
-  if(!gun){ gun={tarih:bugun}; c.gunluk.push(gun); }
+  var gun=c.gunluk.find(function(g){return g.tarih===tarih;});
+  if(!gun){ gun={tarih:tarih}; c.gunluk.push(gun); }
   gun.sulama=yeni; gun.su="";
   gun.sulamaDurum="degistirildi"; gun.sulamaAciklama=neden; gun.sulamaOrijinal=oneri;
   c.gunluk.sort(function(a,b){ return cmpDate(a.tarih,b.tarih); });
-  gunlukNotTariheEkle(c, bugun, "Sulama değiştirildi: "+yeni+" (neden: "+neden+")");
+  gunlukNotTariheEkle(c, tarih, "Sulama değiştirildi: "+yeni+" (neden: "+neden+")");
   touchCycle(c); saveData(); closeWarnBox(); toast("Sulama \"değiştirildi\" olarak kaydedildi"); render();
 }
 var SULAMA_IPTAL_SEBEPLERI=["Nem yüksek","Hastalık riski","Kompost fazla ıslak","Teknik karar"];
-function sulamaGorevIptalAc(cid){
+function sulamaGorevIptalAc(cid, tarih){
   var wm=el("warnModal"); if(!wm) return;
   var c=loadData().cycles.find(function(x){return x.id===cid;}); if(!c) return;
+  tarih = tarih || todayISO();
   var h='<div class="modal-bg" onclick="if(event.target===this) closeWarnBox();"><div class="modal">'
     +'<div style="font-weight:700;font-size:17px;margin-bottom:4px;">'+esc(c.oda)+' — Sulamayı iptal et</div>'
-    +'<div class="muted" style="font-size:12px;margin-bottom:10px;">Bu bir ihmal değil, bilinçli bir üretim kararı olarak kaydedilir — "yapılmadı" görünmez. Bir sebep seç:</div>';
+    +'<div class="muted" style="font-size:12px;margin-bottom:10px;">'+fmtDate(tarih)+' için bir sulama bilinçli olarak iptal ediliyor — bu bir ihmal değil, bilinçli bir üretim kararı olarak kaydedilir, "yapılmadı" görünmez. Bir sebep seç:</div>';
   SULAMA_IPTAL_SEBEPLERI.forEach(function(s){
-    h+='<button class="btn ghost" style="width:100%;margin-bottom:6px;text-align:left;" onclick="sulamaGorevIptalKaydet(\''+cid+'\',\''+esc(s).replace(/'/g,"\\'")+'\')">'+esc(s)+'</button>';
+    h+='<button class="btn ghost" style="width:100%;margin-bottom:6px;text-align:left;" onclick="sulamaGorevIptalKaydet(\''+cid+'\',\''+esc(s).replace(/'/g,"\\'")+'\',\''+tarih+'\')">'+esc(s)+'</button>';
   });
   h+='<input type="text" id="sgi_diger" placeholder="Diğer sebep (yaz)" style="margin-top:4px;">'
-    +'<div class="row" style="margin-top:10px;"><button class="btn" style="background:var(--red);border-color:var(--red);" onclick="sulamaGorevIptalDigerKaydet(\''+cid+'\')">İptal Et (yazdığım sebep)</button>'
+    +'<div class="row" style="margin-top:10px;"><button class="btn" style="background:var(--red);border-color:var(--red);" onclick="sulamaGorevIptalDigerKaydet(\''+cid+'\',\''+tarih+'\')">İptal Et (yazdığım sebep)</button>'
     +'<button class="btn ghost" onclick="closeWarnBox()">Vazgeç</button></div>'
     +'</div></div>';
   wm.innerHTML=h;
 }
-function sulamaGorevIptalKaydet(cid, sebep){
-  sulamaGorevIptalUygula(cid, sebep);
+function sulamaGorevIptalKaydet(cid, sebep, tarih){
+  sulamaGorevIptalUygula(cid, sebep, tarih);
 }
-function sulamaGorevIptalDigerKaydet(cid){
+function sulamaGorevIptalDigerKaydet(cid, tarih){
   var metin=(el("sgi_diger")&&el("sgi_diger").value.trim())||"";
   if(!metin){ toast("Sebep yaz veya yukarıdan seç"); return; }
-  sulamaGorevIptalUygula(cid, metin);
+  sulamaGorevIptalUygula(cid, metin, tarih);
 }
-function sulamaGorevIptalUygula(cid, sebep){
+function sulamaGorevIptalUygula(cid, sebep, tarih){
   if(!can("edit")) return noPerm();
   if(!sebep){ toast("Sebep zorunlu"); return; }
   var c=loadData().cycles.find(function(x){return x.id===cid;}); if(!c) return;
-  var bugun=todayISO();
-  var oneri=protokolOneri(c,bugun)||"";
+  tarih = tarih || todayISO();
+  var oneri=protokolOneri(c,tarih)||"";
   if(!c.gunluk) c.gunluk=[];
-  var gun=c.gunluk.find(function(g){return g.tarih===bugun;});
-  if(!gun){ gun={tarih:bugun}; c.gunluk.push(gun); }
+  var gun=c.gunluk.find(function(g){return g.tarih===tarih;});
+  if(!gun){ gun={tarih:tarih}; c.gunluk.push(gun); }
   gun.sulama=""; gun.su="";
   gun.sulamaDurum="iptal"; gun.sulamaAciklama=sebep; gun.sulamaOrijinal=oneri;
   c.gunluk.sort(function(a,b){ return cmpDate(a.tarih,b.tarih); });
-  gunlukNotTariheEkle(c, bugun, "Sulama iptal edildi (neden: "+sebep+")");
+  gunlukNotTariheEkle(c, tarih, "Sulama iptal edildi (neden: "+sebep+")");
   touchCycle(c); saveData(); closeWarnBox(); toast("Sulama \"iptal edildi\" olarak kaydedildi"); render();
 }
 function addGunluk(id){
@@ -7872,7 +7873,15 @@ function turOdaKartIcHTML(c, ge, showExtra){
         +'<label>Sulama / İlaçlama (yukarıdan seçince otomatik dolar, elle de yazabilirsin)</label>'
         +'<div style="display:flex; gap:6px;"><input type="text" id="tsulama_'+c.id+'" class="tur_sulama" placeholder="örn. + 250 Serenade" style="flex:1;" value="'+esc(ge.sulama||"")+'">'
         +'<button class="btn ghost small" style="white-space:nowrap;" onclick="turProtokol(\''+c.id+'\')">Protokol</button>'
-        +'<button class="btn ghost small" style="white-space:nowrap;" onclick="sulamaTemizle(\'tilac_'+c.id+'\',\'tdoz_'+c.id+'\',\'tsulama_'+c.id+'\')">✕ Temizle</button></div>')
+        +'<button class="btn ghost small" style="white-space:nowrap;" onclick="sulamaTemizle(\'tilac_'+c.id+'\',\'tdoz_'+c.id+'\',\'tsulama_'+c.id+'\')">✕ Temizle</button></div>'
+        /* Kullanıcı isteği: sulamayı sadece "yapıldı" olarak değil, planlanandan
+           farklı uygulandığını veya bilinçli olarak yapılmadığını da doğrudan
+           Tur'dan (Bugün ekranına gitmeden) kaydedebilsin. */
+        +'<div style="display:flex; gap:6px; margin-top:6px;">'
+        +'<button class="btn ghost small" style="flex:1;" onclick="sulamaGorevDegistirAc(\''+c.id+'\',\''+(_turTarihVal||todayISO())+'\')">✏️ Değiştir</button>'
+        +'<button class="btn ghost small" style="flex:1;color:var(--red);border-color:var(--red);" onclick="sulamaGorevIptalAc(\''+c.id+'\',\''+(_turTarihVal||todayISO())+'\')">❌ İptal Et</button>'
+        +'</div>'
+        +sulamaDurumBadgeHTML(ge))
       : '<div class="muted" style="padding:8px 0; font-style:italic;">🚫 Poşet henüz açılmadı — sulama/ilaçlama girişi kapalı.</div>'
         +'<input type="hidden" class="tur_su" value=""><input type="hidden" id="tsulama_'+c.id+'" class="tur_sulama" value="'+esc(ge.sulama||"")+'">')
     +turSiradakiAdimHTML(c)
