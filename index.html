@@ -650,7 +650,7 @@ function hasatTartiGetir(oda, tur){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v354";
+var APP_VER = "v355";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -4781,9 +4781,21 @@ function renderBugun(){
       +'</div>';
   }
   
+  /* ÜRETİM MÜDÜRÜ RAPORU girişi — her açılışta göz önünde, tek dokunuşla tam
+     rapora gider (kritik risk sayısını da gösterir). */
+  try{
+    var _mr=uretimMuduruRaporVeri();
+    var _krSay=_mr.kritik.length, _gcSay=_mr.geciken.length;
+    h+='<div onclick="acUretimMuduruRaporu()" style="cursor:pointer;margin-bottom:12px;padding:12px 14px;border-radius:10px;border:1.5px solid '+(_krSay?'#e8a33d':'var(--green)')+';background:'+(_krSay?'#fff8ec':'var(--green-soft)')+';display:flex;align-items:center;gap:10px;">'
+      +'<span style="font-size:22px;">🧠</span>'
+      +'<div style="flex:1;"><div style="font-weight:700;font-size:14px;">Üretim Müdürü Raporu</div>'
+      +'<div class="muted" style="font-size:12px;">'+(_krSay?('🔴 '+_krSay+' kritik risk'):'Kritik risk yok')+(_gcSay?(' · ⏰ '+_gcSay+' geciken'):'')+(_mr.hasatlar.length?(' · 🌾 '+_mr.hasatlar.length+' odada hasat'):'')+'</div></div>'
+      +'<span style="color:var(--muted);font-size:18px;">›</span></div>';
+  }catch(e){ console.warn("müdür raporu bandı", e); }
+
   /* Günün Özeti kartı kaldırıldı — aynı bilgi (tamamlandı/kalan sayısı) zaten
      aşağıdaki "Bugünkü Görevler" başlığında gösteriliyor, tekrar/gereksizdi. */
-  
+
   /* 3. BUGÜNÜN İŞLERİ (tek liste — geciken üstte kırmızı, sonra en yeni komposttan) */
   /* 3. BUGÜNÜN İŞLERİ — başlık her zaman görünür */
   var gecikenSay=tasks.filter(function(t){return t.geciken;}).length;
@@ -10478,6 +10490,264 @@ function protokolUygunlukHTML(){
   if(!body) body='<div class="muted">Henüz değerlendirilecek tamamlanmış protokol adımı yok.</div>';
   return sectionCard('📋 Protokol Uygunluğu', body);
 }
+/* ============ ÜRETİM MÜDÜRÜ ANALİZ MOTORU (cihazda, kural tabanlı) ============
+   Kullanıcı isteği: sıradan veri gösterimi değil, 20 yıllık üretim müdürü gibi
+   tüm verileri BİRLİKTE değerlendiren bir karar destek raporu. Mevcut analiz
+   fonksiyonlarını (odaPerformans, tempAlerts, hasatKaymasi, aktifSartliKurallar,
+   getTodaysTasks, odaHastalikRiskli, stageOf, siradakiProtokolAdimi,
+   beklenenHasat) TEK bir yönetici bakışında birleştirir. Kesin teşhis KOYMAZ —
+   her zaman "mevcut verilere göre" yorumdur, eksik veri varsa onu söyler. */
+
+/* Uzun metinleri (örn. onlarca gecikmiş adımın listesi) rapor için kısaltır. */
+function _analizKisalt(s, n){ s=""+(s||""); n=n||150; return s.length>n ? (s.slice(0,n-1).replace(/\s+\S*$/,'')+"…") : s; }
+/* Bir ölçüm alanının son n kaydındaki eğilim (artıyor/azalıyor/sabit). */
+function analizTrend(c, field, n){
+  n = n || 4;
+  var recs = (c.gunluk||[]).filter(function(r){ return numParse(r[field])!==null; })
+    .sort(function(a,b){ return cmpDate(a.tarih,b.tarih); });
+  if(recs.length < 2) return null;
+  recs = recs.slice(-n);
+  var ilk = numParse(recs[0][field]), son = numParse(recs[recs.length-1][field]);
+  var fark = son - ilk;
+  var yon = Math.abs(fark) < 0.6 ? "sabit" : (fark > 0 ? "artıyor" : "azalıyor");
+  return {yon:yon, ilk:ilk, son:son, fark:fark, n:recs.length};
+}
+/* Odanın son günlük ölçümü kaç gün önce (veri tazeliği / eksik veri tespiti). */
+function analizSonOlcumGun(c){
+  var son = sonGunluk(c);
+  if(!son || !son.tarih) return null;
+  return daysBetween(son.tarih, todayISO());
+}
+/* Her aktif odanın önümüzdeki 7 gündeki İLK hasat gününü döndürür. */
+function analizYaklasanHasatlar(){
+  var d=loadData(); var today=todayISO();
+  var aktif=(d.cycles||[]).filter(function(c){return !c.bosaltimTarihi;});
+  var out=[];
+  aktif.forEach(function(c){
+    for(var k=0;k<7;k++){
+      var iso=addDays(today,k);
+      var a=hasatAsama(c,iso);
+      if(a && a.flas>0 && (a.kasaMin>0||a.kasaMax>0)){
+        out.push({oda:c.oda, iso:iso, gunSonra:k, flas:a.flas, gun:a.gun, min:a.kasaMin, max:a.kasaMax});
+        break; /* sadece bu odanın SONRAKİ hasat günü */
+      }
+    }
+  });
+  out.sort(function(a,b){return a.gunSonra-b.gunSonra;});
+  return out;
+}
+/* Tek bir odanın tam analizi — hem "Oda Analizi" hem de müdür raporu bunu kullanır. */
+function odaAnalizVeri(c){
+  var today=todayISO();
+  var perf=odaPerformans(c);
+  var puan=perf?perf.puan:null;
+  var odaAlerts=tempAlerts().filter(function(a){return a.cid===c.id;});
+  var stage=stageOf(c).t, gun=gunNo(c,today);
+  var son=sonGunluk(c);
+  var sog=analizSonOlcumGun(c);
+  var kritik=[], dikkat=[], olumlu=[], eksik=[], sonraki=[], trendler=[];
+
+  /* KRİTİK: tehlikeli sıcaklık (lvl 2) */
+  odaAlerts.filter(function(a){return a.lvl===2;}).forEach(function(a){
+    kritik.push({neden:a.txt, sonuc:"Misel/ürün zarar görebilir, gelişim durabilir.", oneri:"Havalandırma/ısıtmayı hemen ayarla; 1-2 saat sonra tekrar ölç."});
+  });
+  /* KRİTİK: hastalık/zararlı (son 14 gün) */
+  if(odaHastalikRiskli(c)){
+    var sonH=(c.hastalikKayitlar||[]).slice().sort(function(x,y){return cmpDate(y.tarih,x.tarih);})[0];
+    kritik.push({neden:"Son 14 günde hastalık/zararlı kaydı"+(sonH?(" — "+esc(sonH.tur)):""), sonuc:"Yayılırsa komşu odalara bulaşabilir, verim düşer.", oneri:"Bölgeyi izole et, uygun ilaçlama/temizlik uygula, komşu odaları da kontrol et."});
+  }
+  /* KRİTİK: sebepsiz/önlenebilir gecikmeler (uzun adım listeleri kısaltılır) */
+  if(perf) perf.nedenler.filter(function(n){return n.tip==="gecikme";}).forEach(function(n){
+    kritik.push({neden:_analizKisalt(n.metin,150), sonuc:"Protokol sırası bozulur, sonraki adımlar da kayar.", oneri:"Geciken adımı bugün tamamla ya da haklı sebebi (gelişme/sarım) işaretle."});
+  });
+
+  /* DİKKAT: hafif/kritik sıcaklık (lvl 0-1) */
+  odaAlerts.filter(function(a){return a.lvl<=1;}).forEach(function(a){ dikkat.push(a.txt); });
+  /* DİKKAT: amonyak */
+  if(son && son.amonyak==="Var") dikkat.push("Amonyak kokusu bildirildi — havalandırmayı kontrol et.");
+  /* DİKKAT: geçmiş sıcaklık maruziyeti (kalıcı, artık düzeltilemez ama bilgi) */
+  if(perf) perf.nedenler.filter(function(n){return n.tip==="kritik" && /kald[ıi]/.test(n.metin);}).forEach(function(n){ dikkat.push(_analizKisalt(n.metin,150)); });
+  /* DİKKAT: şartlı kurallar (kompost 28°+ vb.) */
+  aktifSartliKurallar(c).forEach(function(ak){ dikkat.push(ak.kural.aciklama||ak.kuralHedefTxt); });
+
+  /* TREND: kompost / oda / CO₂ eğilimleri */
+  [["kompostC","Kompost °C"],["odaC","Oda °C"],["co2ust","CO₂"]].forEach(function(f){
+    var t=analizTrend(c,f[0],4);
+    if(t && t.yon!=="sabit") trendler.push(f[1]+" son "+t.n+" ölçümde "+t.yon+" ("+t.ilk+"→"+t.son+")");
+  });
+
+  /* EKSİK VERİ */
+  if(sog===null) eksik.push("Hiç günlük ölçüm kaydı yok — analiz sınırlı.");
+  else if(sog>=2) eksik.push("Son ölçüm "+sog+" gün önce — güncel sıcaklık/CO₂ gir.");
+
+  /* OLUMLU */
+  if(puan!=null && puan>=85 && !odaAlerts.length && !odaHastalikRiskli(c)) olumlu.push("Sorunsuz ilerliyor (puan "+puan+"/100).");
+  if(perf) perf.nedenler.filter(function(n){return n.tip==="bilgi";}).forEach(function(n){ olumlu.push(n.metin); });
+
+  /* SONRAKİ KRİTİK ADIMLAR */
+  var sd=siradakiProtokolAdimi(c);
+  if(sd){
+    var gg=daysBetween(today, sd.t);
+    sonraki.push(sd.txt+" — "+(gg>0?(gg+" gün sonra"):(gg===0?"bugün":((-gg)+" gün gecikti"))));
+  }
+  var kayma=hasatKaymasi(c);
+  if(kayma.neden.length) sonraki.push(kayma.neden[0]);
+  var bh=beklenenHasat(c);
+  if(bh){ var hgg=daysBetween(today,bh); if(hgg!=null && hgg>=0 && hgg<=14) sonraki.push("Tahmini 1. Flaş: "+fmtDate(bh)+" ("+hgg+" gün sonra)"); }
+
+  return {oda:c.oda, stage:stage, gun:gun, son:son, sonOlcumGun:sog, puan:puan,
+    kritik:kritik, dikkat:dikkat, olumlu:olumlu, eksik:eksik, trendler:trendler, sonraki:sonraki};
+}
+/* Tüm tesis için günlük Üretim Müdürü Raporu verisi. */
+function uretimMuduruRaporVeri(){
+  var d=loadData(); var today=todayISO();
+  var aktif=(d.cycles||[]).filter(function(c){return !c.bosaltimTarihi;});
+  var kritik=[], dikkat=[], olumlu=[], eksik=[], oneriler=[], riskli=[];
+  aktif.forEach(function(c){
+    var v=odaAnalizVeri(c);
+    v.kritik.forEach(function(k){ kritik.push({oda:c.oda, neden:k.neden, sonuc:k.sonuc, oneri:k.oneri}); });
+    v.dikkat.forEach(function(x){ dikkat.push({oda:c.oda, metin:x}); });
+    v.olumlu.forEach(function(x){ olumlu.push(esc(c.oda)+" ("+v.gun+". gün): "+x); });
+    v.eksik.forEach(function(x){ eksik.push(esc(c.oda)+": "+x); });
+    if(v.puan!=null){
+      var neden = v.kritik.length ? v.kritik[0].neden : (v.dikkat.length ? v.dikkat[0] : "");
+      riskli.push({oda:c.oda, puan:v.puan, gun:v.gun, neden:neden});
+    }
+  });
+  riskli.sort(function(a,b){ return a.puan-b.puan; });
+
+  /* Bugün + geciken (getTodaysTasks ile — SSOT) */
+  var tasks=getTodaysTasks();
+  var bugun=[], geciken=[];
+  tasks.forEach(function(t){
+    if(t.done) return;
+    var etk = t.tipo==="genel" ? (t.baslik||"") : ((t.oda?t.oda+": ":"")+(t.islem||""));
+    if(!etk) return;
+    if(t.geciken) geciken.push({metin:etk, gun:daysBetween(t.tarih, today)});
+    else bugun.push({metin:etk});
+  });
+  geciken.sort(function(a,b){return b.gun-a.gun;});
+
+  var hasatlar=analizYaklasanHasatlar();
+  kritik.slice(0,5).forEach(function(k){ oneriler.push(esc(k.oda)+": "+k.oneri); });
+
+  var puanlar=riskli.map(function(r){return r.puan;});
+  var ortPuan = puanlar.length ? Math.round(puanlar.reduce(function(a,b){return a+b;},0)/puanlar.length) : null;
+
+  return {
+    aktifSayi: aktif.length,
+    kritik: kritik.slice(0,5),
+    dikkat: dikkat,
+    olumlu: olumlu,
+    eksik: eksik,
+    bugun: bugun,
+    geciken: geciken,
+    hasatlar: hasatlar,
+    riskli: riskli.filter(function(r){return r.puan<85;}).slice(0,6),
+    oneriler: oneriler,
+    ortPuan: ortPuan
+  };
+}
+function _analizBlokHTML(baslik, renk, ic){
+  return '<div style="margin-top:12px;">'
+    +'<div style="font-weight:700;font-size:13.5px;color:'+renk+';margin-bottom:4px;border-bottom:1px solid #eee;padding-bottom:3px;">'+baslik+'</div>'
+    +ic+'</div>';
+}
+function uretimMuduruSonuc(r){
+  var c=[];
+  if(r.kritik.length) c.push(r.kritik.length+" odada acil müdahale gereken kritik risk var; önce bunları çöz.");
+  else c.push("Şu an acil müdahale gerektiren kritik risk görünmüyor.");
+  if(r.geciken.length) c.push(r.geciken.length+" iş takvimin gerisinde — bugün kapatmak sırayı düzeltir.");
+  if(r.hasatlar.length) c.push("Önümüzdeki 7 günde "+r.hasatlar.length+" odada hasat var; iş gücü ve kasa planını buna göre ayarla.");
+  if(r.ortPuan!=null) c.push("Genel üretim sağlığı ortalama "+r.ortPuan+"/100.");
+  return c.slice(0,4).join(" ");
+}
+function uretimMuduruRaporHTML(){
+  var r=uretimMuduruRaporVeri();
+  if(!r.aktifSayi) return sectionCard('🧠 Üretim Müdürü Raporu', '<div class="muted">Aktif oda yok — analiz için en az bir açık döngü gerekir.</div>');
+  var body='';
+  var gd='Şu an <b>'+r.aktifSayi+' aktif oda</b> var'
+    +(r.ortPuan!=null?(', ortalama üretim puanı <b style="color:'+puanRenk(r.ortPuan)+';">'+r.ortPuan+'/100</b>'):'')+'. '
+    +(r.kritik.length?('<b style="color:#c0291f;">'+r.kritik.length+' kritik risk</b>, '):'Kritik risk görünmüyor, ')
+    +(r.geciken.length?(r.geciken.length+' geciken iş, '):'geciken iş yok, ')
+    +(r.hasatlar.length?('önümüzdeki 7 günde '+r.hasatlar.length+' odada hasat bekleniyor.'):'yakın hasat görünmüyor.');
+  body+=_analizBlokHTML('Genel Durum', '#333', '<div style="font-size:13px;">'+gd+'</div>');
+
+  var kh = r.kritik.length ? r.kritik.map(function(k){
+    return '<div style="padding:6px 0;border-bottom:1px solid #f4eaea;font-size:13px;">'
+      +'<b style="color:#c0291f;">'+esc(k.oda)+'</b> — '+esc(k.neden)
+      +'<div class="muted" style="font-size:12px;margin-top:2px;">Olası sonuç: '+esc(k.sonuc)+'</div>'
+      +'<div style="font-size:12px;margin-top:1px;color:#1f7a4d;">→ '+esc(k.oneri)+'</div></div>';
+  }).join('') : '<div class="muted" style="font-size:13px;">Şu an acil müdahale gerektiren kritik risk tespit edilmedi.</div>';
+  body+=_analizBlokHTML('🔴 Kritik Riskler', '#c0291f', kh);
+
+  var bh2 = r.bugun.length ? r.bugun.map(function(t){ return '<div style="padding:3px 0;font-size:13px;">• '+esc(t.metin)+'</div>'; }).join('') : '<div class="muted" style="font-size:13px;">Bugün için bekleyen iş yok.</div>';
+  body+=_analizBlokHTML('📋 Bugün Yapılacaklar', '#1d4ed8', bh2);
+
+  if(r.geciken.length){
+    var gh=r.geciken.map(function(g){ return '<div style="padding:3px 0;font-size:13px;">• '+esc(g.metin)+' <span style="color:#c0291f;">('+g.gun+' gün gecikti)</span></div>'; }).join('');
+    body+=_analizBlokHTML('⏰ Geciken İşler', '#c0291f', gh);
+  }
+  if(r.riskli.length){
+    var rh=r.riskli.map(function(x){
+      return '<div style="display:flex;justify-content:space-between;gap:8px;padding:4px 0;border-bottom:1px solid #eee;font-size:13px;">'
+        +'<span><b>'+esc(x.oda)+'</b> <span class="muted">('+x.gun+'. gün)</span>'+(x.neden?('<div class="muted" style="font-size:11.5px;">'+esc(x.neden)+'</div>'):'')+'</span>'
+        +'<span style="font-weight:700;color:'+puanRenk(x.puan)+';white-space:nowrap;">'+x.puan+'/100</span></div>';
+    }).join('');
+    body+=_analizBlokHTML('⚠️ Riskli Odalar (puan sırası)', '#c47a1a', rh);
+  }
+  if(r.dikkat.length){
+    var dh=r.dikkat.slice(0,12).map(function(x){ return '<div style="padding:3px 0;font-size:13px;">• <b>'+esc(x.oda)+':</b> '+esc(x.metin)+'</div>'; }).join('');
+    body+=_analizBlokHTML('🟡 Dikkat Edilecekler', '#c47a1a', dh);
+  }
+  if(r.hasatlar.length){
+    var hh=r.hasatlar.map(function(x){ return '<div style="padding:3px 0;font-size:13px;">• <b>'+esc(x.oda)+'</b> — '+fmtDate(x.iso)+' '+esc(gunAdi(x.iso))+' ('+x.flas+'. Flaş): '+x.min+'-'+x.max+' kasa</div>'; }).join('');
+    body+=_analizBlokHTML('🌾 Beklenen Hasatlar (7 gün)', '#1f7a4d', hh);
+  }
+  if(r.olumlu.length){
+    var oh=r.olumlu.slice(0,8).map(function(x){ return '<div style="padding:3px 0;font-size:13px;">• '+x+'</div>'; }).join('');
+    body+=_analizBlokHTML('🟢 Olumlu Noktalar', '#1f7a4d', oh);
+  }
+  if(r.oneriler.length){
+    var oneh=r.oneriler.map(function(x){ return '<div style="padding:3px 0;font-size:13px;">✅ '+x+'</div>'; }).join('');
+    body+=_analizBlokHTML('Öneriler', '#1f7a4d', oneh);
+  }
+  if(r.eksik.length){
+    var eh=r.eksik.slice(0,8).map(function(x){ return '<div style="padding:3px 0;font-size:12.5px;">• '+x+'</div>'; }).join('');
+    body+=_analizBlokHTML('📭 Eksik Veri', '#777', eh+'<div class="muted" style="font-size:11.5px;margin-top:3px;">Eksik veri girildikçe analiz güçlenir.</div>');
+  }
+  body+=_analizBlokHTML('Sonuç', '#14583a', '<div style="font-size:13px;">'+esc(uretimMuduruSonuc(r))+'</div>');
+  body+='<div class="muted" style="font-size:11px;margin-top:10px;border-top:1px solid #eee;padding-top:6px;">Bu rapor mevcut verilere göre kural tabanlı yorumdur; kesin teşhis değildir. Ziraat mühendisi kararı esastır.</div>';
+  return sectionCard('🧠 Üretim Müdürü Raporu', body);
+}
+function odaAnalizHTML(c){
+  var v=odaAnalizVeri(c);
+  var body='';
+  var olc=[];
+  if(v.son){
+    if(v.son.kompostC) olc.push("kompost "+esc(v.son.kompostC)+"°");
+    if(v.son.odaC) olc.push("oda "+esc(v.son.odaC)+"°");
+    if(v.son.co2alt||v.son.co2ust) olc.push("CO₂ "+esc(v.son.co2alt||"?")+"-"+esc(v.son.co2ust||"?"));
+    if(v.son.nem) olc.push("nem "+esc(v.son.nem));
+  }
+  var gd='<b>'+esc(v.oda)+'</b> — '+esc(v.stage)+', '+v.gun+'. gün'+(v.puan!=null?(' · puan <b style="color:'+puanRenk(v.puan)+';">'+v.puan+'/100</b>'):'')
+    +(olc.length?('<div class="muted" style="font-size:12.5px;margin-top:2px;">Son ölçüm: '+olc.join(" · ")+(v.sonOlcumGun>0?(" ("+v.sonOlcumGun+" gün önce)"):(v.sonOlcumGun===0?" (bugün)":""))+'</div>'):'');
+  body+=_analizBlokHTML('Genel Durum','#333','<div style="font-size:13px;">'+gd+'</div>');
+  if(v.kritik.length) body+=_analizBlokHTML('🔴 Kritik Riskler','#c0291f', v.kritik.map(function(k){return '<div style="padding:5px 0;border-bottom:1px solid #f4eaea;font-size:13px;">'+esc(k.neden)+'<div class="muted" style="font-size:12px;">Olası sonuç: '+esc(k.sonuc)+'</div><div style="font-size:12px;color:#1f7a4d;">→ '+esc(k.oneri)+'</div></div>';}).join(''));
+  if(v.dikkat.length) body+=_analizBlokHTML('🟡 Dikkat Edilecekler','#c47a1a', v.dikkat.map(function(x){return '<div style="padding:3px 0;font-size:13px;">• '+esc(x)+'</div>';}).join(''));
+  if(v.trendler.length) body+=_analizBlokHTML('📈 Trendler','#1d4ed8', v.trendler.map(function(x){return '<div style="padding:3px 0;font-size:13px;">• '+esc(x)+'</div>';}).join(''));
+  if(v.sonraki.length) body+=_analizBlokHTML('➡️ Sonraki Kritik Adımlar','#1d4ed8', v.sonraki.map(function(x){return '<div style="padding:3px 0;font-size:13px;">• '+esc(x)+'</div>';}).join(''));
+  if(v.olumlu.length) body+=_analizBlokHTML('🟢 Olumlu Noktalar','#1f7a4d', v.olumlu.map(function(x){return '<div style="padding:3px 0;font-size:13px;">• '+esc(x)+'</div>';}).join(''));
+  if(v.eksik.length) body+=_analizBlokHTML('📭 Eksik Veri','#777', v.eksik.map(function(x){return '<div style="padding:3px 0;font-size:12.5px;">• '+esc(x)+'</div>';}).join(''));
+  if(!v.kritik.length && !v.dikkat.length && !v.trendler.length) body+='<div class="muted" style="font-size:13px;margin-top:8px;">Bu odada şu an dikkat çeken bir sorun veya belirgin eğilim yok.</div>';
+  body+='<div class="muted" style="font-size:11px;margin-top:10px;border-top:1px solid #eee;padding-top:6px;">Mevcut verilere göre kural tabanlı yorum; kesin teşhis değildir.</div>';
+  return sectionCard('🔍 '+esc(v.oda)+' Oda Analizi', body);
+}
+var _analizOda=""; /* seçili oda id — Oda Analizi bölümü için */
+function analizOdaSec(id){ _analizOda=id; window.scrollTo(0,0); render(); }
+/* Bugün ekranından tek dokunuşla Üretim Müdürü Raporu'na (Raporlar → Analiz). */
+function acUretimMuduruRaporu(){ _raporKategori="analiz"; go("reports"); }
+
 /* Raporlar ekranı, tıpkı Planlama gibi üstte sabit sekmelerle bölündü —
    eskiden tüm raporlar tek uzun sayfada alt alta diziliyordu (kullanıcı
    isteği: "Raporlar bölümü çok uzadı, ayarlar gibi sekmelere ayır"). */
@@ -10506,10 +10776,14 @@ function renderRaporlar(){
     h+=hasatRaporuHTML();
   }
   else if(_raporKategori==="analiz"){
-    h+='<div class="card"><div class="sec-title" style="margin-top:0;">Akıllı analiz (kural tabanlı)</div>'
-      +'<div class="muted" style="margin-bottom:8px;">Veri anahtarı gerekmez, cihazda çalışır. Anormal sıcaklık, gecikme ve verim farkı gibi kalıpları tarar.</div>'
-      +akilliAnalizHTML(aktif)
-      +'</div>';
+    h+=uretimMuduruRaporHTML();
+    /* Oda Analizi — tek odayı derinlemesine incele */
+    var aktifOdalar=aktif.slice().sort(function(a,b){return cmpOda(a.oda,b.oda);});
+    var opts='<option value="">— oda seç —</option>'+aktifOdalar.map(function(c){return '<option value="'+c.id+'"'+(_analizOda===c.id?' selected':'')+'>'+esc(c.oda)+'</option>';}).join('');
+    h+=sectionCard('🔍 Oda Analizi', '<div class="muted" style="margin-bottom:6px;">Tek bir odayı seçince güçlü yönler, riskler, trendler ve sonraki adımlar detaylı gösterilir.</div>'
+      +'<select onchange="analizOdaSec(this.value)" style="width:100%;padding:9px;">'+opts+'</select>');
+    var seciliOda=aktifOdalar.find(function(c){return c.id===_analizOda;});
+    if(seciliOda) h+=odaAnalizHTML(seciliOda);
     h+=uretimOgrenmesiHTML();
     h+=dusukVerimliDongulerHTML();
   }
