@@ -650,7 +650,7 @@ function hasatTartiGetir(oda, tur){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v359";
+var APP_VER = "v360";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -1082,6 +1082,11 @@ function deviceId(){ if(DEVID) return DEVID; try{ DEVID=localStorage.getItem("ut
 function deviceName(){ try{ var loc=localStorage.getItem("utp_cihazAd"); if(loc) return loc; }catch(e){ console.warn("cihaz adı okunamadı", e); } return deviceId(); }
 function touchCycle(c){ if(!c) return; c._at=new Date().toISOString(); c._by=deviceName(); c._rev=(c._rev||0)+1; }
 function fmtDateTime(iso){ if(!iso) return ""; var d=new Date(iso); if(isNaN(d.getTime())) return ""; function z(n){return ("0"+n).slice(-2);} return z(d.getDate())+"."+z(d.getMonth()+1)+"."+d.getFullYear()+" "+z(d.getHours())+":"+z(d.getMinutes()); }
+/* Ertele/erken çekme gibi işlemler her zaman bir kullanıcının onayladığı (confirm())
+   bir tıklamayla olur — ama çok cihazlı/çok kullanıcılı senkronda, başka bir cihazdan
+   yapılan bir işlem, o an ekrana bakan başka birine "kendiliğinden değişmiş" gibi
+   görünebilir. Kim ve ne zaman yaptığı nota eklenince bu karışıklık ortadan kalkar. */
+function kimNeZamanEtiketi(){ return deviceName()+" · "+fmtDateTime(new Date().toISOString()); }
 
 /* ---------- Yardımcılar ---------- */
 function uid(){ return Date.now().toString(36)+Math.random().toString(36).slice(2,6); }
@@ -1875,7 +1880,11 @@ function odaYapilanlar(c, gun){
   });
   (c.gunluk||[]).forEach(function(r){
     if(r.tarih!==gun) return;
-    if(r.sulama) (""+r.sulama).split(" · ").forEach(function(p){ ekle(p); });
+    /* Sulama bilinçli olarak iptal/değiştirilmişse "yapılmadı" gibi sessizce
+       kaybolmasın — üçüncü bir durum olarak ayrı bir not düşülür. */
+    if(r.sulamaDurum==="iptal"){ ekle("Sulama iptal edildi"+(r.sulamaOrijinal?(" (plan: "+r.sulamaOrijinal+")"):"")+(r.sulamaAciklama?(" — "+r.sulamaAciklama):"")); }
+    else if(r.sulamaDurum==="degistirildi"){ ekle("Sulama değiştirildi"+(r.sulama?(": "+r.sulama):"")+(r.sulamaAciklama?(" — "+r.sulamaAciklama):"")); }
+    else if(r.sulama) (""+r.sulama).split(" · ").forEach(function(p){ ekle(p); });
     if(r.islemNot) (""+r.islemNot).split(" · ").forEach(function(p){ ekle(p); });
   });
   return out;
@@ -2145,7 +2154,7 @@ function planGerekceUygula(cid, idx, yeniTarih, sebepKey, sebepAdi){
     if(!c.erteleSebep) c.erteleSebep={};
     c.erteleSebep["p"+idx]=sebepKey;
   }
-  gunlukNotTariheGuncelle(c, todayISO(), esc(s.txt)+" için plan", esc(s.txt)+" için plan "+fmtDate(yeniTarih)+" — gerekçe: "+esc(sebepAdi));
+  gunlukNotTariheGuncelle(c, todayISO(), esc(s.txt)+" için plan", esc(s.txt)+" için plan "+fmtDate(yeniTarih)+" — gerekçe: "+esc(sebepAdi)+" — "+kimNeZamanEtiketi());
   touchCycle(c); saveData(); closeWarnBox(); toast("Plan güncellendi: "+fmtDate(yeniTarih)); render();
 }
 function protokolYarinaCek(cid, idx){
@@ -2343,7 +2352,7 @@ function protokolBugunAc(cid, idx, sebep){
   if(fark===null || fark>=0){ toast("Bu iş zaten bugün veya geçmiş için planlı"); return; }
   if(!c.ertele) c.ertele={};
   c.ertele["p"+idx]=mevcutErt+fark;
-  gunlukGorevNotEkle(c, s.txt+" bugüne erken çekildi ("+(sebep||"ziraat mühendisi kararı")+")");
+  gunlukGorevNotEkle(c, s.txt+" bugüne erken çekildi ("+(sebep||"ziraat mühendisi kararı")+") — "+kimNeZamanEtiketi());
   touchCycle(c); saveData(); toast("Bugün için erken açıldı: "+s.txt); render();
 }
 /* Şartlı kuralın "ertele" yönü: koşul gerçekleşirse (mühendis onaylarsa) hedef işi 1 gün erteler.
@@ -2372,7 +2381,7 @@ function protokolSartErtele(cid, idx, aciklama){
   _adimiYarinaTasi(c, idx);
   if(!c.erteleSebep) c.erteleSebep={};
   c.erteleSebep["p"+idx]="biyolojik";
-  if(P[idx]) gunlukGorevNotEkle(c, P[idx].txt+" yarına ertelendi — "+(aciklama||"koşul")+" (puan kırılmaz)");
+  if(P[idx]) gunlukGorevNotEkle(c, P[idx].txt+" yarına ertelendi — "+(aciklama||"koşul")+" (puan kırılmaz) — "+kimNeZamanEtiketi());
   touchCycle(c); saveData(); toast("Yarına ertelendi"); render();
 }
 /* Kontrol Protokolü gözlem kartı: "sonucSecenekleri" tanımlı bir kontrol notu (örn. ateşlenme),
@@ -2558,7 +2567,7 @@ function protokolGorevErtele(cid, idx, sebep){
   if(!c.erteleSebep) c.erteleSebep={};
   c.erteleSebep["p"+idx]=sebep||"diger";
   var sebepNot = (sebep==="biyolojik") ? " (gelişme/sarım nedeniyle — puan kırılmaz)" : " (ertelendi)";
-  if(st) gunlukGorevNotEkle(c, st.txt+" yarına ertelendi"+sebepNot);
+  if(st) gunlukGorevNotEkle(c, st.txt+" yarına ertelendi"+sebepNot+" — "+kimNeZamanEtiketi());
   touchCycle(c); saveData(); toast("Yarına ertelendi"); render();
 }
 
@@ -4600,17 +4609,22 @@ function getTodaysTasks(){
     var oneri=protokolOneri(c,bugun);
     if(!oneri) return;
     var gun=(c.gunluk||[]).find(function(g){return g.tarih===bugun;});
-    var yapildiMi=!!(gun && ((gun.sulama||"").trim() || numParse(gun.su)>0));
+    var durum=(gun && gun.sulamaDurum)||"";
+    /* İptal edilmiş bir sulama "yapılmadı" (bekleyen/gecikmiş) sayılmaz —
+       bilinçli bir üretim kararı olarak "tamamlandı" tarafında gösterilir. */
+    var yapildiMi=!!(gun && ((gun.sulama||"").trim() || numParse(gun.su)>0)) || durum==="iptal";
     tasks.push({
       tipo:"sulama",
       odaId:c.id,
       oda:c.oda,
-      islem:yapildiMi?((numParse(gun.su)>0?gun.su+" lt su":"")+(gun.sulama?(" "+gun.sulama):"")).trim()||oneri:oneri,
+      islem:yapildiMi?((numParse(gun.su)>0?gun.su+" lt su":"")+(gun&&gun.sulama?(" "+gun.sulama):"")).trim()||oneri:oneri,
       atama:"",
       tarih:bugun,
       gelisTarihi:c.gelisTarihi||"",
       geciken:false,
       done:yapildiMi,
+      durum:durum,
+      aciklama:(gun && gun.sulamaAciklama)||"",
       id:c.id,
       cyclicId:c.id
     });
@@ -4858,17 +4872,21 @@ function renderBugun(){
       h+='<div style="padding:12px 14px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;'
         +(done?'opacity:.55;':(gec?'border-left:4px solid var(--red);background:#fdf3f3;':'border-left:4px solid transparent;'))+'">'
         +'<div style="flex:1;display:flex;align-items:center;gap:10px;">'
-        +'<div style="background:'+(done?'var(--green)':(gec?'var(--red)':'var(--green-soft)'))+';color:'+(done?'#fff':(gec?'#fff':'var(--green)'))+';width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:600;font-size:11px;flex-shrink:0;">'+(done?'✓':(idx+1))+'</div>'
+        +'<div style="background:'+(done?(t.tipo==="sulama"&&t.durum==="iptal"?'#c77c1f':(t.tipo==="sulama"&&t.durum==="degistirildi"?'#1d6fd8':'var(--green)')):(gec?'var(--red)':'var(--green-soft)'))+';color:'+(done?'#fff':(gec?'#fff':'var(--green)'))+';width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:600;font-size:11px;flex-shrink:0;">'+(done?(t.tipo==="sulama"&&t.durum==="iptal"?'❌':(t.tipo==="sulama"&&t.durum==="degistirildi"?'✏️':'✓')):(idx+1))+'</div>'
         +'<div>'
-        +'<div style="font-weight:600;'+(done?'text-decoration:line-through;':'')+'">'+esc(t.oda||"Genel")+(t.islem||t.baslik?' — '+esc(t.islem||t.baslik):'')+'</div>'
-        +'<div style="font-size:11px;margin-top:2px;'+(done?'color:var(--green);':(gec?'color:var(--red);font-weight:600;':'color:var(--muted);'))+'">'
-        +(done?(t.tipo==="ariza"?'✓ Tamir edildi':'✓ Yapıldı'):((gec?('⚠️ '+gecGun+' gün gecikti · '):'')+esc(t.atama||(t.tipo==="protokol"?"Protokol adımı":(t.tipo==="sulama"?"Sulama/İlaç":(t.tipo==="ariza"?"Arıza":"Atanmamış"))))))
+        +'<div style="font-weight:600;'+(done&&!(t.tipo==="sulama"&&t.durum==="iptal")?'text-decoration:line-through;':'')+'">'+esc(t.oda||"Genel")+(t.islem||t.baslik?' — '+esc(t.islem||t.baslik):'')+'</div>'
+        +'<div style="font-size:11px;margin-top:2px;'+(done?(t.tipo==="sulama"&&t.durum==="iptal"?'color:#c77c1f;font-weight:600;':(t.tipo==="sulama"&&t.durum==="degistirildi"?'color:#1d6fd8;font-weight:600;':'color:var(--green);')):(gec?'color:var(--red);font-weight:600;':'color:var(--muted);'))+'">'
+        +(done?(t.tipo==="ariza"?'✓ Tamir edildi':(t.tipo==="sulama"&&t.durum==="iptal"?'❌ İptal Edildi'+(t.aciklama?(': '+esc(t.aciklama)):''):(t.tipo==="sulama"&&t.durum==="degistirildi"?'✏️ Değiştirildi'+(t.aciklama?(': '+esc(t.aciklama)):''):'✓ Yapıldı'))):((gec?('⚠️ '+gecGun+' gün gecikti · '):'')+esc(t.atama||(t.tipo==="protokol"?"Protokol adımı":(t.tipo==="sulama"?"Sulama/İlaç":(t.tipo==="ariza"?"Arıza":"Atanmamış"))))))
         +'</div>'
         +'</div>'
         +'</div>'
         +(done?''
           :(t.tipo==="sulama"
-            ?'<button class="btn small ghost" style="padding:8px 12px;font-size:12px;flex-shrink:0;" onclick="turOdadaAc(\''+t.cyclicId+'\')">🚶 Tur\'a git</button>'
+            ?('<div style="display:flex;flex-direction:column;gap:4px;flex-shrink:0;">'
+              +'<button class="btn small ghost" style="padding:6px 10px;font-size:11px;white-space:nowrap;" onclick="turOdadaAc(\''+t.cyclicId+'\')">🚶 Tur\'a git</button>'
+              +'<button class="btn small ghost" style="padding:6px 10px;font-size:11px;white-space:nowrap;" onclick="sulamaGorevDegistirAc(\''+t.cyclicId+'\')">✏️ Değiştir</button>'
+              +'<button class="btn small ghost" style="padding:6px 10px;font-size:11px;white-space:nowrap;color:var(--red);border-color:var(--red);" onclick="sulamaGorevIptalAc(\''+t.cyclicId+'\')">❌ İptal Et</button>'
+              +'</div>')
             :(t.tipo==="ariza"
               ?'<button class="btn small ghost" style="padding:8px 12px;font-size:12px;flex-shrink:0;" onclick="go(\'arizalar\')">🔧 Arızalar\'a git</button>'
               :'<button class="btn small" style="padding:8px 14px;font-size:13px;background:var(--green);color:#fff;border:none;border-radius:8px;flex-shrink:0;" onclick="gorevTamamla(\''+t.id+'\',\''+t.tipo+'\',\''+t.cyclicId+'\')">✓</button>')))
@@ -5855,7 +5873,7 @@ function renderDetail(id){
         + '<td>'+esc(r.odaC)+'</td>'
         + '<td>'+esc(r.kompostC)+'</td>'
         + (showCo2?'<td>'+esc(co2)+'</td>':'')
-        + '<td class="note">'+gunMeta(r)+suDegeriGoster(r.su)+((numParse(r.su)>0)&&r.sulama?' · ':'')+esc(r.sulama)+(r.islemNot?('<div style="color:#8a8a82;font-size:12px;margin-top:2px;">'+esc(r.islemNot)+'</div>'):'')+'</td>'
+        + '<td class="note">'+gunMeta(r)+suDegeriGoster(r.su)+((numParse(r.su)>0)&&r.sulama?' · ':'')+esc(r.sulama)+sulamaDurumBadgeHTML(r)+(r.islemNot?('<div style="color:#8a8a82;font-size:12px;margin-top:2px;">'+esc(r.islemNot)+'</div>'):'')+'</td>'
         + '<td style="white-space:nowrap;"><button class="del-x" onclick="delGunluk(\''+c.id+'\','+i+')">×</button></td>'
         + '</tr>';
     });
@@ -7373,6 +7391,86 @@ function sulamaTemizle(selectId, dozId, targetTextId){
   if(doz) doz.value="0";
   if(lbl) lbl.textContent="0 ml";
 }
+/* Bugünkü Görevler'de sulama/ilaç satırı için "Yapıldı"nın tek seçenek olmaması —
+   kullanıcı sulamayı planlanandan farklı uygulayabilir (400 lt yerine 250 lt gibi)
+   veya bilinçli olarak hiç uygulamayabilir (nem yüksek, hastalık riski vb.). Bu
+   fonksiyonlar o kararı Tur'a gitmeden, tek bir dokunuşla kaydeder. Sonuç,
+   gun.sulamaDurum alanında "degistirildi"/"iptal" olarak SSOT'a (c.gunluk) yazılır
+   — Bugünkü Görevler, Gün Sonu Özeti ve CSV/PDF raporları aynı alandan okur. */
+function sulamaGorevDegistirAc(cid){
+  var wm=el("warnModal"); if(!wm) return;
+  var c=loadData().cycles.find(function(x){return x.id===cid;}); if(!c) return;
+  var bugun=todayISO();
+  var gun=(c.gunluk||[]).find(function(g){return g.tarih===bugun;});
+  var mevcut = (gun && ((gun.sulama||"").trim() || numParse(gun.su)>0))
+    ? ((numParse(gun.su)>0?gun.su+" lt su":"")+(gun.sulama?(" "+gun.sulama):"")).trim()
+    : (protokolOneri(c,bugun)||"");
+  wm.innerHTML='<div class="modal-bg" onclick="if(event.target===this) closeWarnBox();"><div class="modal">'
+    +'<div style="font-weight:700;font-size:17px;margin-bottom:4px;">'+esc(c.oda)+' — Sulamayı değiştir</div>'
+    +'<div class="muted" style="font-size:12px;margin-bottom:10px;">Planlanan: '+esc(mevcut||"—")+'. Bugün gerçekte ne uygulanacaksa (veya uygulandıysa) onu yaz.</div>'
+    +'<label>Uygulanacak sulama / ilaçlama</label><input type="text" id="sgd_yeni" value="'+esc(mevcut)+'" placeholder="örn. 250 lt su">'
+    +'<label style="margin-top:8px;display:block;">Değişiklik nedeni (zorunlu)</label><textarea id="sgd_neden" rows="2" placeholder="örn. Nem yüksek olduğu için azaltıldı"></textarea>'
+    +'<div class="row" style="margin-top:14px;"><button class="btn" onclick="sulamaGorevDegistirKaydet(\''+cid+'\')">Kaydet</button>'
+    +'<button class="btn ghost" onclick="closeWarnBox()">Vazgeç</button></div>'
+    +'</div></div>';
+}
+function sulamaGorevDegistirKaydet(cid){
+  if(!can("edit")) return noPerm();
+  var c=loadData().cycles.find(function(x){return x.id===cid;}); if(!c) return;
+  var yeni=(el("sgd_yeni")&&el("sgd_yeni").value.trim())||"";
+  var neden=(el("sgd_neden")&&el("sgd_neden").value.trim())||"";
+  if(!yeni){ toast("Uygulanan sulama/ilaç bilgisini yaz"); return; }
+  if(!neden){ toast("Değişiklik nedeni zorunlu"); return; }
+  var bugun=todayISO();
+  var oneri=protokolOneri(c,bugun)||"";
+  if(!c.gunluk) c.gunluk=[];
+  var gun=c.gunluk.find(function(g){return g.tarih===bugun;});
+  if(!gun){ gun={tarih:bugun}; c.gunluk.push(gun); }
+  gun.sulama=yeni; gun.su="";
+  gun.sulamaDurum="degistirildi"; gun.sulamaAciklama=neden; gun.sulamaOrijinal=oneri;
+  c.gunluk.sort(function(a,b){ return cmpDate(a.tarih,b.tarih); });
+  gunlukNotTariheEkle(c, bugun, "Sulama değiştirildi: "+yeni+" (neden: "+neden+")");
+  touchCycle(c); saveData(); closeWarnBox(); toast("Sulama \"değiştirildi\" olarak kaydedildi"); render();
+}
+var SULAMA_IPTAL_SEBEPLERI=["Nem yüksek","Hastalık riski","Kompost fazla ıslak","Teknik karar"];
+function sulamaGorevIptalAc(cid){
+  var wm=el("warnModal"); if(!wm) return;
+  var c=loadData().cycles.find(function(x){return x.id===cid;}); if(!c) return;
+  var h='<div class="modal-bg" onclick="if(event.target===this) closeWarnBox();"><div class="modal">'
+    +'<div style="font-weight:700;font-size:17px;margin-bottom:4px;">'+esc(c.oda)+' — Sulamayı iptal et</div>'
+    +'<div class="muted" style="font-size:12px;margin-bottom:10px;">Bu bir ihmal değil, bilinçli bir üretim kararı olarak kaydedilir — "yapılmadı" görünmez. Bir sebep seç:</div>';
+  SULAMA_IPTAL_SEBEPLERI.forEach(function(s){
+    h+='<button class="btn ghost" style="width:100%;margin-bottom:6px;text-align:left;" onclick="sulamaGorevIptalKaydet(\''+cid+'\',\''+esc(s).replace(/'/g,"\\'")+'\')">'+esc(s)+'</button>';
+  });
+  h+='<input type="text" id="sgi_diger" placeholder="Diğer sebep (yaz)" style="margin-top:4px;">'
+    +'<div class="row" style="margin-top:10px;"><button class="btn" style="background:var(--red);border-color:var(--red);" onclick="sulamaGorevIptalDigerKaydet(\''+cid+'\')">İptal Et (yazdığım sebep)</button>'
+    +'<button class="btn ghost" onclick="closeWarnBox()">Vazgeç</button></div>'
+    +'</div></div>';
+  wm.innerHTML=h;
+}
+function sulamaGorevIptalKaydet(cid, sebep){
+  sulamaGorevIptalUygula(cid, sebep);
+}
+function sulamaGorevIptalDigerKaydet(cid){
+  var metin=(el("sgi_diger")&&el("sgi_diger").value.trim())||"";
+  if(!metin){ toast("Sebep yaz veya yukarıdan seç"); return; }
+  sulamaGorevIptalUygula(cid, metin);
+}
+function sulamaGorevIptalUygula(cid, sebep){
+  if(!can("edit")) return noPerm();
+  if(!sebep){ toast("Sebep zorunlu"); return; }
+  var c=loadData().cycles.find(function(x){return x.id===cid;}); if(!c) return;
+  var bugun=todayISO();
+  var oneri=protokolOneri(c,bugun)||"";
+  if(!c.gunluk) c.gunluk=[];
+  var gun=c.gunluk.find(function(g){return g.tarih===bugun;});
+  if(!gun){ gun={tarih:bugun}; c.gunluk.push(gun); }
+  gun.sulama=""; gun.su="";
+  gun.sulamaDurum="iptal"; gun.sulamaAciklama=sebep; gun.sulamaOrijinal=oneri;
+  c.gunluk.sort(function(a,b){ return cmpDate(a.tarih,b.tarih); });
+  gunlukNotTariheEkle(c, bugun, "Sulama iptal edildi (neden: "+sebep+")");
+  touchCycle(c); saveData(); closeWarnBox(); toast("Sulama \"iptal edildi\" olarak kaydedildi"); render();
+}
 function addGunluk(id){
   if(!can("edit")) return noPerm();
   var c = loadData().cycles.find(function(x){return x.id===id;});
@@ -7498,6 +7596,9 @@ function topluKaydet(id, bas, son){
     if(blockSulama){ sul=""; su=""; if(!oda && !komp) continue; }
     var idx=-1; for(var k=0;k<c.gunluk.length;k++){ if(c.gunluk[k].tarih===tarih){ idx=k; break; } }
     var rec = idx>=0 ? c.gunluk[idx] : {tarih:tarih};
+    if(rec.sulamaDurum && (sul!==(rec.sulama||"") || su!==(rec.su||""))){
+      rec.sulamaDurum=""; rec.sulamaAciklama=""; rec.sulamaOrijinal="";
+    }
     rec.odaC=oda; rec.kompostC=komp; rec.sulama=sul; rec.su=su;
     if(idx>=0){ c.gunluk[idx]=rec; guncellenen++; } else { c.gunluk.push(rec); eklenen++; }
   }
@@ -7650,7 +7751,8 @@ function exportCycleCSV(id){
   L.push(["Tarih","Gün (geliş)","Gün (toprak)","Oda °C","Kompost °C","CO2 alt","CO2 üst","Amonyak","Nem","Su (lt)","Sulama/İlaçlama"].map(csvCell).join(";"));
   (c.gunluk||[]).forEach(function(r){
     var og=ortuGun(c,r.tarih);
-    L.push([fmtDate(r.tarih),gunNo(c,r.tarih),(og!==null?og:""),r.odaC,r.kompostC,r.co2alt,r.co2ust,r.amonyak,r.nem,r.su,r.sulama].map(csvCell).join(";"));
+    var sulamaHucre=r.sulama+(sulamaDurumEtiketMetin(r)?(" ["+sulamaDurumEtiketMetin(r)+"]"):"");
+    L.push([fmtDate(r.tarih),gunNo(c,r.tarih),(og!==null?og:""),r.odaC,r.kompostC,r.co2alt,r.co2ust,r.amonyak,r.nem,r.su,sulamaHucre].map(csvCell).join(";"));
   });
   L.push("");
   L.push(["HAVALANDIRMA PLANI"].map(csvCell).join(";"));
@@ -7902,6 +8004,13 @@ function gunlukKaydet(c, t, vk, patch, warnLines){
     /* Form her zaman görünen alanların TAMAMINI gönderir — boş bırakılan alan
        "dokunma" değil "temizle" demektir. Aksi halde yanlışlıkla eklenmiş bir
        not (örn. otomatik "ertelendi" notu) kullanıcı silip kaydetse bile geri gelirdi. */
+    /* Sulama daha önce "değiştirildi"/"iptal" olarak işaretlenmişse ve mühendis
+       burada (Tur'dan) gerçek bir sulama/ilaç değeri girmişse, bu YENİ bir
+       normal kayıttır — eski durum etiketi geçersiz kalır, silinir. Değer
+       değişmediyse (örn. sadece sıcaklık güncellendi) etiket korunur. */
+    if(ex.sulamaDurum && (sul!==(ex.sulama||"") || suV!==(ex.su||""))){
+      ex.sulamaDurum=""; ex.sulamaAciklama=""; ex.sulamaOrijinal="";
+    }
     ex.vakit=vk;
     ex.odaC=oda; ex.kompostC=komp; ex.kompostUst=kompUst;
     ex.klimaC=klima; ex.co2alt=a; ex.co2ust=u;
@@ -8434,6 +8543,22 @@ function suDegeriTemiz(su){
   var n=numParse(su);
   return (n>0) ? ('<b>'+esc(su)+' lt su</b>') : "";
 }
+/* Sulama değiştirildi/iptal edildiğinde raporlarda (Günlük kayıt tablosu, CSV,
+   PDF) "yapılmadı" gibi boş görünmesin — üç durum (Yapıldı/Değiştirildi/İptal
+   Edildi) her yerde ayrı okunabilsin diye tek yerden metin/rozet üretilir. */
+function sulamaDurumEtiketMetin(r){
+  if(!r) return "";
+  if(r.sulamaDurum==="iptal") return "İPTAL EDİLDİ"+(r.sulamaOrijinal?(" (plan: "+r.sulamaOrijinal+")"):"")+(r.sulamaAciklama?(" — neden: "+r.sulamaAciklama):"");
+  if(r.sulamaDurum==="degistirildi") return "DEĞİŞTİRİLDİ"+(r.sulamaAciklama?(" — neden: "+r.sulamaAciklama):"");
+  return "";
+}
+function sulamaDurumBadgeHTML(r){
+  if(!r || !r.sulamaDurum) return "";
+  var iptal=r.sulamaDurum==="iptal";
+  var renk=iptal?"#8a5a1f":"#1d4ed8", bg=iptal?"#fff3e0":"#e8f3ff";
+  return '<div style="margin-top:2px;font-size:11px;color:'+renk+';background:'+bg+';display:inline-block;padding:1px 6px;border-radius:6px;">'
+    +(iptal?'❌ İptal edildi':'✏️ Değiştirildi')+(r.sulamaAciklama?(': '+esc(r.sulamaAciklama)):'')+'</div>';
+}
 function gunlukSatirAyristir(r){
   /* Su alanı normalde sadece sayı olmalı (slider'dan gelir) ama eski/legacy
      kayıtlarda serbest metin de olabilir ("250 ml serenade" gibi, yanlışlıkla
@@ -8512,6 +8637,8 @@ function buildPrintHTML(c){
     var ayr=gunlukSatirAyristir(r);
     var suTemiz = suDegeriTemiz(r.su);
     var suHucre = suTemiz + ((suTemiz&&ayr.sulama.length)?' · ':'') + esc(ayr.sulama.join(" · "));
+    var _sulamaEtiket=sulamaDurumEtiketMetin(r);
+    if(_sulamaEtiket) suHucre += (suHucre?'<br>':'')+'<i>'+esc(_sulamaEtiket)+'</i>';
     var uretimHucre=(uretimTarihMap[r.tarih]||[]).concat(ayr.uretim).join(" · ");
     rows+='<tr><td>'+fmtDate(r.tarih)+'</td><td>'+gunNo(c,r.tarih)+'</td><td>'+(og!==null?og:"")+'</td><td>'+esc(r.odaC)+'</td><td>'+esc(r.kompostC)+'</td><td>'+esc(co2)+'</td>'
       +'<td style="text-align:left">'+esc(uretimHucre)+'</td>'
@@ -12050,7 +12177,7 @@ function sarimSoruCevapla(cid, idx, cevap){
   if(cevap==="hayir"){
     if(!c.ertele) c.ertele={};
     c.ertele["p"+idx]=(c.ertele["p"+idx]||0)+1;
-    gunlukGorevNotEkle(c, (st?st.txt:"Formaldehit")+" — sarım toprağa geçmediği için 1 gün ertelendi");
+    gunlukGorevNotEkle(c, (st?st.txt:"Formaldehit")+" — sarım toprağa geçmediği için 1 gün ertelendi — "+kimNeZamanEtiketi());
     touchCycle(c); saveData(); toast("Yarına ertelendi"); render();
   } else {
     touchCycle(c); saveData(); toast("Kaydedildi — bugünkü uygulama devam edebilir"); render();
