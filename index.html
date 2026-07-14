@@ -650,7 +650,7 @@ function hasatTartiGetir(oda, tur){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v357";
+var APP_VER = "v358";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -4105,6 +4105,12 @@ function getTomorrowTasks(){
     var oneri=protokolOneri(c,yarin);
     if(oneri) tasks.push({oda:c.oda, islem:oneri, tipo:"sulama"});
   });
+  /* Planlı kompost gelişleri (Kompost Planı) — odaya çevrilmemiş (done olmayan)
+     çıkışı YARIN olan kompostlar da yarınki işlerde görünür (kullanıcı raporu:
+     "yarın kompost gelecek ama yarınki işlemlerde görünmüyor"). */
+  getPlan().filter(function(x){return !x.done && x.cikis===yarin;}).forEach(function(x){
+    tasks.push({oda:x.oda||"—", islem:"🚚 Kompost gelecek ("+(x.firma||"firma")+") — indirme", tipo:"kompost"});
+  });
   /* Oda adına göre grupla, odasız (genel) en sona */
   tasks.sort(function(a,b){
     if(!!a.oda!==!!b.oda) return a.oda?-1:1;
@@ -4794,6 +4800,12 @@ function renderBugun(){
       +'</div>';
   }
   
+  /* Yaklaşan kompost gelişleri (dün→+2 gün) — "BUGÜN/yarın geliyor" + Oda oluştur.
+     Eskiden sadece Görevler ekranındaydı; kullanıcı "yarın kompost gelecek ama
+     görünmüyor" dediği için ana Bugün ekranında da göze çarpsın. Planlı geliş
+     yoksa boş döner, ekranı kalabalıklaştırmaz. */
+  h += planHatirlatici();
+
   /* ÜRETİM MÜDÜRÜ RAPORU girişi — her açılışta göz önünde, tek dokunuşla tam
      rapora gider (kritik risk sayısını da gösterir). */
   try{
