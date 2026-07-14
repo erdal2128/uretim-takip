@@ -650,7 +650,7 @@ function hasatTartiGetir(oda, tur){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v365";
+var APP_VER = "v366";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -5976,7 +5976,17 @@ function renderDetail(id){
     + '<div class="warn">🌡️ Kompost ideal 24-26° · <b>21° altı ve 28° üstü KRİTİK</b> · 30° üstü TEHLİKELİ<br>Oda üst sınır 21° · toprak→hava arası hava kapalı<br>🌬️ Havadan sonra: oda 18° (hasatta 17°) · kompost 19-21° · CO₂ 1.flaş 2100-2400 / 2.flaş 3000-3300</div>';
   var protAdimlari = getProtokol().map(function(s,idx){
     var ar = s.tekrarBitisRef ? protokolAdimAraligi(c,s) : null;
-    var t = (ar?ar.baslangic:protokolTarih(c,s));
+    /* KRİTİK: protokolTarih() KASITLI olarak adımın KENDİ ertelemesini
+       (c.ertele["p"+idx]) dışarıda bırakır — SSOT deseni gereği bunu her
+       çağıran kendi ekler (bkz. yarinPlanlanan, nextTasks). Bu tablo bunu
+       EKLEMİYORDU — sonuç: bir adım "Ertele" ile ileri bir tarihe taşınmış
+       olsa bile bu ekranda hep ESKİ (ertelemeden önceki) tarihi gösteriyordu,
+       "Yarın işlem" / Bugünkü Görevler ise doğru (ertelenmiş) tarihi
+       kullandığı için ikisi arasında tutarsızlık oluşuyordu (kullanıcı
+       raporu: "protokol tablosu yarın diyor ama Yarın sütunu boş"). */
+    var _ert=(c.ertele && c.ertele["p"+idx])?c.ertele["p"+idx]:0;
+    var _tRaw=protokolTarih(c,s);
+    var t = (ar?ar.baslangic:(_tRaw?addDays(_tRaw,_ert):_tRaw));
     /* GÜVENLİK AĞI: bir su/ilaç satırının tarihi hiçbir şekilde hesaplanamıyorsa
        (örn. bozuk/eksik referans zinciri), satır ESKİDEN sessizce listeden
        kayboluyordu — kullanıcı "satır yok" sanıyordu ama aslında satır VARDI,
