@@ -650,7 +650,7 @@ function hasatTartiGetir(oda, tur){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v368";
+var APP_VER = "v369";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -710,7 +710,58 @@ function memDataNormalizeVeGoc(){
   var _degEkipDept = ekipVarsayilanDepartmanlarEkle(memData);
   var _degFlasAkisi = flasAkisiVarsayilanEkle(memData);
   var _degFlas1Baglan = flas1DogrudanHavayaBagla(memData);
-  if(_degMigrasyon || _degTekil || _degKompostInd || _degGorevMukerrer || _degSartliKural || _degEkipDept || _degFlasAkisi || _degFlas1Baglan) saveData();
+  var _degSulamaTekrar = sulamaIptalDegistirNotlariniTekille(memData);
+  if(_degMigrasyon || _degTekil || _degKompostInd || _degGorevMukerrer || _degSartliKural || _degEkipDept || _degFlasAkisi || _degFlas1Baglan || _degSulamaTekrar) saveData();
+}
+/* DÜZELTME (her açılışta çalışır, idempotent): gunlukKaydet()'teki eski bir
+   kıyaslama hatası yüzünden (su slider'ı boş alanda "0" döndürür ama İptal
+   Et sonrası saklanan temiz değer "" idi — sayısal olarak aynı ama metin
+   olarak farklı), bir odada normal Tur kaydı (örn. sadece sıcaklık girişi)
+   yapılınca sulama "iptal edildi"/"değiştirildi" etiketi SESSİZCE siliniyor,
+   görev tekrar "bekliyor" gibi görünüyor, kullanıcı tekrar İptal Et'e basmak
+   zorunda kalıyordu — her basışta yeni zaman damgalı bir not birikip aynı
+   günün kaydında "Sulama iptal edildi ... · Sulama iptal edildi ..." diye
+   3-4 kez tekrarlanıyordu (kullanıcı raporu). Kök neden ayrıca düzeltildi
+   (bkz. gunlukKaydet/topluKaydet), bu fonksiyon sadece DAHA ÖNCE birikmiş
+   tekrarları temizler — aynı "Sulama iptal edildi (neden: ...)" veya
+   "Sulama değiştirildi: ..." metninin zaman damgası hariç aynı olan
+   kopyalarını, en sonuncusu hariç siler. */
+function sulamaIptalDegistirNotlariniTekille(d){
+  if(!d || !d.cycles) return false;
+  var degisti=false;
+  var cıplakTarih=/^\d{2}\.\d{2}\.\d{4}\s+\d{2}:\d{2}$/;
+  d.cycles.forEach(function(c){
+    if(!Array.isArray(c.gunluk)) return;
+    c.gunluk.forEach(function(g){
+      if(!g.islemNot) return;
+      var parcalar=(""+g.islemNot).split(" · ").map(function(x){return x.trim();}).filter(Boolean);
+      var oncekiUzunluk=parcalar.length;
+      var sulamaVarMi = parcalar.some(function(p){ return /^Sulama (?:iptal edildi|değiştirildi)/.test(p); });
+      /* v368'den ÖNCE kimNeZamanEtiketi() ayraç olarak (yanlışlıkla) aynı
+         " · " karakterini kullanıyordu — her tekrar tıklamada "Sulama iptal
+         edildi... — Rol (cihaz)" ile ardından gelen çıplak "GG.AA.YYYY SS:DD"
+         BİRBİRİNDEN KOPUP tek başına kalan parçalara dönüşüyordu, bunlar da
+         dedup'tan kaçıp sonsuza kadar birikiyordu. Bu günde en az bir sulama
+         notu varsa, sahipsiz çıplak tarih parçaları atılır (hangi tıklamaya
+         ait oldukları güvenilir şekilde bilinemiyor, korunacak bir değerleri
+         yok — asıl bilgi zaten kalan son notta ve satırın kendi tarihinde var). */
+      var temiz = sulamaVarMi ? parcalar.filter(function(p){ return !cıplakTarih.test(p); }) : parcalar;
+      /* Aynı ön eke (zaman damgası hariç) sahip notlardan sadece SONUNCUSU kalır. */
+      var byOnEk={}, sira=[];
+      temiz.forEach(function(p){
+        var m=/^(Sulama (?:iptal edildi|değiştirildi)[^—]*)—/.exec(p);
+        var onEk = m ? m[1].trim() : p; /* eşleşmeyenler kendi başına benzersiz kalır, dokunulmaz */
+        if(!(onEk in byOnEk)) sira.push(onEk);
+        byOnEk[onEk]=p; /* aynı ön ek tekrar gelirse en SON görüleni tutulur */
+      });
+      var yeniParcalar = sira.map(function(k){return byOnEk[k];});
+      if(yeniParcalar.length!==oncekiUzunluk){
+        g.islemNot = yeniParcalar.join(" · ");
+        degisti=true;
+      }
+    });
+  });
+  return degisti;
 }
 /* TEK SEFERLİK GEÇİŞ: kullanıcı isteği — "havaya başladıktan 11 gün sonra
    1. Flaş, 1. Flaş 5 gün sürer, bitince 5 gün 2. Flaş hazırlığı, 2. Flaş 5
@@ -1093,7 +1144,13 @@ function fmtDateTime(iso){ if(!iso) return ""; var d=new Date(iso); if(isNaN(d.g
 function kimNeZamanEtiketi(){
   var rolAdi = currentRole ? (ROLE_DEFS[currentRole]||{}).ad : null;
   var kim = rolAdi ? (rolAdi+" ("+deviceName()+")") : deviceName();
-  return kim+" · "+fmtDateTime(new Date().toISOString());
+  /* KRİTİK: ayraç " · " OLAMAZ — birden fazla ayrı notu birleştirmek için
+     tüm günlük not sistemi (gunlukNotTariheEkle, odaYapilanlar'ın split(" · ")
+     ile ayrıştırması vb.) AYNI " · " karakterini kullanıyor. Burada da
+     kullanılırsa TEK bir notun içindeki "kim · tarih" kısmı, ayrı bir not
+     gibi ikiye bölünüp (örn. Gün Sonu Özeti'nde) anlamsız bir "15.07.2026
+     09:19" satırı olarak tek başına görünürdü. Virgül bu çakışmayı önler. */
+  return kim+", "+fmtDateTime(new Date().toISOString());
 }
 
 /* ---------- Yardımcılar ---------- */
@@ -1893,7 +1950,13 @@ function odaYapilanlar(c, gun){
     if(r.sulamaDurum==="iptal"){ ekle("Sulama iptal edildi"+(r.sulamaOrijinal?(" (plan: "+r.sulamaOrijinal+")"):"")+(r.sulamaAciklama?(" — "+r.sulamaAciklama):"")); }
     else if(r.sulamaDurum==="degistirildi"){ ekle("Sulama değiştirildi"+(r.sulama?(": "+r.sulama):"")+(r.sulamaAciklama?(" — "+r.sulamaAciklama):"")); }
     else if(r.sulama) (""+r.sulama).split(" · ").forEach(function(p){ ekle(p); });
-    if(r.islemNot) (""+r.islemNot).split(" · ").forEach(function(p){ ekle(p); });
+    /* islemNot'taki "Sulama iptal edildi/değiştirildi ..." parçaları, sulamaDurum
+       üzerinden yukarıda ZATEN eklendi (kim/ne zaman dahil daha kısa haliyle) —
+       burada tekrar eklenirse aynı karar iki kez (biri kısa, biri uzun) listelenir. */
+    if(r.islemNot) (""+r.islemNot).split(" · ").forEach(function(p){
+      if(r.sulamaDurum && /^Sulama (iptal edildi|değiştirildi)/.test(p)) return;
+      ekle(p);
+    });
   });
   return out;
 }
@@ -7683,7 +7746,7 @@ function topluKaydet(id, bas, son){
     if(blockSulama){ sul=""; su=""; if(!oda && !komp) continue; }
     var idx=-1; for(var k=0;k<c.gunluk.length;k++){ if(c.gunluk[k].tarih===tarih){ idx=k; break; } }
     var rec = idx>=0 ? c.gunluk[idx] : {tarih:tarih};
-    if(rec.sulamaDurum && (sul!==(rec.sulama||"") || su!==(rec.su||""))){
+    if(rec.sulamaDurum && (sul!==(rec.sulama||"") || (numParse(su)||0)!==(numParse(rec.su)||0))){
       rec.sulamaDurum=""; rec.sulamaAciklama=""; rec.sulamaOrijinal="";
     }
     rec.odaC=oda; rec.kompostC=komp; rec.sulama=sul; rec.su=su;
@@ -8102,8 +8165,17 @@ function gunlukKaydet(c, t, vk, patch, warnLines){
     /* Sulama daha önce "değiştirildi"/"iptal" olarak işaretlenmişse ve mühendis
        burada (Tur'dan) gerçek bir sulama/ilaç değeri girmişse, bu YENİ bir
        normal kayıttır — eski durum etiketi geçersiz kalır, silinir. Değer
-       değişmediyse (örn. sadece sıcaklık güncellendi) etiket korunur. */
-    if(ex.sulamaDurum && (sul!==(ex.sulama||"") || suV!==(ex.su||""))){
+       değişmediyse (örn. sadece sıcaklık güncellendi) etiket korunur.
+       KRİTİK: su karşılaştırması SAYISAL yapılmalı — su (lt) slider'ı boş
+       bırakılan bir alanda bile HER ZAMAN "0" string'i döndürür, ama İptal
+       Et sonrası saklanan "temiz" değer boş string ("") idi. Ham metin
+       karşılaştırması ("0" !== "") her rutin Tur kaydında (sıcaklık girişi
+       gibi, sulamaya hiç dokunulmasa bile) bunu "değişti" sanıp iptal/
+       değiştir etiketini SESSİZCE siliyordu — görev "Bugünkü Görevler"de
+       yeniden bekliyormuş gibi görünüyor, kullanıcı tekrar tekrar İptal
+       Et'e basmak zorunda kalıyordu (her basışta yeni zaman damgalı bir
+       not birikiyordu). Sayısal karşılaştırma "0" ile ""yi eşit sayar. */
+    if(ex.sulamaDurum && (sul!==(ex.sulama||"") || (numParse(suV)||0)!==(numParse(ex.su)||0))){
       ex.sulamaDurum=""; ex.sulamaAciklama=""; ex.sulamaOrijinal="";
     }
     ex.vakit=vk;
