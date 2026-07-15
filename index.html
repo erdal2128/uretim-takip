@@ -650,7 +650,7 @@ function hasatTartiGetir(oda, tur){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v372";
+var APP_VER = "v373";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -8119,7 +8119,7 @@ function turTarihDegis(){
   var eskiTarih=_turTarihVal||todayISO();
   var kartlar=document.querySelectorAll('[data-cid]');
   var warnLines=[];
-  kartlar.forEach(function(card){ if(turKaydetKart(card, eskiTarih, "", warnLines)) saveData(); });
+  kartlar.forEach(function(card){ try{ if(turKaydetKart(card, eskiTarih, "", warnLines)) saveData(); }catch(e){ console.error("Tur kaydı hatası:", e); } });
   if(warnLines.length) showWarnBox("Uyarı", warnLines);
   _turTarihVal=el("tur_tarih")?el("tur_tarih").value:_turTarihVal;
   render();
@@ -8127,7 +8127,7 @@ function turTarihDegis(){
 function turModDegistir(){
   var eskiTarih=_turTarihVal||todayISO();
   var warnLines=[];
-  document.querySelectorAll('[data-cid]').forEach(function(card){ if(turKaydetKart(card, eskiTarih, "", warnLines)) saveData(); });
+  document.querySelectorAll('[data-cid]').forEach(function(card){ try{ if(turKaydetKart(card, eskiTarih, "", warnLines)) saveData(); }catch(e){ console.error("Tur kaydı hatası:", e); } });
   if(warnLines.length) showWarnBox("Uyarı", warnLines);
   _turTarihVal=el("tur_tarih")?el("tur_tarih").value:_turTarihVal;
   setTurMod(getTurMod()==="tek"?"liste":"tek");
@@ -8238,11 +8238,24 @@ function turIlerle(delta){
   var vk=el("tur_vakit")?el("tur_vakit").value:"";
   _turTarihVal=t; _turVakitVal=vk;
   var card=document.querySelector('[data-cid]');
-  var warnLines=[];
-  if(card){
-    var n=turKaydetKart(card, t, vk, warnLines);
-    if(n) saveData();
-    if(warnLines.length) showWarnBox("Bu oda için uyarı", warnLines);
+  /* GÜVENLİK AĞI: burada (sicaklikSupheliMi, gunlukKontrolMesaji vb. içinde)
+     beklenmedik bir hata / bir confirm() penceresinin bazı cihazlarda düzgün
+     dönmemesi gibi bir durum olursa, kaydetme adımı BÜTÜN "Sonraki oda"
+     işlemini durdurup kullanıcıya hiçbir tepki vermeden takılı bırakıyordu
+     (kullanıcı raporu: "Sonraki odaya basıyorum tepki yok"). Artık kaydetme
+     hata verse bile oda değiştirme/ilerleme YİNE DE gerçekleşir — en kötü
+     ihtimalle o kartın verisi kaydedilmez (kullanıcı geri dönüp tekrar
+     girebilir), ama uygulama asla "tepkisiz" kalmaz. */
+  try{
+    if(card){
+      var warnLines=[];
+      var n=turKaydetKart(card, t, vk, warnLines);
+      if(n) saveData();
+      if(warnLines.length) showWarnBox("Bu oda için uyarı", warnLines);
+    }
+  }catch(e){
+    console.error("Tur kaydı sırasında hata (oda değiştirme yine de devam ediyor):", e);
+    toast("⚠️ Bu odanın verisi kaydedilemedi, kontrol et");
   }
   turIndex += delta;
   render();  /* render() → renderTur() → header otomatik güncellenir */
@@ -8252,11 +8265,16 @@ function turBitir(){
   if(!t){ toast("Tarih seç"); return; }
   var vk=el("tur_vakit")?el("tur_vakit").value:"";
   var card=document.querySelector('[data-cid]');
-  var warnLines=[];
-  if(card){
-    var n=turKaydetKart(card, t, vk, warnLines);
-    if(n) saveData();
-    if(warnLines.length) showWarnBox("Bu oda için uyarı", warnLines);
+  try{
+    if(card){
+      var warnLines=[];
+      var n=turKaydetKart(card, t, vk, warnLines);
+      if(n) saveData();
+      if(warnLines.length) showWarnBox("Bu oda için uyarı", warnLines);
+    }
+  }catch(e){
+    console.error("Tur kaydı sırasında hata (tur yine de tamamlanıyor):", e);
+    toast("⚠️ Son odanın verisi kaydedilemedi, kontrol et");
   }
   toast("✓ Tur tamamlandı");
   turIndex=0; _turTarihVal=null; _turVakitVal=null;
