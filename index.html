@@ -650,7 +650,7 @@ function hasatTartiGetir(oda, tur){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v374";
+var APP_VER = "v375";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -2258,16 +2258,6 @@ function peKopyalaDun(cid){
   if(el("pe_su")){ el("pe_su").value = dr.su||0; if(el("pe_su_lbl")) el("pe_su_lbl").textContent=(dr.su||0)+" lt"; }
   toast("Dünkü sulama/ilaç kopyalandı — kontrol et");
 }
-function turKopyalaDun(cid){
-  var c=loadData().cycles.find(function(x){return x.id===cid;}); if(!c) return;
-  var dun=addDays(todayISO(),-1);
-  var dr=(c.gunluk||[]).find(function(r){return r.tarih===dun;});
-  if(!dr || (!dr.sulama && !dr.su)){ toast("Dün için sulama/ilaç kaydı yok"); return; }
-  var card=document.querySelector('[data-cid="'+cid+'"]'); if(!card) return;
-  var sE=card.querySelector('.tur_sulama'); if(sE) sE.value=dr.sulama||"";
-  var suE=card.querySelector('.tur_su'); if(suE){ suE.value=dr.su||0; var lbl=el(suE.id+"_lbl"); if(lbl) lbl.textContent=(dr.su||0)+" lt"; }
-  toast("Dünkü sulama/ilaç kopyalandı — kontrol et");
-}
 /* Günlük Tur / panoEdit ekranında, sulamanın altında sıradaki adımı gösterir.
    Adım BUGÜN (ya da daha erken/gecikmiş) ise direkt işaretlenebilir bir kutucuk
    çıkar — Görevler sekmesine ayrıca gitmeye gerek kalmaz. İleri bir tarihse
@@ -2523,12 +2513,21 @@ function turSiradakiAdimHTML(c){
     if(sd){
       var sdErt=(c.ertele&&c.ertele["p"+sd.idx])?c.ertele["p"+sd.idx]:0;
       var sdTarih=sd.t; /* siradakiProtokolAdimi zaten ertele'yi t içine katıyor */
-      h += '<div style="margin-top:8px; padding:8px; background:#eef6ff; border:1px solid #b9d7f5; border-radius:8px;">'
-        + '<div style="font-size:12px; font-weight:700; color:#1d4ed8;">📋 Sıradaki işlem</div>'
-        + '<div style="font-size:13.5px;margin-top:3px;"><b>'+esc(sd.txt)+'</b></div>'
-        + '<div style="font-size:12px;color:var(--muted);">Planlanan: '+fmtDate(sdTarih)+(sdTarih<todayISO()?' <span style="color:#c0291f;font-weight:600;">(gecikti)</span>':'')+'</div>'
-        + (can("edit")?('<button class="btn small" style="margin-top:6px;" onclick="planTarihiDegistirAc(\''+c.id+'\','+sd.idx+')">📅 Planla</button>'):'')
-        + '</div>';
+      /* Kullanıcı isteği: adım daha günler uzaktaysa (örn. 7 gün sonra) bu
+         kart her gün, her odada gözükerek yer kaplıyordu — henüz hiçbir
+         aksiyon gerektirmeyen bir bilgi için gereksiz kalabalık. Sadece
+         iş yaklaşınca (yarın, bugün veya zaten gecikmiş) gösterilir; daha
+         uzak bir tarihse sessizce gizlenir, gün yaklaştıkça kendiliğinden
+         belirir. */
+      var sdOffset=daysBetween(todayISO(), sdTarih);
+      if(sdOffset===null || sdOffset<=1){
+        h += '<div style="margin-top:8px; padding:8px; background:#eef6ff; border:1px solid #b9d7f5; border-radius:8px;">'
+          + '<div style="font-size:12px; font-weight:700; color:#1d4ed8;">📋 Sıradaki işlem</div>'
+          + '<div style="font-size:13.5px;margin-top:3px;"><b>'+esc(sd.txt)+'</b></div>'
+          + '<div style="font-size:12px;color:var(--muted);">Planlanan: '+fmtDate(sdTarih)+(sdTarih<todayISO()?' <span style="color:#c0291f;font-weight:600;">(gecikti)</span>':'')+'</div>'
+          + (can("edit")?('<button class="btn small" style="margin-top:6px;" onclick="planTarihiDegistirAc(\''+c.id+'\','+sd.idx+')">📅 Planla</button>'):'')
+          + '</div>';
+      }
     }
   }catch(err){ console.error("Sıradaki işlem hesaplanamadı:", err); }
   /* NOT: Aşağıdaki Şartlı Kurallar bloğu ayrıca, KOŞULA bağlı özel durumlar
@@ -7564,16 +7563,6 @@ function sulamaMetniGuncelle(selectId, dozId, targetTextId){
      yoktu — kullanıcı elle metin kutusuna girip silmek zorunda kalıyordu. */
   else if(!ilac) target.value = "";
 }
-/* Sulama/İlaçlama alanını + picker'ı (ilaç seçimi, doz slider'ı) tek dokunuşla
-   sıfırlar — yanlış girilen bir değeri elle metin kutusuna girip silmek yerine
-   tek bir "✕ Temizle" butonuyla iptal edebilmek için. */
-function sulamaTemizle(selectId, dozId, targetTextId){
-  var sel=el(selectId), doz=el(dozId), target=el(targetTextId), lbl=el(dozId+"_lbl");
-  if(target) target.value="";
-  if(sel) sel.value="";
-  if(doz) doz.value="0";
-  if(lbl) lbl.textContent="0 ml";
-}
 /* "Değiştir" kutusuna kullanıcı tek bir serbest metin yazıyor (örn. "250 lt su"
    veya "250 lt su + 100 ml Vivando") — ama Toplam Su / grafik / tüketim özeti
    gibi hesaplar (tuketimOzet, gunlukSuMiktari) suyu HER ZAMAN gun.su alanındaki
@@ -7687,6 +7676,109 @@ function sulamaGorevIptalUygula(cid, sebep, tarih){
   c.gunluk.sort(function(a,b){ return cmpDate(a.tarih,b.tarih); });
   gunlukNotTariheEkle(c, tarih, "Sulama iptal edildi (neden: "+sebep+") — "+gun.sulamaKim);
   touchCycle(c); saveData(); closeWarnBox(); toast("Sulama \"iptal edildi\" olarak kaydedildi"); render();
+}
+/* ==================== Günlük Tur — sadeleştirilmiş sulama akışı ====================
+   Kullanıcı isteği: sulama kutusu (su/doz kaydırıcıları, ilaç seçimi, serbest
+   metin, Değiştir/İptal Et) her zaman açık olduğu için ekranı dolduruyor, göz
+   yoruyordu. Artık varsayılan olarak sadece "bugün protokolde ne var" + üç
+   buton (✓ Onayla / ✏️ Değiştir / ❌ İptal Et) görünüyor. Kaydırıcılar SADECE
+   "Değiştir"e basılınca (protokol değerleriyle önceden dolu) açılıyor — orada
+   "scroll" ile (kaydırıcıyı sürükleyerek) ayarlanıp gerekçeyle kaydediliyor.
+   Karar verildikten sonra (Onayla/Değiştir/İptal Et) ekran tekrar tek satıra
+   iniyor, "değiştir"/"yeniden düzenle" ile geri dönülebiliyor. */
+var _turSulamaDuzenle={};
+function turSulamaDuzenleAc(cid){ _turSulamaDuzenle[cid]=true; render(); }
+function turSulamaDuzenleVazgec(cid){ _turSulamaDuzenle[cid]=false; render(); }
+/* "✓ Onayla": protokol önerisini OLDUĞU GİBİ uygulanmış say — tek dokunuşla
+   kaydeder, gerekçe istemez (planlanandan sapma yok). */
+function turSulamaOnayla(cid, tarih){
+  if(!can("edit")) return noPerm();
+  var c=loadData().cycles.find(function(x){return x.id===cid;}); if(!c) return;
+  var oneri=protokolOneri(c,tarih)||"";
+  if(!oneri){ toast("Protokolde bugün için işlem yok"); return; }
+  var ayr=sulamaMetniSuAyir(oneri);
+  if(!c.gunluk) c.gunluk=[];
+  var gun=c.gunluk.find(function(g){return g.tarih===tarih;});
+  if(!gun){ gun={tarih:tarih}; c.gunluk.push(gun); }
+  gun.su=ayr.su; gun.sulama=ayr.sulama;
+  gun.sulamaDurum=""; gun.sulamaAciklama=""; gun.sulamaOrijinal=""; gun.sulamaKim=kimNeZamanEtiketi();
+  c.gunluk.sort(function(a,b){ return cmpDate(a.tarih,b.tarih); });
+  touchCycle(c); saveData(); _turSulamaDuzenle[cid]=false; toast("✓ Kaydedildi: "+oneri); render();
+}
+/* "✏️ Değiştir" formunu (kaydırıcılar) kaydeder — gerekçe zorunlu. */
+function turSulamaDuzenleKaydet(cid, tarih){
+  if(!can("edit")) return noPerm();
+  var c=loadData().cycles.find(function(x){return x.id===cid;}); if(!c) return;
+  var suEl=el('tsud_'+cid);
+  var suV=suEl?suEl.value:"0";
+  var txtEl=el('tsudtxt_'+cid);
+  var sulamaTxt=txtEl?txtEl.value.trim():"";
+  var neden=(el('tsudneden_'+cid)&&el('tsudneden_'+cid).value.trim())||"";
+  if(!neden){ toast("Değişiklik nedeni zorunlu"); return; }
+  var oneri=protokolOneri(c,tarih)||"";
+  if(!c.gunluk) c.gunluk=[];
+  var gun=c.gunluk.find(function(g){return g.tarih===tarih;});
+  if(!gun){ gun={tarih:tarih}; c.gunluk.push(gun); }
+  gun.su=(numParse(suV)>0)?suV:""; gun.sulama=sulamaTxt;
+  gun.sulamaDurum="degistirildi"; gun.sulamaAciklama=neden; gun.sulamaOrijinal=oneri; gun.sulamaKim=kimNeZamanEtiketi();
+  c.gunluk.sort(function(a,b){ return cmpDate(a.tarih,b.tarih); });
+  var uygulanan=((numParse(gun.su)>0?gun.su+" lt su":"")+(gun.sulama?(" "+gun.sulama):"")).trim();
+  gunlukNotTariheEkle(c, tarih, "Sulama değiştirildi: "+uygulanan+" (neden: "+neden+") — "+gun.sulamaKim);
+  touchCycle(c); saveData(); _turSulamaDuzenle[cid]=false; toast("Sulama \"değiştirildi\" olarak kaydedildi"); render();
+}
+/* Varsayılan (karar verilmemiş) durumda protokol banner'ı + 3 buton, ya da
+   protokol yoksa küçük bir "+ Sulama ekle" bağlantısı. */
+function sulamaVarsayilanHTML(c, oneri, tarih){
+  if(!oneri){
+    return '<div class="muted" style="margin:6px 0;font-size:13px;text-decoration:underline;cursor:pointer;" onclick="turSulamaDuzenleAc(\''+c.id+'\')">+ Sulama / ilaçlama ekle</div>';
+  }
+  return '<div style="margin:4px 0 8px;padding:9px 11px;background:#e8f3ff;border:1px solid #b9d7f5;border-radius:8px;">'
+    + '<div style="font-size:13.5px;color:#1d4ed8;">💧 <b>Bugün protokol:</b> '+esc(oneri)+'</div>'
+    + (can("edit")?(
+        '<div style="display:flex;gap:6px;margin-top:8px;">'
+        +'<button class="btn small" style="flex:1;background:var(--green);color:#fff;border:none;" onclick="turSulamaOnayla(\''+c.id+'\',\''+tarih+'\')">✓ Onayla</button>'
+        +'<button class="btn ghost small" style="flex:1;color:#1d4ed8;border-color:#1d4ed8;" onclick="turSulamaDuzenleAc(\''+c.id+'\')">✏️ Değiştir</button>'
+        +'<button class="btn ghost small" style="flex:1;color:var(--red);border-color:var(--red);" onclick="sulamaGorevIptalAc(\''+c.id+'\',\''+tarih+'\')">❌ İptal Et</button>'
+        +'</div>'
+      ):'')
+    + '</div>';
+}
+/* "Değiştir" formu: kaydırıcılar protokol (ya da zaten girilmiş) değerle
+   önceden dolu, elle de yazılabilen küçük bir metin alanı + zorunlu gerekçe. */
+function sulamaDuzenleFormuHTML(c, ge, oneri, tarih){
+  var mevcutVarMi = !!((ge.sulama||"").trim() || numParse(ge.su)>0);
+  var kaynak = mevcutVarMi ? {su:ge.su||"", sulama:ge.sulama||""} : sulamaMetniSuAyir(oneri||"");
+  return '<div style="margin:4px 0 8px;padding:9px 11px;background:#eef6ff;border:1px solid #b9d7f5;border-radius:8px;">'
+    + (oneri?('<div class="muted" style="font-size:12px;margin-bottom:6px;">Protokol: '+esc(oneri)+'</div>'):'')
+    + suSliderHTML('tsud_'+c.id, kaynak.su, '')
+    + ilacDozPickerHTML('tsudilac_'+c.id, 'tsuddoz_'+c.id, 'tsudtxt_'+c.id)
+    + '<label style="margin-top:8px;">Sulama notu <small class="muted">(elle de yazılır)</small></label>'
+    + '<input type="text" id="tsudtxt_'+c.id+'" placeholder="örn. + 250 Serenade" value="'+esc(kaynak.sulama)+'">'
+    + '<label style="margin-top:8px;">Değişiklik nedeni <small class="muted">(zorunlu)</small></label>'
+    + '<textarea id="tsudneden_'+c.id+'" rows="2" placeholder="örn. Nem yüksek olduğu için azaltıldı" style="width:100%;"></textarea>'
+    + '<div style="display:flex;gap:6px;margin-top:8px;">'
+    + '<button class="btn small" style="flex:1;" onclick="turSulamaDuzenleKaydet(\''+c.id+'\',\''+tarih+'\')">Kaydet</button>'
+    + '<button class="btn ghost small" style="flex:1;" onclick="turSulamaDuzenleVazgec(\''+c.id+'\')">Vazgeç</button>'
+    + '</div>'
+    + '</div>';
+}
+/* Karar verilmiş (Onayla/Değiştir/İptal Et) — tek satırlık özet, "değiştir"/
+   "yeniden düzenle" ile forma geri dönülebilir. */
+function sulamaSonucOzetiHTML(c, ge){
+  var uygulanan=((numParse(ge.su)>0?ge.su+" lt su":"")+(ge.sulama?(" "+ge.sulama):"")).trim();
+  if(ge.sulamaDurum==="iptal"){
+    return '<div style="margin:4px 0 8px;padding:9px 11px;background:#fff3e0;border-radius:8px;font-size:13.5px;color:#8a5a1f;">'
+      + '❌ <b>İptal edildi</b>'+(ge.sulamaAciklama?('<div style="font-size:12px;opacity:.85;margin-top:2px;">'+esc(ge.sulamaAciklama)+'</div>'):'')
+      + '<span style="float:right;text-decoration:underline;cursor:pointer;font-size:12px;" onclick="turSulamaDuzenleAc(\''+c.id+'\')">yeniden düzenle</span></div>';
+  }
+  if(ge.sulamaDurum==="degistirildi"){
+    return '<div style="margin:4px 0 8px;padding:9px 11px;background:#e8f3ff;border-radius:8px;font-size:13.5px;color:#1d4ed8;">'
+      + '✏️ <b>Değiştirildi:</b> '+esc(uygulanan)+(ge.sulamaAciklama?('<div style="font-size:12px;opacity:.85;margin-top:2px;">'+esc(ge.sulamaAciklama)+'</div>'):'')
+      + '<span style="float:right;text-decoration:underline;cursor:pointer;font-size:12px;" onclick="turSulamaDuzenleAc(\''+c.id+'\')">yeniden düzenle</span></div>';
+  }
+  return '<div style="margin:4px 0 8px;padding:9px 11px;background:var(--green-soft);border-radius:8px;font-size:13.5px;color:var(--green-dark);">'
+    + '✓ <b>Yapıldı:</b> '+esc(uygulanan)
+    + '<span style="float:right;text-decoration:underline;cursor:pointer;font-size:12px;" onclick="turSulamaDuzenleAc(\''+c.id+'\')">değiştir</span></div>';
 }
 function addGunluk(id){
   if(!can("edit")) return noPerm();
@@ -8078,28 +8170,32 @@ function turOdaKartIcHTML(c, ge, showExtra){
             +'<button class="btn small ghost" style="flex:1;" onclick="sarimSoruCevapla(\''+c.id+'\','+_sarim.idx+',\'hayir\')">✗ Hayır, ertele</button>'
             +'</div></div>';
         }
-        /* Günün protokol önerisi OTOMATİK görünür — mühendis butonu bilmese de görür.
-           Dokununca sulama alanına dolar (turProtokol confirm'li akışı kullanır). */
+        /* Kullanıcı isteği: sulama bölümü su/doz kaydırıcıları + ilaç seçimi +
+           serbest metin + Değiştir/İptal Et ile her zaman tam açık duruyor,
+           ekranı dolduruyordu. Artık üç duruma ayrılıyor:
+             1) SONUÇ: bugün için zaten bir karar (Onayla/Değiştir/İptal Et)
+                var — tek satırlık özet.
+             2) DÜZENLE: kullanıcı "Değiştir"e bastı — kaydırıcılar açık.
+             3) VARSAYILAN: henüz karar yok — sadece protokol + 3 buton
+                (ya da protokol de yoksa küçük bir "+ ekle" bağlantısı).
+           Hangi durumda olursa olsun, gizli .tur_su/.tur_sulama alanları HER
+           ZAMAN o an ZATEN KAYITLI (ge) değerini taşır — böylece "Sonraki
+           oda" gibi ortak kayıt mekanizması, kullanıcı Değiştir formunu
+           yarım bırakıp geçse bile hiçbir şeyi sessizce değiştirmez (yarım
+           kalan düzenleme = Vazgeç ile aynı, veri kaybı olmaz). */
         var _on=protokolOneri(c,_ot);
-        return _on?('<div onclick="turProtokol(\''+c.id+'\')" style="cursor:pointer; margin:4px 0; padding:7px 9px; background:#e8f3ff; border:1px solid #b9d7f5; border-radius:8px; font-size:13.5px; color:#1d4ed8;">💧 <b>Bugün protokol:</b> '+esc(_on)+' <span class="muted" style="font-size:11.5px;">(dokun → aşağıya dolsun)</span></div>'):'';
-      })()
-      +suSliderHTML('tsu_'+c.id, ge.su||"", 'tur_su')
-        +'<button class="btn ghost small" style="margin:4px 0;" onclick="turKopyalaDun(\''+c.id+'\')">◷ Dün ne yaptıysan aynısı</button>'
-        +ilacDozPickerHTML('tilac_'+c.id, 'tdoz_'+c.id, 'tsulama_'+c.id)
-        +'<label>Sulama / İlaçlama (yukarıdan seçince otomatik dolar, elle de yazabilirsin)</label>'
-        +'<div style="display:flex; gap:6px;"><input type="text" id="tsulama_'+c.id+'" class="tur_sulama" placeholder="örn. + 250 Serenade" style="flex:1;" value="'+esc(ge.sulama||"")+'">'
-        +'<button class="btn ghost small" style="white-space:nowrap;" onclick="turProtokol(\''+c.id+'\')">Protokol</button>'
-        +'<button class="btn ghost small" style="white-space:nowrap;" onclick="sulamaTemizle(\'tilac_'+c.id+'\',\'tdoz_'+c.id+'\',\'tsulama_'+c.id+'\')">✕ Temizle</button></div>'
-        /* Kullanıcı isteği: sulamayı sadece "yapıldı" olarak değil, planlanandan
-           farklı uygulandığını veya bilinçli olarak yapılmadığını da doğrudan
-           Tur'dan (Bugün ekranına gitmeden) kaydedebilsin. */
-        +'<div style="display:flex; gap:6px; margin-top:6px;">'
-        +'<button class="btn ghost small" style="flex:1;" onclick="sulamaGorevDegistirAc(\''+c.id+'\',\''+(_turTarihVal||todayISO())+'\')">✏️ Değiştir</button>'
-        +'<button class="btn ghost small" style="flex:1;color:var(--red);border-color:var(--red);" onclick="sulamaGorevIptalAc(\''+c.id+'\',\''+(_turTarihVal||todayISO())+'\')">❌ İptal Et</button>'
-        +'</div>'
-        +sulamaDurumBadgeHTML(ge))
+        var _kararVarMi = !!((ge.sulama||"").trim() || numParse(ge.su)>0 || ge.sulamaDurum);
+        var _duzenleAcik = !!_turSulamaDuzenle[c.id];
+        var _icerik;
+        if(_duzenleAcik) _icerik = sulamaDuzenleFormuHTML(c, ge, _on, _ot);
+        else if(_kararVarMi) _icerik = sulamaSonucOzetiHTML(c, ge);
+        else _icerik = sulamaVarsayilanHTML(c, _on, _ot);
+        return _icerik
+          + '<input type="hidden" class="tur_su" value="'+esc(ge.su||"")+'">'
+          + '<input type="hidden" class="tur_sulama" value="'+esc(ge.sulama||"")+'">';
+      })())
       : '<div class="muted" style="padding:8px 0; font-style:italic;">🚫 Poşet henüz açılmadı — sulama/ilaçlama girişi kapalı.</div>'
-        +'<input type="hidden" class="tur_su" value=""><input type="hidden" id="tsulama_'+c.id+'" class="tur_sulama" value="'+esc(ge.sulama||"")+'">')
+        +'<input type="hidden" class="tur_su" value=""><input type="hidden" class="tur_sulama" value="'+esc(ge.sulama||"")+'">')
     +turSiradakiAdimHTML(c)
     +turNotAlaniHTML(c)
     +(showExtra?hasatTakipKart(c):'');
@@ -12463,27 +12559,6 @@ function sarimSoruCevapla(cid, idx, cevap){
     touchCycle(c); saveData(); toast("Yarına ertelendi"); render();
   } else {
     touchCycle(c); saveData(); toast("Kaydedildi — bugünkü uygulama devam edebilir"); render();
-  }
-}
-function turProtokol(cid){
-  var t=el("tur_tarih").value; if(!t){ toast("Önce tarih seç"); return; }
-  var c=loadData().cycles.find(function(x){return x.id===cid;}); if(!c) return;
-  var s=protokolOneri(c,t);
-  var card=document.querySelector('[data-cid="'+cid+'"]'); if(!card) return;
-  var inp=card.querySelector('.tur_sulama');
-  if(inp){
-    if(!s){ toast("O gün protokolde işlem yok"); return; }
-    if(/Neme göre/i.test(s)){ if(!confirm("Bu işlem neme göre verilir. Nem uygunsa Tamam; bugün atlamak istersen İptal.")) return; }
-    /* KRİTİK: öneri metni "500 lt su + 250 ml serenade" gibi suyu da içeriyor,
-       ama bu sadece metin kutusuna yazılıp su slider'ına DOKUNULMUYORDU —
-       Toplam Su hesabı slider'daki (genelde 0 kalan) sayıdan okunduğu için,
-       o günkü metin ile Toplam Su arasında tutarsızlık oluşuyordu (kullanıcı
-       raporu). Artık metindeki su miktarı ayrıştırılıp slider'a da yazılıyor,
-       metin kutusunda sadece ilaç/madde kısmı kalıyor. */
-    var ayr=sulamaMetniSuAyir(s);
-    inp.value=ayr.sulama;
-    var suEl=card.querySelector('.tur_su');
-    if(suEl && ayr.su){ suEl.value=ayr.su; var lbl=el(suEl.id+"_lbl"); if(lbl) lbl.textContent=ayr.su+" lt"; }
   }
 }
 
