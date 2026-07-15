@@ -650,7 +650,7 @@ function hasatTartiGetir(oda, tur){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v373";
+var APP_VER = "v374";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -2579,6 +2579,19 @@ function turSiradakiAdimHTML(c){
     h += '<div style="margin-top:8px; padding:8px; background:#fffaf0; border:1px solid #ecd9b0; border-radius:8px;">'
       + '<div style="font-size:12px; font-weight:700; color:#8a5a1f; margin-bottom:4px;">Yarın planlanan (protokol)</div>'
       + yList.map(function(it){
+          /* Sulama için yarın adına zaten bir karar (İptal Et/Değiştir) verilmişse,
+             bunu hâlâ "onay bekliyor" (kırmızı + Onayla/Değiştir/İptal Et) gibi
+             göstermeye devam etmek yanlış — kullanıcı "iptal ediyorum ama gitmiyor"
+             diye şaşırıyordu (karar zaten kaydediliyordu, sadece bu kart bunu hiç
+             yansıtmıyordu). Kararı olan bir satır burada SONUÇLANMIŞ gösterilir;
+             fikir değişirse "✎ Yeniden düzenle" ile üzerine yazılabilir. */
+          if(it.sulamaDurum==="iptal" || it.sulamaDurum==="degistirildi"){
+            var resIptal=it.sulamaDurum==="iptal";
+            return '<div style="display:flex; align-items:center; justify-content:space-between; gap:8px; padding:4px 0;">'
+              + '<span style="font-size:14px; color:'+(resIptal?'#8a5a1f':'#1d6fd8')+'; font-weight:700;">'+(resIptal?'❌ İptal edildi: ':'✏️ Değiştirildi: ')+esc(it.txt)+(it.sulamaAciklama?(' <span class="muted" style="font-size:11px;">('+esc(it.sulamaAciklama)+')</span>'):'')+'</span>'
+              + (can("edit")?('<button class="btn ghost small" style="padding:3px 8px;flex-shrink:0;" onclick="sulamaGorevDegistirAc(\''+c.id+'\',\''+addDays(todayISO(),1)+'\')">✎ Yeniden düzenle</button>'):'')
+              + '</div>';
+          }
           /* Onaylanmamış (henüz KIRMIZI) bir işi mühendis erteleyebilir de —
              örn. sarım zayıfsa toprak/su gibi adımlar bir gün geriye alınır.
              Onaylanmış işi ertelemek istiyorsa önce "Geri al" der (akış net kalır). */
@@ -4415,10 +4428,20 @@ function yarinPlanlanan(c){
      — protokol 400 dedi, mühendis 600'e çevirdi; gösterilen metin mühendisinki olur. */
   function onayliMi(key){ return !!(c.yarinOnay && c.yarinOnay[key]===tomorrow); }
   function degisik(key){ var d=c.yarinDegisiklik&&c.yarinDegisiklik[key]; return (d&&d.t===tomorrow)?d.txt:null; }
+  /* KRİTİK: sulama/ilaç adımları için "İptal Et"/"Değiştir" (Bugünkü Görevler'deki
+     ile aynı kapı) doğrudan c.gunluk[yarın]'a yazıyor — ama bu liste sadece
+     protokol/onay/ertele durumuna bakıyordu, c.gunluk'ta zaten bir karar
+     verilmiş olsa bile göz ardı ediyordu. Sonuç: kullanıcı yarının sulamasını
+     iptal etse bile hem "Yarın planlanan" kartında hem Odalar listesinin
+     "Yarın işlem" sütununda hiçbir şey değişmiyordu ("iptal ediyorum ama
+     gitmiyor" — kullanıcı raporu). Artık o günün kaydı varsa ve bir karar
+     (sulamaDurum) içeriyorsa, bu bilgi de listeye taşınır. */
+  var yarinGunKaydi=(c.gunluk||[]).find(function(g){return g.tarih===tomorrow;});
+  var yarinKarar = (yarinGunKaydi && yarinGunKaydi.sulamaDurum) || "";
   getProtokol().forEach(function(st,idx){
     if(st.silindi) return;
     if(st.tip==="uyari") return;
-    
+
     /* TEKRARLI KURAL (örn. "Poşet açıldıktan toprak-2'ye kadar HER GÜN Serenade"):
        tek bir "t" tarihi yok, bir ARALIK var (protokolAdimAraligi). "Yarın" o
        aralığın içine düşüyorsa, bu da yarının planlanan işi olarak gösterilmeli.
@@ -4428,11 +4451,12 @@ function yarinPlanlanan(c){
       var ar=protokolAdimAraligi(c,st);
       if(ar && cmpDate(tomorrow,ar.baslangic)>=0 && cmpDate(tomorrow,ar.bitis)<=0){
         var dgR=degisik("p"+idx);
-        list.push({txt:dgR||st.txt, orijinal:st.txt, degisti:!!dgR, key:"p"+idx, onayli:onayliMi("p"+idx), tekrar:true});
+        list.push({txt:(st.tip==="ilac"||st.tip==="su")&&yarinKarar==="degistirildi"?((yarinGunKaydi.su||yarinGunKaydi.sulama)?((numParse(yarinGunKaydi.su)>0?yarinGunKaydi.su+" lt su":"")+(yarinGunKaydi.sulama?(" "+yarinGunKaydi.sulama):"")).trim():st.txt):(dgR||st.txt), orijinal:st.txt, degisti:!!dgR, key:"p"+idx, onayli:onayliMi("p"+idx), tekrar:true,
+          sulamaDurum:(st.tip==="ilac"||st.tip==="su")?yarinKarar:"", sulamaAciklama:(yarinGunKaydi&&yarinGunKaydi.sulamaAciklama)||""});
       }
       return;
     }
-    
+
     var base=protokolTarih(c,st); if(!base) return;
     /* protokolTarih() kasıtlı olarak adımın KENDİ ertelemesini dışarıda bırakır
        (çağıran ekler — SSOT). "ilac"/"su" tipi kurallar (örn. Vivando) ZİNCİRDEN
@@ -4447,7 +4471,12 @@ function yarinPlanlanan(c){
     if(done) return;
     if(t===tomorrow){
       var dg=degisik("p"+idx);
-      list.push({txt:dg||st.txt, orijinal:st.txt, degisti:!!dg, key:"p"+idx, onayli:onayliMi("p"+idx)});
+      var suluMu=(st.tip==="ilac"||st.tip==="su");
+      var gosterMetin = (suluMu && yarinKarar==="degistirildi" && (yarinGunKaydi.su||yarinGunKaydi.sulama))
+        ? ((numParse(yarinGunKaydi.su)>0?yarinGunKaydi.su+" lt su":"")+(yarinGunKaydi.sulama?(" "+yarinGunKaydi.sulama):"")).trim()
+        : (dg||st.txt);
+      list.push({txt:gosterMetin, orijinal:st.txt, degisti:!!dg, key:"p"+idx, onayli:onayliMi("p"+idx),
+        sulamaDurum: suluMu?yarinKarar:"", sulamaAciklama:(yarinGunKaydi&&yarinGunKaydi.sulamaAciklama)||""});
     }
   });
   (c.odaGorevleri||[]).forEach(function(og){
@@ -4468,6 +4497,13 @@ function yarinPlanlananHTML(c){
   var list=yarinPlanlanan(c);
   if(!list.length) return "—";
   return list.map(function(it){
+    /* Sulama zaten iptal/değiştirilmişse (Bugünkü Görevler'deki İptal Et/Değiştir
+       kapısından yarın için de karar verilmişse), bunu KIRMIZI "henüz karar
+       verilmedi" gibi göstermeye devam etmek yanlış — kullanıcı "iptal ettim
+       ama hâlâ kırmızı/aynı görünüyor" sanıyordu. Karar verilmiş adımlar artık
+       kendi rengiyle (turuncu/mavi) ve açık etiketiyle gösterilir. */
+    if(it.sulamaDurum==="iptal") return '<span style="color:#8a5a1f;">❌ İptal: '+esc(it.txt)+(it.sulamaAciklama?(' <span class="muted" style="font-size:11px;">('+esc(it.sulamaAciklama)+')</span>'):'')+'</span>';
+    if(it.sulamaDurum==="degistirildi") return '<span style="color:#1d6fd8;font-weight:700;">✏️ '+esc(it.txt)+(it.sulamaAciklama?(' <span class="muted" style="font-size:11px;">('+esc(it.sulamaAciklama)+')</span>'):'')+'</span>';
     var isaret=it.onayli?(it.degisti?'✎ ':'✓ '):'';
     return '<span style="color:'+(it.onayli?'#1d4ed8':'#c0291f')+';font-weight:'+(it.onayli?'700':'400')+';"'+(it.degisti?' title="Protokol: '+esc(it.orijinal)+'"':'')+'>'+isaret+esc(it.txt)+'</span>';
   }).join('<span style="color:#b8b8b0;"> + </span>');
@@ -6006,7 +6042,7 @@ function renderDetail(id){
         + '<td>'+esc(r.odaC)+'</td>'
         + '<td>'+esc(r.kompostC)+'</td>'
         + (showCo2?'<td>'+esc(co2)+'</td>':'')
-        + '<td class="note">'+gunMeta(r)+suDegeriGoster(r.su)+((numParse(r.su)>0)&&r.sulama?' · ':'')+esc(r.sulama)+sulamaDurumBadgeHTML(r)+(r.islemNot?('<div style="color:#8a8a82;font-size:12px;margin-top:2px;">'+esc(r.islemNot)+'</div>'):'')+'</td>'
+        + '<td class="note">'+gunMeta(r)+suDegeriGoster(r.su)+((numParse(r.su)>0)&&r.sulama?' · ':'')+esc(r.sulama)+sulamaDurumBadgeHTML(r)+gunlukNotHucreHTML(c.id,i,r)+'</td>'
         + '<td style="white-space:nowrap;"><button class="btn ghost small" style="padding:4px 8px;margin-right:4px;" onclick="turOdadaAcTarih(\''+c.id+'\',\''+r.tarih+'\')">✎</button><button class="del-x" onclick="delGunluk(\''+c.id+'\','+i+')">×</button></td>'
         + '</tr>';
     });
@@ -8775,6 +8811,24 @@ function sulamaDurumBadgeHTML(r){
   return '<div style="margin-top:2px;font-size:11px;color:'+renk+';background:'+bg+';display:inline-block;padding:1px 6px;border-radius:6px;">'
     +(iptal?'❌ İptal edildi':'✏️ Değiştirildi')+(r.sulamaAciklama?(': '+esc(r.sulamaAciklama)):'')
     +(r.sulamaKim?(' <span style="opacity:.75;">('+esc(r.sulamaKim)+')</span>'):'')+'</div>';
+}
+/* Kullanıcı isteği: oda detayındaki Günlük Kayıt tablosu, her ertelenmiş/
+   erken çekilmiş adımın uzun notuyla (kim/ne zaman dahil) çok kalabalık
+   görünüyordu — göz yoruyordu. Erteleme/plan notları asıl olarak Oda
+   Akışı ve PDF'te (buildPrintHTML) tam metinleriyle görünmeye devam ediyor;
+   burada ise varsayılan olarak GİZLİ, sadece küçük bir "📝 N not" göstergesi
+   var — dokununca (ayrıntı istenirse) o satırda açılıp kapanıyor. */
+var _gunlukNotAcik={};
+function gunlukNotAcKapa(key){ _gunlukNotAcik[key]=!_gunlukNotAcik[key]; render(); }
+function gunlukNotHucreHTML(cid, i, r){
+  if(!r.islemNot) return "";
+  var key=cid+"_"+i;
+  var acikMi=!!_gunlukNotAcik[key];
+  var notSayisi=(""+r.islemNot).split(" · ").filter(function(x){return x.trim();}).length;
+  if(!acikMi){
+    return '<div style="margin-top:2px;font-size:11px;color:#1d6fd8;text-decoration:underline;cursor:pointer;" onclick="gunlukNotAcKapa(\''+key+'\')">📝 '+notSayisi+' not — göster</div>';
+  }
+  return '<div style="color:#8a8a82;font-size:12px;margin-top:2px;">'+esc(r.islemNot)+' <span style="text-decoration:underline;cursor:pointer;color:#1d6fd8;" onclick="gunlukNotAcKapa(\''+key+'\')">gizle</span></div>';
 }
 function gunlukSatirAyristir(r){
   /* Su alanı normalde sadece sayı olmalı (slider'dan gelir) ama eski/legacy
