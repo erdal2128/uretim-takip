@@ -650,7 +650,7 @@ function hasatTartiGetir(oda, tur){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v375";
+var APP_VER = "v376";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -3614,10 +3614,18 @@ function renderPanoEdit(id){
      girip karıştırma sorunu böyle kökten biter. */
   function satir(et,deg){ return (deg!==undefined && deg!=="" && deg!==null)?('<div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid #f0f0ec;font-size:15px;"><span class="muted">'+et+'</span><b>'+esc(deg)+'</b></div>'):''; }
   var ozet = satir("Oda °C",ge.odaC)+satir("Klima °C",ge.klimaC)+satir("Komp °C alt",ge.kompostC)+satir("Komp °C üst",ge.kompostUst)
-    +satir("CO₂ alt",ge.co2alt)+satir("CO₂ üst",ge.co2ust)+satir("Su (lt)",ge.su)+satir("Amonyak",ge.amonyak)+satir("Nem",ge.nem)+satir("Sulama / İşlem",ge.sulama);
+    +satir("CO₂ alt",ge.co2alt)+satir("CO₂ üst",ge.co2ust)+satir("Amonyak",ge.amonyak)+satir("Nem",ge.nem);
+  /* Bugün için sulama/ilaç protokol önerisi — eskiden bu ekranda hiç
+     gösterilmiyordu, sadece "Yarın planlanan" vardı. Bugün tam da bir
+     protokol günü (örn. toprak serimi) olsa bile kullanıcı bunu ancak
+     Günlük Tur'u açınca görüyordu; toprak serimi gibi bir "olay" adımı
+     "Sıradaki İşlem" kartında görünse de aynı günün su/ilaç önerisi hiçbir
+     yerde çıkmıyordu. */
+  var suKart = suGoster(c,ge) ? sulamaKartHTML(c, ge, today) : '';
   var h='<div class="card"><div class="sec-title" style="margin-top:0;">'+esc(c.oda||"Oda")+' · '+fmtDate(today)+' '+gunAdi(today)+'</div>'
     +'<div class="muted" style="margin-bottom:10px;">📋 Veri girişi artık yalnızca <b>Günlük Tur</b>\'dan yapılıyor. Burada bugünkü değerleri görürsün.</div>'
     +(ozet?('<div style="margin-bottom:12px;">'+ozet+'</div>'):'<div class="muted" style="padding:10px 0; font-style:italic;">Bugün bu odaya henüz veri girilmemiş.</div>')
+    +suKart
     +'<button class="btn" style="width:100%;" onclick="turOdadaAc(\''+c.id+'\')">📋 Bu odaya veri girmek için Günlük Tur\'u aç</button>'
     +'<div class="row" style="margin-top:10px;"><button class="btn ghost" onclick="go(\'list\')">‹ Geri</button>'
     +'<button class="btn ghost" onclick="openDetail(\''+c.id+'\')">Ayrıntı ›</button></div>'
@@ -7780,6 +7788,31 @@ function sulamaSonucOzetiHTML(c, ge){
     + '✓ <b>Yapıldı:</b> '+esc(uygulanan)
     + '<span style="float:right;text-decoration:underline;cursor:pointer;font-size:12px;" onclick="turSulamaDuzenleAc(\''+c.id+'\')">değiştir</span></div>';
 }
+/* Bugünkü sulama/ilaç durumu — sarım-kontrolü sorusu / üç durumdan biri
+   (varsayılan öneri, düzenleme formu, sonuç özeti). Hem Günlük Tur'daki oda
+   kartında (turOdaKartIcHTML) hem de tek oda "Bugün" özet ekranında
+   (renderPanoEdit) AYNI SSOT — kullanıcı ikinci ekranda bugünün protokol
+   önerisini hiç göremediği için (sadece "Yarın planlanan" vardı) bunu fark
+   edemiyordu. */
+function sulamaKartHTML(c, ge, tarih){
+  var _sarim = bugunSarimKontroluGerekliMi(c, tarih);
+  var _sarimCevap = (_sarim && c.sarimKontrol && c.sarimKontrol["p"+_sarim.idx] && c.sarimKontrol["p"+_sarim.idx].tarih===tarih) ? c.sarimKontrol["p"+_sarim.idx].cevap : null;
+  if(_sarim && _sarimCevap!=="evet"){
+    return '<div style="margin:4px 0; padding:9px; background:#fff3e0; border:1.5px solid #e8a33d; border-radius:8px;">'
+      +'<div style="font-size:13.5px; font-weight:700; color:#8a5a1f;">🍄 Sarım toprağa geçti mi?</div>'
+      +'<div style="font-size:12.5px; color:#8a5a1f; margin:3px 0 8px;">Bugün "'+esc(_sarim.s.txt)+'" günü — sarım geçmediyse uygulama 1 gün ertelenir.</div>'
+      +'<div style="display:flex; gap:8px;">'
+      +'<button class="btn small" style="flex:1;background:var(--green);color:#fff;border:none;" onclick="sarimSoruCevapla(\''+c.id+'\','+_sarim.idx+',\'evet\')">✓ Evet, geçti</button>'
+      +'<button class="btn small ghost" style="flex:1;" onclick="sarimSoruCevapla(\''+c.id+'\','+_sarim.idx+',\'hayir\')">✗ Hayır, ertele</button>'
+      +'</div></div>';
+  }
+  var _on=protokolOneri(c,tarih);
+  var _kararVarMi = !!((ge.sulama||"").trim() || numParse(ge.su)>0 || ge.sulamaDurum);
+  var _duzenleAcik = !!_turSulamaDuzenle[c.id];
+  if(_duzenleAcik) return sulamaDuzenleFormuHTML(c, ge, _on, tarih);
+  if(_kararVarMi) return sulamaSonucOzetiHTML(c, ge);
+  return sulamaVarsayilanHTML(c, _on, tarih);
+}
 function addGunluk(id){
   if(!can("edit")) return noPerm();
   var c = loadData().cycles.find(function(x){return x.id===id;});
@@ -8150,50 +8183,9 @@ function turOdaKartIcHTML(c, ge, showExtra){
     +'<div><label>Klima °C</label><input type="number" step="0.1" inputmode="decimal" class="tur_klima" value="'+esc(ge.klimaC||"")+'"'+oi+'></div></div>'
     +((airStarted(c)||!!(ge.co2alt||ge.co2ust))?('<div class="field-row"><div><label>CO₂ alt</label><input type="number" inputmode="numeric" class="tur_co2a" value="'+esc(ge.co2alt||"")+'"'+oi+'></div>'
     +'<div><label>CO₂ üst</label><input type="number" inputmode="numeric" class="tur_co2u" value="'+esc(ge.co2ust||"")+'"'+oi+'></div></div>'):'')
-    +(showSu?((function(){
-        var _ot=_turTarihVal||todayISO();
-        /* Sarım kontrolü gereken bir ilaç adımı (formaldehit) bugüne denk
-           geliyorsa ve henüz "Evet" cevaplanmadıysa, normal öneri kutusu
-           yerine Evet/Hayır sorusu gösterilir — kullanıcı isteği: "sarım
-           toprağa geçmedi ise o günkü sulama ve ilaçlama 1 gün ertelensin,
-           1 gün sonra yine geçmedi ise geçene kadar ertelensin". "Hayır"
-           seçilince adımın kendi ertelemesi +1 gün artar (protokolOneri artık
-           bunu okuyor) — ertesi gün soru otomatik tekrar sorulur. */
-        var _sarim = bugunSarimKontroluGerekliMi(c, _ot);
-        var _sarimCevap = (_sarim && c.sarimKontrol && c.sarimKontrol["p"+_sarim.idx] && c.sarimKontrol["p"+_sarim.idx].tarih===_ot) ? c.sarimKontrol["p"+_sarim.idx].cevap : null;
-        if(_sarim && _sarimCevap!=="evet"){
-          return '<div style="margin:4px 0; padding:9px; background:#fff3e0; border:1.5px solid #e8a33d; border-radius:8px;">'
-            +'<div style="font-size:13.5px; font-weight:700; color:#8a5a1f;">🍄 Sarım toprağa geçti mi?</div>'
-            +'<div style="font-size:12.5px; color:#8a5a1f; margin:3px 0 8px;">Bugün "'+esc(_sarim.s.txt)+'" günü — sarım geçmediyse uygulama 1 gün ertelenir.</div>'
-            +'<div style="display:flex; gap:8px;">'
-            +'<button class="btn small" style="flex:1;background:var(--green);color:#fff;border:none;" onclick="sarimSoruCevapla(\''+c.id+'\','+_sarim.idx+',\'evet\')">✓ Evet, geçti</button>'
-            +'<button class="btn small ghost" style="flex:1;" onclick="sarimSoruCevapla(\''+c.id+'\','+_sarim.idx+',\'hayir\')">✗ Hayır, ertele</button>'
-            +'</div></div>';
-        }
-        /* Kullanıcı isteği: sulama bölümü su/doz kaydırıcıları + ilaç seçimi +
-           serbest metin + Değiştir/İptal Et ile her zaman tam açık duruyor,
-           ekranı dolduruyordu. Artık üç duruma ayrılıyor:
-             1) SONUÇ: bugün için zaten bir karar (Onayla/Değiştir/İptal Et)
-                var — tek satırlık özet.
-             2) DÜZENLE: kullanıcı "Değiştir"e bastı — kaydırıcılar açık.
-             3) VARSAYILAN: henüz karar yok — sadece protokol + 3 buton
-                (ya da protokol de yoksa küçük bir "+ ekle" bağlantısı).
-           Hangi durumda olursa olsun, gizli .tur_su/.tur_sulama alanları HER
-           ZAMAN o an ZATEN KAYITLI (ge) değerini taşır — böylece "Sonraki
-           oda" gibi ortak kayıt mekanizması, kullanıcı Değiştir formunu
-           yarım bırakıp geçse bile hiçbir şeyi sessizce değiştirmez (yarım
-           kalan düzenleme = Vazgeç ile aynı, veri kaybı olmaz). */
-        var _on=protokolOneri(c,_ot);
-        var _kararVarMi = !!((ge.sulama||"").trim() || numParse(ge.su)>0 || ge.sulamaDurum);
-        var _duzenleAcik = !!_turSulamaDuzenle[c.id];
-        var _icerik;
-        if(_duzenleAcik) _icerik = sulamaDuzenleFormuHTML(c, ge, _on, _ot);
-        else if(_kararVarMi) _icerik = sulamaSonucOzetiHTML(c, ge);
-        else _icerik = sulamaVarsayilanHTML(c, _on, _ot);
-        return _icerik
-          + '<input type="hidden" class="tur_su" value="'+esc(ge.su||"")+'">'
-          + '<input type="hidden" class="tur_sulama" value="'+esc(ge.sulama||"")+'">';
-      })())
+    +(showSu?(sulamaKartHTML(c, ge, _turTarihVal||todayISO())
+        + '<input type="hidden" class="tur_su" value="'+esc(ge.su||"")+'">'
+        + '<input type="hidden" class="tur_sulama" value="'+esc(ge.sulama||"")+'">')
       : '<div class="muted" style="padding:8px 0; font-style:italic;">🚫 Poşet henüz açılmadı — sulama/ilaçlama girişi kapalı.</div>'
         +'<input type="hidden" class="tur_su" value=""><input type="hidden" class="tur_sulama" value="'+esc(ge.sulama||"")+'">')
     +turSiradakiAdimHTML(c)
