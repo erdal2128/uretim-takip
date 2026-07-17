@@ -650,7 +650,7 @@ function hasatTartiGetir(oda, tur){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v387";
+var APP_VER = "v388";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -2502,8 +2502,48 @@ function kontrolKararSec(cid, idx, secim){
   gunlukGorevNotEkle(c, "Kontrol sonucu: "+secim);
   touchCycle(c); saveData(); toast("Kaydedildi: "+secim); render();
 }
+/* Havaya Başlama KARAR kartı: diğer protokol adımlarının aksine (bilgi amaçlı
+   "Sıradaki işlem") bu adımda açık bir Başlat/Ertele kararı istenir — çünkü
+   önerilen tarih sadece protokol tahminidir, son karar ziraat mühendisine
+   aittir. Kompost sıcaklığı/amonyak/nem BİLEREK gösterilmiyor: bu aşamaya
+   gelindiğinde zaten kontrol edilmiş/uygun olmaları gerekir, tek gerçek
+   kriter sarımın yeterliliği. */
+function turHavaBaslamaKartHTML(c, sd){
+  var tarih=sd.t;
+  return '<div style="margin-top:8px; padding:10px; background:#eef6ff; border:1.5px solid #1d4ed8; border-radius:10px;">'
+    + '<div style="font-size:12px; font-weight:700; color:#1d4ed8;">📋 Karar Bekleyen İşlem</div>'
+    + '<div style="font-size:16px; font-weight:700; margin-top:2px;">💨 Havaya Başlama</div>'
+    + '<div style="font-size:11.5px; color:var(--muted); margin-top:8px;">Önerilen Tarih</div>'
+    + '<div style="font-size:15px; font-weight:600;">'+fmtDate(tarih)+(tarih<todayISO()?' <span style="color:#c0291f;font-weight:600;">(gecikti)</span>':'')+'</div>'
+    + '<div style="font-size:11px; color:var(--muted); font-style:italic; margin-top:2px;">Protokole göre önerilen tarihtir.</div>'
+    + (can("edit") ? (
+        '<div style="font-size:13.5px; font-weight:600; margin-top:10px;">Bugün havaya başlanıyor mu?</div>'
+        + '<div style="display:flex; gap:8px; margin-top:6px;">'
+        + '<button class="btn" style="flex:1;" onclick="havaBaslatAc(\''+c.id+'\')">🟢 Başlat</button>'
+        + '<button class="btn ghost" style="flex:1;" onclick="havaErteleAc(\''+c.id+'\')">🟡 Ertele</button>'
+        + '</div>'
+      ) : '')
+    + '</div>';
+}
+/* Havaya başlandıktan sonraki en kritik yönetim kararı ilk sulamanın zamanlaması
+   olduğu için (protokolde hava+1: "ilk suda son 300 lt'ye Vivando"), Havaya
+   Başlama Başlat ile kaydedilir kaydedilmez burada otomatik bir geri sayım
+   belirir — kullanıcı isteği: mühendisi protokole uymaya zorlamak değil, doğru
+   kararı almasını kolaylaştırmak. Sabit bir "durum" alanı YOK — her zamanki gibi
+   c.havaBaslangic'ten türetilir, hava+1 geçince kendiliğinden kaybolur. */
+function turIlkSulamaGeriSayimHTML(c){
+  if(!c.havaBaslangic) return "";
+  var ilkSulamaTarih=addDays(c.havaBaslangic,1);
+  var kalanGun=daysBetween(todayISO(), ilkSulamaTarih);
+  if(kalanGun===null || kalanGun<0) return "";
+  return '<div style="margin-top:8px; padding:8px; background:#eef9f2; border:1px solid #b7e4c7; border-radius:8px;">'
+    + '<div style="font-size:12px; font-weight:700; color:#1f7a4d;">💧 İlk Sulama Geri Sayımı</div>'
+    + '<div style="font-size:13.5px;margin-top:3px;">'+(kalanGun===0?'Bugün ilk sulama günü.':(kalanGun+' gün kaldı.'))+' <span class="muted">('+fmtDate(ilkSulamaTarih)+')</span></div>'
+    + '</div>';
+}
 function turSiradakiAdimHTML(c){
   var h="";
+  h += turIlkSulamaGeriSayimHTML(c);
   /* GENEL SIRADAKİ İŞLEM: eskiden bu bilgi SADECE Odalar > Protokol Özeti'nde
      görünüyordu, Günlük Tur ekranında hiç yoktu — sadece bir Şartlı Kural
      tetiklenirse bir kart çıkıyordu (o da koşula bağlıydı, her zaman değil).
@@ -2514,6 +2554,15 @@ function turSiradakiAdimHTML(c){
   try{
     var sd=siradakiProtokolAdimi(c);
     if(sd){
+      var sdStep=getProtokol()[sd.idx];
+      var sdAlanKey=sdStep?(sdStep.rol||protokolAdimAlanKey(sdStep.txt)):null;
+      if(sdAlanKey==="hava"){
+        /* Havaya Başlama sırası geldi (tırmık tamamlandı, hava henüz başlamadı)
+           — bilgi kartı yerine doğrudan Başlat/Ertele kararı gösterilir, tek
+           aksiyon budur (mesafe filtresi burada da uygulanmaz, tirmikHavaArasiMi
+           ile aynı pencere). */
+        h += turHavaBaslamaKartHTML(c, sd);
+      } else {
       var sdErt=(c.ertele&&c.ertele["p"+sd.idx])?c.ertele["p"+sd.idx]:0;
       var sdTarih=sd.t; /* siradakiProtokolAdimi zaten ertele'yi t içine katıyor */
       /* Kullanıcı isteği: adım daha günler uzaktaysa (örn. 7 gün sonra) bu
@@ -2522,18 +2571,14 @@ function turSiradakiAdimHTML(c){
          iş yaklaşınca (yarın, bugün veya zaten gecikmiş) gösterilir; daha
          uzak bir tarihse sessizce gizlenir, gün yaklaştıkça kendiliğinden
          belirir. */
-      /* Tırmık-hava arası dönemde (sulama tamamen kapalıyken) "sıradaki işlem"
-         her zaman Havaya Başlatma olur ve bu ekranda görülen TEK aksiyondur —
-         kullanıcı raporu: sulama kapalı uyarısı görünürken bu kart tarih uzak
-         diye gizleniyordu, oysa tam o an en anlamlı bilgi budur. Bu durumda
-         mesafe filtresi (aşağıdaki sdOffset<=1) devre dışı bırakılır. */
       var sdOffset=daysBetween(todayISO(), sdTarih);
-      if(sdOffset===null || sdOffset<=1 || tirmikHavaArasiMi(c)){
+      if(sdOffset===null || sdOffset<=1){
         h += '<div style="margin-top:8px; padding:8px; background:#eef6ff; border:1px solid #b9d7f5; border-radius:8px;">'
           + '<div style="font-size:12px; font-weight:700; color:#1d4ed8;">📋 Sıradaki işlem</div>'
           + '<div style="font-size:13.5px;margin-top:3px;"><b>'+esc(sd.txt)+'</b></div>'
           + '<div style="font-size:12px;color:var(--muted);">Planlanan: '+fmtDate(sdTarih)+(sdTarih<todayISO()?' <span style="color:#c0291f;font-weight:600;">(gecikti)</span>':'')+'</div>'
           + '</div>';
+      }
       }
     }
   }catch(err){ console.error("Sıradaki işlem hesaplanamadı:", err); }
@@ -8291,6 +8336,17 @@ var ERTELE_NEDEN_KATALOG = {
     {ik:"📋", ad:"Üretim müdürü kararı"},
     {ik:"⚙️", ad:"Teknik neden"}
   ],
+  /* Havaya Başlama KARAR kartına özel (Günlük Tur) — kullanıcı isteği: bu
+     aşamada kompost sıcaklığı/amonyak/nem seçenek olarak SUNULMASIN, çünkü
+     havaya başlama kararına gelindiğinde bunlar zaten kontrol edilmiş ve
+     uygun hale gelmiş olmalıdır. Tek gerçek biyolojik kriter sarımın (misel)
+     yeterliliği — bu yüzden genel "hava" kataloğundan (Üretim Protokolü
+     tablosundaki erteleme) ayrı, daha dar bir set. */
+  havaBaslama: [
+    {ik:"🍄", ad:"Sarım yeterli değil"},
+    {ik:"👨‍🌾", ad:"Mühendis kararı"},
+    {ik:"⚙️", ad:"Teknik neden"}
+  ],
   kimyasal: [
     {ik:"🌡️", ad:"Ortam koşulları uygun değil"},
     {ik:"💧", ad:"Sulama nedeniyle ertelendi"},
@@ -8393,7 +8449,7 @@ function erteleNedenAIKontrol(c, nedenAdi, tarih){
   if(/^Hastalık durumu değişti$/i.test(nedenAdi)){
     return sonuc("sari","Hastalık durumu değişikliği veriyle otomatik doğrulanamıyor — mühendis gözlemine güveniliyor.");
   }
-  if(/^(Üretim müdürü kararı|Teknik neden|Ekip\/personel yetişmedi)$/i.test(nedenAdi)){
+  if(/^(Üretim müdürü kararı|Mühendis kararı|Teknik neden|Ekip\/personel yetişmedi)$/i.test(nedenAdi)){
     return sonuc("sari","Bu, veriyle doğrulanamayan bir yönetim kararı — bilgi amaçlı kaydedildi.");
   }
   return sonuc("sari","Bu gerekçe mevcut verilerle otomatik doğrulanamıyor.");
@@ -8422,6 +8478,81 @@ function erteleNedenSeciciHTML(tur, onclickForNeden, digerInputId, digerBtnOncli
   h+='<textarea id="'+digerInputId+'" rows="2" placeholder="✍️ Diğer — sebebi yaz (zorunlu)" style="margin-top:2px;width:100%;"></textarea>'
     +'<button class="btn ghost" style="width:100%;margin-top:6px;" onclick="'+digerBtnOnclick+'">✍️ Diğer sebeple kaydet</button>';
   return h;
+}
+
+/* ==================== Havaya Başlama — karar kartı eylemleri ====================
+   Kullanıcı isteği: Havaya Başlama tarihi sadece protokol ÖNERİSİDİR, son karar
+   ziraat mühendisine ait — bu yüzden "Sıradaki işlem" gibi bilgilendirici bir
+   kart yerine açık bir Başlat/Ertele kararı istenir. Başlatılırsa saat/yöntem/
+   not sorulur (adimTamamla SSOT kapısından, adimDetay'a yazılır — rapor/PDF
+   zaten oradan okuyor). Ertelenirse işleme özgü dar bir neden seti (yalnızca
+   sarım yeterliliği/mühendis kararı/teknik neden — amonyak/sıcaklık/nem BİLEREK
+   sorulmuyor, bu aşamada zaten uygun olmaları gerekir) + Yapay Zekâ Kontrolü
+   üzerinden aynı SSOT (c.ertele/_adimiYarinaTasi) kullanılır. */
+function havaBaslatAc(cid){
+  if(!can("edit")) return noPerm();
+  var wm=el("warnModal"); if(!wm) return;
+  var c=loadData().cycles.find(function(x){return x.id===cid;}); if(!c) return;
+  wm.innerHTML='<div class="modal-bg" onclick="if(event.target===this) closeWarnBox();"><div class="modal">'
+    +'<div style="font-weight:700;font-size:17px;margin-bottom:4px;">'+esc(c.oda)+' — 💨 Havaya Başlama</div>'
+    +'<div class="muted" style="font-size:12px;margin-bottom:10px;">Bugün ('+fmtDate(todayISO())+') havaya başlanıyor olarak kaydedilecek.</div>'
+    +'<label>Başlama saati</label><input type="time" id="hb_saat">'
+    +'<label>Başlatma yöntemi</label><select id="hb_yontem">'
+      +'<option value="Normal">Normal</option>'
+      +'<option value="Kademeli">Kademeli</option>'
+      +'<option value="Diğer">Diğer</option>'
+    +'</select>'
+    +'<label>Not (isteğe bağlı)</label><textarea id="hb_not" rows="2" placeholder="isteğe bağlı"></textarea>'
+    +'<div class="row" style="margin-top:14px;"><button class="btn" onclick="havaBaslatKaydet(\''+cid+'\')">🟢 Başlat</button>'
+    +'<button class="btn ghost" onclick="closeWarnBox()">Vazgeç</button></div>'
+    +'</div></div>';
+}
+function havaBaslatKaydet(cid){
+  if(!can("edit")) return noPerm();
+  var c=loadData().cycles.find(function(x){return x.id===cid;}); if(!c) return;
+  var hi=protokolRolIdx("hava"); if(hi<0){ toast("Protokolde havaya başlama adımı tanımlı değil"); return; }
+  var saat=(el("hb_saat")&&el("hb_saat").value)||"";
+  var yontem=(el("hb_yontem")&&el("hb_yontem").value)||"Normal";
+  var notTxt=(el("hb_not")&&el("hb_not").value.trim())||"";
+  var detayParcalar=[];
+  if(saat) detayParcalar.push("Saat: "+saat);
+  detayParcalar.push("Yöntem: "+yontem);
+  if(notTxt) detayParcalar.push(notTxt);
+  adimTamamla(c, hi, {tarih:todayISO(), not:detayParcalar.join(" · "), sessiz:true});
+  gunlukGorevNotEkle(c, "Havaya Başlama — 🟢 Başlatıldı"+(saat?(" ("+saat+")"):"")+" · "+yontem+(notTxt?(" — "+notTxt):"")+" — "+kimNeZamanEtiketi());
+  touchCycle(c); saveData(); closeWarnBox(); toast("💨 Havaya başlandı — ilk sulama geri sayımı başladı"); render();
+}
+function havaErteleAc(cid){
+  if(!can("edit")) return noPerm();
+  var wm=el("warnModal"); if(!wm) return;
+  var c=loadData().cycles.find(function(x){return x.id===cid;}); if(!c) return;
+  var hi=protokolRolIdx("hava"); if(hi<0) return;
+  wm.innerHTML='<div class="modal-bg" onclick="if(event.target===this) closeWarnBox();"><div class="modal">'
+    +'<div style="font-weight:700;font-size:17px;margin-bottom:4px;">'+esc(c.oda)+' — Havaya Başlamayı Ertele</div>'
+    +'<div class="muted" style="font-size:12px;margin-bottom:10px;">Bugün havaya başlanmıyor. Bir sebep seç:</div>'
+    +erteleNedenSeciciHTML('havaBaslama', function(nedenAdi){ return "havaErteleKaydet('"+cid+"','"+nedenAdi.replace(/'/g,"\\'")+"')"; }, 'hbe_diger', "havaErteleDigerKaydet('"+cid+"')")
+    +'<button class="btn ghost" style="width:100%;margin-top:8px;" onclick="closeWarnBox()">Vazgeç</button>'
+    +'</div></div>';
+}
+function havaErteleKaydet(cid, neden){
+  if(!can("edit")) return noPerm();
+  var c=loadData().cycles.find(function(x){return x.id===cid;}); if(!c) return;
+  var hi=protokolRolIdx("hava"); if(hi<0) return;
+  var yeniTarih=_adimiYarinaTasi(c, hi);
+  var verdict=erteleNedenAIKontrol(c, neden, todayISO());
+  if(!c.erteleSebep) c.erteleSebep={};
+  if(!c.erteleAIVerdict) c.erteleAIVerdict={};
+  c.erteleSebep["p"+hi] = (verdict.seviye==="kirmizi") ? "diger" : "biyolojik";
+  c.erteleAIVerdict["p"+hi]=verdict.seviye;
+  gunlukGorevNotEkle(c, "Havaya Başlama — 🟡 1 gün ertelendi (yeni tarih: "+fmtDate(yeniTarih)+") — Sebep: "+neden+" — "+kimNeZamanEtiketi());
+  touchCycle(c); saveData(); closeWarnBox();
+  var ikon=verdict.seviye==="yesil"?"🟢":(verdict.seviye==="kirmizi"?"🔴":"🟡");
+  toast("🟡 1 gün ertelendi · "+ikon+" "+verdict.aciklama); render();
+}
+function havaErteleDigerKaydet(cid){
+  var metin=(el("hbe_diger")&&el("hbe_diger").value.trim())||"";
+  if(!metin){ toast("Sebep yaz veya yukarıdan seç"); return; }
+  havaErteleKaydet(cid, metin);
 }
 
 /* Bugünkü Görevler'de sulama/ilaç satırı için "Yapıldı"nın tek seçenek olmaması —
@@ -9514,7 +9645,11 @@ function uretimIslemSatirlari(c){
   if(c.tiftikTarihi) rows.push({g:gunNo(c,c.tiftikTarihi), tarih:c.tiftikTarihi, t:"Tiftik"});
   if(c.toprakTarihi) rows.push({g:gunNo(c,c.toprakTarihi), tarih:c.toprakTarihi, t:"Toprak serimi"});
   if(c.tirmikTarihi) rows.push({g:gunNo(c,c.tirmikTarihi), tarih:c.tirmikTarihi, t:"Tırmık"});
-  if(c.havaBaslangic) rows.push({g:gunNo(c,c.havaBaslangic), tarih:c.havaBaslangic, t:"Havaya başlandı"});
+  if(c.havaBaslangic){
+    var _hi=protokolRolIdx("hava");
+    var _hDetay=_hi>=0 && c.adimDetay && c.adimDetay["p"+_hi];
+    rows.push({g:gunNo(c,c.havaBaslangic), tarih:c.havaBaslangic, t:"Havaya başlandı"+(_hDetay&&_hDetay.not?(" — "+_hDetay.not):"")});
+  }
   var dedIdx=dedicatedAdimIdx();
   getProtokol().forEach(function(s,idx){
     if(s.silindi || s.tip!=="olay" || dedIdx[idx]) return;
