@@ -650,7 +650,7 @@ function hasatTartiGetir(oda, tur){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v381";
+var APP_VER = "v382";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -2877,89 +2877,410 @@ function addMonths(iso,n){
   var m=("0"+(d.getUTCMonth()+1)).slice(-2); var dd=("0"+d.getUTCDate()).slice(-2);
   return d.getUTCFullYear()+"-"+m+"-"+dd;
 }
-/* ---------- Oda performans puanı (100 üzerinden, kural tabanlı) ----------
-   20 yıllık ziraat mühendisi mantığı: her gecikme veya her sıcaklık sapması
-   otomatik puan kırmaz / otomatik affetmez. İki temel ilke:
-   1) Gecikme, HAKLI bir biyolojik sebeple (sarım/gelişme zayıf) ertelendiyse
-      puan kırılmaz — bu doğru bir karardı. Sebepsiz/önlenebilir gecikme
-      (ekip yetişmedi, unutuldu vb.) puan kırar.
-   2) Kompost sıcaklığı kritik/tehlikeli seviyede GEÇMİŞTE kaldıysa, daha sonra
-      düzeltilmiş olsa bile o günlerin etkisi kalıcıdır — misel o günlerde
-      zarar görmüş olabilir. Bu yüzden sadece ANLIK son ölçüme değil, kuluçka
-      dönemindeki TÜM geçmiş kayıtlara bakılır. */
-function odaPerformans(c){
-  if(c.bosaltimTarihi) return null;
-  var puan=100, nedenler=[];
+/* ---------- Oda performans puanı — KATEGORİLİ, AÇIKLANABİLİR SİSTEM ----------
+   Kullanıcı isteği: tek toplam puan yerine, deneyimli bir mantar üretim
+   müdürünün odayı değerlendirme şeklini taklit eden, kategori kategori
+   açıklanabilir bir puanlama — ileride yapay zekâ/makine öğrenmesi
+   tahminlerine veri sağlayacağı için her kategori kendi maksimum puanını,
+   kendi kalemlerini (+/-, açıklamalı) ve kritik hataları ayrı tutar; "neden
+   88 aldım" sorusuna kategori kategori cevap verilebilir.
+   6 kategori, toplam 100 puan:
+     🌡️ İklim Yönetimi (25) · 🍄 Misel Gelişimi (20) · 📋 Protokol Uygunluğu (20)
+     💧 Sulama Yönetimi (15) · 📈 Trend Analizi (10) · ⚠ Risk Faktörleri (10)
+   Korunan/genişletilen ilkeler:
+   1) Gecikme HAKLI bir biyolojik sebeple (sarım/gelişme zayıf) ertelendiyse
+      puan kırılmaz — bu doğru bir karardı.
+   2) Sıcaklık ihlalleri GEÇMİŞTE kaldıysa, düzeltilse bile etkisi kalıcıdır.
+   3) YENİ — aynı ihlal biyolojik döneme göre farklı ağırlıkta puan kırar
+      (kuluçkada kompost 30° ağır ceza, hasat sonunda hafif ceza) — bkz.
+      _donemAgirlikKatsayisi. Sadece ceza değil, iyi yönetime küçük ödüller
+      de var (7 gün ideal sıcaklık, zamanında işlemler vb.).
+   5) Kalıcı/kritik hatalar (_kritikHatalarTespit) normal kategori
+      cezalarından AYRI, kendi başlığı altında da gösterilir. */
 
-  /* 1) Şu anki (canlı) sıcaklık durumu — küçük, anlık bir uyarı payı */
-  tempAlerts().filter(function(a){return a.cid===c.id;}).forEach(function(a){
-    if(a.lvl===2){ puan-=5; nedenler.push({tip:"kritik", metin:"Şu an tehlikeli sıcaklık: "+a.txt}); }
-    else if(a.lvl===1){ puan-=3; nedenler.push({tip:"kritik", metin:"Şu an kritik sıcaklık: "+a.txt}); }
-  });
+/* Aynı sıcaklık/protokol ihlalinin biyolojik döneme göre ağırlığı — misel en
+   hassas olduğu kuluçka/toprak döneminde en ağır, hasat sonuna doğru en
+   hafif (o noktada gelişimini büyük ölçüde tamamlamış olur). */
+function _donemAgirlikKatsayisi(stageAd){
+  if(stageAd==="Kuluçka dönemi") return 1.4;
+  if(stageAd==="Toprak dönemi") return 1.2;
+  if(stageAd==="1. Misel gelişim") return 1.0;
+  if(stageAd==="2. Misel gelişim") return 0.8;
+  if(stageAd==="Pimleme dönemi") return 0.6;
+  if(stageAd==="Bezelye boyutu" || stageAd==="Ceviz boyutu") return 0.5;
+  if(stageAd && (stageAd.indexOf("Hasat")>=0 || stageAd.indexOf("Flaş")>=0)) return 0.3;
+  return 1.0;
+}
+/* Kategori kalemi: delta (+ödül/-ceza/0 bilgi) + açıklama. Tüm kategori
+   fonksiyonları aynı şekli döndürür — hem UI hem ileride ML tarafı tek
+   formatla çalışsın diye. */
+function _kalem(delta, aciklama){ return {delta:delta, aciklama:aciklama}; }
 
-  /* 2) GEÇMİŞ sıcaklık maruziyeti (kuluçka dönemi — toprak serilene kadar).
-     Düzeltilmiş olsa bile kalıcı olarak puanı etkiler. */
-  var kulucka = (c.gunluk||[]).filter(function(r){ return !c.toprakTarihi || r.tarih < c.toprakTarihi; });
-  var tehlikeliGun=0, kritikGun=0;
-  kulucka.forEach(function(r){
+/* 🌡️ İklim Yönetimi (25) — kompost/oda sıcaklığı, stabilite, ani değişim. */
+function _puanIklim(c){
+  var maks=25, kalemler=[], puan=maks, today=todayISO();
+  var gunler=(c.gunluk||[]).filter(function(r){return r.tarih<=today;}).slice().sort(function(a,b){return cmpDate(a.tarih,b.tarih);});
+
+  var tehlikeCeza=0, kritikCeza=0, tehlikeGun=0, kritikGun=0, idealSeri=0, maxIdealSeri=0;
+  gunler.forEach(function(r){
     var ko=numParse(r.kompostC); if(ko==null) return;
-    if(ko>=KOMPOST_TEHLIKELI || ko<=KOMPOST_TEHLIKE_ALT) tehlikeliGun++;
-    else if(ko>=KOMPOST_KRITIK_UST || ko<=KOMPOST_KRITIK_ALT) kritikGun++;
+    var kat=_donemAgirlikKatsayisi(stageAtDate(c,r.tarih).t);
+    if(ko>=KOMPOST_TEHLIKELI || ko<=KOMPOST_TEHLIKE_ALT){ tehlikeCeza+=3*kat; tehlikeGun++; idealSeri=0; }
+    else if(ko>=KOMPOST_KRITIK_UST || ko<=KOMPOST_KRITIK_ALT){ kritikCeza+=1.5*kat; kritikGun++; idealSeri=0; }
+    else if(ko>=KOMPOST_IDEAL_MIN && ko<=KOMPOST_IDEAL_MAX){ idealSeri++; if(idealSeri>maxIdealSeri) maxIdealSeri=idealSeri; }
+    else idealSeri=0;
   });
-  if(tehlikeliGun>0){
-    var dT=Math.min(30, tehlikeliGun*8);
-    puan-=dT;
-    nedenler.push({tip:"kritik", metin:"Kuluçka döneminde "+tehlikeliGun+" gün tehlikeli sıcaklıkta kaldı — düzeltilmiş olsa bile misel o günlerde zarar görmüş olabilir (kalıcı puan kırılması)."});
-  }
-  if(kritikGun>0){
-    var dK=Math.min(20, kritikGun*4);
-    puan-=dK;
-    nedenler.push({tip:"kritik", metin:"Kuluçka döneminde "+kritikGun+" gün kritik sıcaklıkta kaldı (kalıcı puan kırılması)."});
-  }
+  tehlikeCeza=Math.min(11,tehlikeCeza); kritikCeza=Math.min(6,kritikCeza);
+  if(tehlikeCeza>0){ puan-=tehlikeCeza; kalemler.push(_kalem(-Math.round(tehlikeCeza), tehlikeGun+" gün tehlikeli kompost sıcaklığı (o dönemin ağırlığıyla hesaplandı)")); }
+  if(kritikCeza>0){ puan-=kritikCeza; kalemler.push(_kalem(-Math.round(kritikCeza), kritikGun+" gün kritik kompost sıcaklığı (o dönemin ağırlığıyla hesaplandı)")); }
+  if(maxIdealSeri>=7){ puan+=2; kalemler.push(_kalem(2, maxIdealSeri+" gün üst üste ideal kompost sıcaklığı")); }
 
-  /* 3) Gecikmiş işlemler — sebebine göre değerlendirilir */
-  var today=todayISO(), gecikmisListe=[], haklıGecikme=[];
+  /* Oda sıcaklığı: havadan önce üst sınır (ODA_MAX), havadan sonra o günün hedefine (havaHedef) göre sapma. */
+  var odaCeza=0, odaIhlalGun=0;
+  gunler.forEach(function(r){
+    var od=numParse(r.odaC); if(od==null) return;
+    var kat=_donemAgirlikKatsayisi(stageAtDate(c,r.tarih).t);
+    var havaBasladiMi = c.havaBaslangic && r.tarih>=c.havaBaslangic;
+    if(!havaBasladiMi){ if(od>ODA_MAX){ odaCeza+=0.8*kat; odaIhlalGun++; } }
+    else { var hedef=havaHedef(c); if(hedef!=null && Math.abs(od-hedef)>2){ odaCeza+=0.6*kat; odaIhlalGun++; } }
+  });
+  odaCeza=Math.min(5,odaCeza);
+  if(odaCeza>0){ puan-=odaCeza; kalemler.push(_kalem(-Math.round(odaCeza), odaIhlalGun+" gün oda sıcaklığı sınırların/hedefin dışında")); }
+
+  /* Stabilite: art arda ölçümler arası büyük sıçrama (ani değişim). */
+  var aniDegisim=0;
+  for(var i=1;i<gunler.length;i++){
+    var a=numParse(gunler[i-1].kompostC), b=numParse(gunler[i].kompostC);
+    if(a!=null && b!=null && Math.abs(b-a)>=3) aniDegisim++;
+  }
+  if(aniDegisim>0){ var d=Math.min(3,aniDegisim); puan-=d; kalemler.push(_kalem(-d, aniDegisim+" ani kompost sıcaklığı sıçraması (≥3°)")); }
+
+  puan=Math.max(0,Math.min(maks,Math.round(puan)));
+  return {key:"iklim", ad:"🌡️ İklim Yönetimi", maks:maks, puan:puan, kalemler:kalemler};
+}
+
+/* 🍄 Misel Gelişimi (20) — kilometre taşlarının (tiftik/toprak/tırmık/hava)
+   plana göre zamanlaması + ateşlenme/erken poşet (misel patlaması) riski. */
+function _puanMiselGelisimi(c){
+  var maks=20, kalemler=[], puan=maks, today=todayISO();
+  var MILESTONE_ROLLER={tiftik:1,toprak:1,tirmik:1,hava:1};
+  var gecGun=0, gecAdimlar=[];
   getProtokol().forEach(function(s,idx){
-    if(s.silindi) return;
-    if(s.tip==="uyari") return;
-    if(s.tip==="ilac" || s.tip==="su") return; /* sulama günlük kayıttan takip edilir, puan hesabına dahil edilmez */
+    if(s.silindi || s.tip!=="olay" || !MILESTONE_ROLLER[s.rol]) return;
     var t=protokolTarih(c,s); if(!t) return;
-    var done=adimGercektenYapildiMi(c, idx, s);
-    if(t<today && !done){
-      var sebep = c.erteleSebep && c.erteleSebep["p"+idx];
-      if(sebep==="biyolojik") haklıGecikme.push(s.txt);
-      else gecikmisListe.push(s.txt);
+    var ert=(c.ertele&&c.ertele["p"+idx])||0; t=addDays(t,ert);
+    if(adimGercektenYapildiMi(c,idx,s)){
+      var real=adimYapilmaTarihi(c,idx,s);
+      if(real && real>t){ var g=daysBetween(t,real); gecGun+=g; gecAdimlar.push(s.txt+" ("+g+" gün geç)"); }
+    } else if(t<today){
+      var g2=daysBetween(t,today); gecGun+=g2; gecAdimlar.push(s.txt+" (hâlâ yapılmadı, "+g2+" gün geçti)");
     }
   });
-  if(gecikmisListe.length>0){
-    var d1=Math.min(20,gecikmisListe.length*5); puan-=d1;
-    nedenler.push({tip:"gecikme", metin:gecikmisListe.length+" gecikmiş işlem (sebepsiz/önlenebilir): "+gecikmisListe.join(" · ")});
+  if(gecGun>0){ var d=Math.min(10,gecGun*1.5); puan-=d; kalemler.push(_kalem(-Math.round(d), "Gelişim kilometre taşlarında toplam "+gecGun+" gün gecikme: "+gecAdimlar.slice(0,3).join(", "))); }
+  else if(c.tiftikTarihi||c.toprakTarihi||c.tirmikTarihi||c.havaBaslangic){ puan+=2; kalemler.push(_kalem(2,"Gelişim kilometre taşları (tiftik/toprak/tırmık/hava) zamanında ilerliyor")); }
+
+  /* Ateşlenme riski: kompostun gelişten 7-8. günde kritik/tehlikeli seyretmesi
+     — misel patlaması riskinin en somut, veriye dayalı işareti. */
+  var atesGunSayisi=0;
+  (c.gunluk||[]).filter(function(r){return r.tarih<=today && (!c.toprakTarihi||r.tarih<c.toprakTarihi);}).forEach(function(r){
+    var g=c.gelisTarihi?daysBetween(c.gelisTarihi,r.tarih):null;
+    var ko=numParse(r.kompostC);
+    if(g!=null && g>=7 && g<=8 && ko!=null && ko>=KOMPOST_KRITIK_UST) atesGunSayisi++;
+  });
+  if(atesGunSayisi>0){ puan-=3; kalemler.push(_kalem(-3, "Ateşlenme dönemi (7-8. gün) kompost sıcaklığı yüksek seyretmiş — misel patlaması riski")); }
+
+  puan=Math.max(0,Math.min(maks,Math.round(puan)));
+  return {key:"misel", ad:"🍄 Misel Gelişimi", maks:maks, puan:puan, kalemler:kalemler};
+}
+
+/* 📋 Protokol Uygunluğu (20) — tüm adımlar (kilometre taşları dahil, genel
+   disiplin açısından) sırasında mı; kaçı gecikmiş, kaçı ciddi atlanmış, erken
+   yapılan var mı. */
+function _puanProtokolUygunlugu(c){
+  var maks=20, kalemler=[], puan=maks, today=todayISO();
+  var gecikmis=[], atlanmis=[], erken=0, haklı=[];
+  getProtokol().forEach(function(s,idx){
+    if(s.silindi || s.tip==="uyari" || s.tip==="ilac" || s.tip==="su") return; /* sulama kendi kategorisinde (💧) değerlendirilir */
+    var t=protokolTarih(c,s); if(!t) return;
+    var ert=(c.ertele&&c.ertele["p"+idx])||0; var planli=addDays(t,ert);
+    if(adimGercektenYapildiMi(c,idx,s)){
+      var real=adimYapilmaTarihi(c,idx,s);
+      if(real && real<planli && daysBetween(real,planli)>=2) erken++;
+      return;
+    }
+    if(planli<today){
+      var g=daysBetween(planli,today);
+      var sebep=c.erteleSebep && c.erteleSebep["p"+idx];
+      if(sebep==="biyolojik"){ haklı.push(s.txt); return; }
+      if(g>=5) atlanmis.push(s.txt+" ("+g+" gün)"); else gecikmis.push(s.txt+" ("+g+" gün)");
+    }
+  });
+  if(atlanmis.length){ var d1=Math.min(12,atlanmis.length*4); puan-=d1; kalemler.push(_kalem(-Math.round(d1), atlanmis.length+" işlem ciddi gecikmiş/atlanmış: "+atlanmis.slice(0,3).join(", "))); }
+  if(gecikmis.length){ var d2=Math.min(8,gecikmis.length*2); puan-=d2; kalemler.push(_kalem(-Math.round(d2), gecikmis.length+" işlem gecikmiş: "+gecikmis.slice(0,3).join(", "))); }
+  if(haklı.length){ kalemler.push(_kalem(0, haklı.length+" işlem haklı sebeple (gelişme/sarım) ertelendi — puan kırılmadı")); }
+  if(erken>=2){ puan-=1; kalemler.push(_kalem(-1, erken+" işlem planlanandan belirgin erken yapılmış — sıra kontrolü öneriliir")); }
+  if(!atlanmis.length && !gecikmis.length){ puan+=3; kalemler.push(_kalem(3,"Tüm işlemler zamanında yapılıyor")); }
+  puan=Math.max(0,Math.min(maks,Math.round(puan)));
+  return {key:"protokol", ad:"📋 Protokol Uygunluğu", maks:maks, puan:puan, kalemler:kalemler, gecikmisAdimlar:gecikmis.concat(atlanmis), haklıGecikme:haklı};
+}
+
+/* 💧 Sulama Yönetimi (15) — protokolün önerdiği gün hiç kayıt girilmemiş mi
+   (sessizce atlanmış), bilinçli iptal/değiştir sıklığı. Gerekçeli iptal/
+   değiştir kararları (Günlük Tur'da zaten gerekçeyle kayıt altına alınıyor)
+   ihmal SAYILMAZ ama sık tekrarı protokolün pratikte uygulanamadığının
+   işareti olabileceğinden küçük bir not düşülür. */
+function _puanSulamaYonetimi(c){
+  var maks=15, kalemler=[], puan=maks, today=todayISO();
+  var gunler=(c.gunluk||[]).filter(function(r){return r.tarih<=today;});
+  var iptalSayisi=0, degistirSayisi=0, kacirilanSayisi=0, toplamGun=0;
+  gunler.forEach(function(r){
+    if(r.sulamaDurum==="iptal") iptalSayisi++;
+    else if(r.sulamaDurum==="degistirildi") degistirSayisi++;
+    var oneri=protokolOneri(c,r.tarih);
+    if(!oneri) return;
+    toplamGun++;
+    var girildi = (numParse(r.su)>0) || (r.sulama&&r.sulama.trim()) || r.sulamaDurum;
+    if(!girildi) kacirilanSayisi++;
+  });
+  if(kacirilanSayisi>0){ var d1=Math.min(8,kacirilanSayisi*2); puan-=d1; kalemler.push(_kalem(-Math.round(d1), kacirilanSayisi+" gün protokol sulama/ilaç önerdiği halde hiç kayıt girilmemiş")); }
+  if(iptalSayisi>0){ var d2=Math.min(4,iptalSayisi); puan-=d2; kalemler.push(_kalem(-d2, iptalSayisi+" sulama bilinçli olarak iptal edildi")); }
+  if(degistirSayisi>0){ var d3=Math.min(3,Math.round(degistirSayisi*0.5)); if(d3>0){ puan-=d3; kalemler.push(_kalem(-d3, degistirSayisi+" sulama protokolden farklı uygulandı (değiştirildi)")); } }
+  if(toplamGun>0 && !kacirilanSayisi && !iptalSayisi){ puan+=2; kalemler.push(_kalem(2,"Sulama protokole tam uyumlu uygulanıyor")); }
+  puan=Math.max(0,Math.min(maks,Math.round(puan)));
+  return {key:"sulama", ad:"💧 Sulama Yönetimi", maks:maks, puan:puan, kalemler:kalemler};
+}
+
+/* 📈 Trend Analizi (10) — son ölçümler ideale mi yaklaşıyor uzaklaşıyor mu,
+   risk (art arda kötüleşen ölçüm sayısı) artıyor mu. */
+function _puanTrendAnalizi(c){
+  var maks=10, kalemler=[], puan=maks, today=todayISO();
+  var t=analizTrend(c,"kompostC",4);
+  if(t && t.yon!=="sabit"){
+    var ortaIdeal=(KOMPOST_IDEAL_MIN+KOMPOST_IDEAL_MAX)/2;
+    var oncekiSapma=Math.abs(t.ilk-ortaIdeal), sonSapma=Math.abs(t.son-ortaIdeal);
+    if(sonSapma<oncekiSapma-0.5){ puan+=2; kalemler.push(_kalem(2,"Kompost sıcaklığı ideale doğru düzeliyor ("+t.ilk+"→"+t.son+")")); }
+    else if(sonSapma>oncekiSapma+0.5){ puan-=2; kalemler.push(_kalem(-2,"Kompost sıcaklığı idealden uzaklaşıyor ("+t.ilk+"→"+t.son+")")); }
   }
-  if(haklıGecikme.length>0){
-    nedenler.push({tip:"bilgi", metin:haklıGecikme.length+" işlem haklı sebeple (gelişme/sarım) ertelendi — puan kırılmadı: "+haklıGecikme.join(" · ")});
+  var to=analizTrend(c,"odaC",4);
+  if(to && to.yon==="sabit"){ puan+=1; kalemler.push(_kalem(1,"Oda sıcaklığı son ölçümlerde stabil")); }
+
+  var sonKayitlar=(c.gunluk||[]).filter(function(r){return r.tarih<=today;}).slice().sort(function(a,b){return cmpDate(a.tarih,b.tarih);}).slice(-3);
+  var kotuSayisi=0;
+  sonKayitlar.forEach(function(r){ var ko=numParse(r.kompostC); if(ko!=null && (ko>=KOMPOST_KRITIK_UST||ko<=KOMPOST_KRITIK_ALT)) kotuSayisi++; });
+  if(kotuSayisi>=2){ puan-=3; kalemler.push(_kalem(-3,"Son "+sonKayitlar.length+" ölçümün "+kotuSayisi+"'ünde kompost kritik/tehlikeli seviyede — risk artıyor")); }
+
+  puan=Math.max(0,Math.min(maks,Math.round(puan)));
+  return {key:"trend", ad:"📈 Trend Analizi", maks:maks, puan:puan, kalemler:kalemler};
+}
+
+/* ⚠ Risk Faktörleri (10) — ŞU AN süregelen riskler. 🌡️ İklim kategorisi
+   GEÇMİŞ maruziyeti kalıcı olarak cezalandırır; burada aynı ihlalin hâlâ
+   DEVAM ediyor olması (düzeltilmemiş, süregelen risk) ayrıca değerlendirilir
+   — farklı bir yönetim sorunudur. Kritik hatalar da burada bir kalemle
+   toplam puana yansır (ayrıca kendi başlığında da gösterilir). */
+function _puanRiskFaktorleri(c, kritikHatalar){
+  var maks=10, kalemler=[], puan=maks;
+  tempAlerts().filter(function(a){return a.cid===c.id;}).forEach(function(a){
+    if(a.lvl===2){ puan-=4; kalemler.push(_kalem(-4,"Şu an tehlikeli sıcaklık: "+a.txt)); }
+    else if(a.lvl===1){ puan-=2; kalemler.push(_kalem(-2,"Şu an kritik sıcaklık: "+a.txt)); }
+  });
+  if(odaHastalikRiskli(c)){
+    var sonH=(c.hastalikKayitlar||[]).slice().sort(function(x,y){return cmpDate(y.tarih,x.tarih);})[0];
+    puan-=3; kalemler.push(_kalem(-3,"Son 14 günde hastalık/zararlı kaydı"+(sonH?(" — "+sonH.tur):"")));
+  }
+  var son=sonGunluk(c);
+  if(son && son.amonyak==="Var"){ puan-=2; kalemler.push(_kalem(-2,"Amonyak kokusu bildirilmiş")); }
+  ilacGecmisi(c).forEach(function(g){
+    if(g.uyari.some(function(u){return u.indexOf("⚠️")===0;})){ puan-=3; kalemler.push(_kalem(-3, g.ad+": hasat öncesi bekleme ihlali riski")); }
+  });
+  if(kritikHatalar.length){ var d=Math.min(6,kritikHatalar.length*2); puan-=d; kalemler.push(_kalem(-d, kritikHatalar.length+" kalıcı kritik hata (aşağıda detaylı)")); }
+  puan=Math.max(0,Math.min(maks,Math.round(puan)));
+  return {key:"risk", ad:"⚠ Risk Faktörleri", maks:maks, puan:puan, kalemler:kalemler};
+}
+
+/* Kalıcı/kritik hatalar — normal kategori cezalarından AYRI listelenir
+   (kullanıcı isteği: "bu hatalar ayrı değerlendirilsin"). Risk Faktörleri
+   kategorisi üzerinden toplam puana da yansır, ama kullanıcıya HER ZAMAN
+   kendi başlığı altında, gerekçesiyle gösterilir. */
+function _kritikHatalarTespit(c){
+  var out=[], today=todayISO();
+  var seri=0, maxSeri=0;
+  (c.gunluk||[]).filter(function(r){return r.tarih<=today;}).slice().sort(function(a,b){return cmpDate(a.tarih,b.tarih);}).forEach(function(r){
+    var ko=numParse(r.kompostC);
+    if(ko!=null && (ko>=KOMPOST_TEHLIKELI||ko<=KOMPOST_TEHLIKE_ALT)){ seri++; if(seri>maxSeri) maxSeri=seri; } else seri=0;
+  });
+  if(maxSeri>=3) out.push("Kompost art arda "+maxSeri+" gün tehlikeli sıcaklıkta kaldı — kalıcı misel hasarı riski yüksek.");
+
+  if(c.tirmikTarihi && c.havaBaslangic){
+    var S=getSet(c);
+    var beklenenHava=addDays(c.tirmikTarihi, S.offHava-S.offTirmik);
+    var gecikme=daysBetween(beklenenHava, c.havaBaslangic);
+    if(gecikme>=5) out.push("Havaya başlama planlanandan "+gecikme+" gün geç yapılmış — misel gelişimi gereğinden uzun sürmüş olabilir.");
   }
 
-  var son=sonGunluk(c);
-  if(son && son.amonyak==="Var"){ puan-=5; nedenler.push({tip:"gozlem", metin:"Amonyak kokusu bildirilmiş."}); }
-  ilacGecmisi(c).forEach(function(g){
-    if(g.uyari.some(function(u){return u.indexOf("⚠️")===0;})){ puan-=10; nedenler.push({tip:"ilac", metin:g.ad+": hasat öncesi bekleme ihlali riski."}); }
+  if(c.gelisTarihi && c.toprakTarihi){
+    var beklenenToprak=addDays(c.gelisTarihi, getSet(c).offToprak);
+    var erkenlik=daysBetween(c.toprakTarihi, beklenenToprak);
+    if(erkenlik>=3) out.push("Toprak planlanandan "+erkenlik+" gün erken serilmiş — kompost yeterince olgunlaşmamış olabilir.");
+  }
+
+  var amonyakGunleri=(c.gunluk||[]).filter(function(r){return r.amonyak==="Var" && r.tarih<=today;}).map(function(r){return r.tarih;});
+  if(amonyakGunleri.length){
+    var adimGunleri=[];
+    getProtokol().forEach(function(s,idx){ if(s.silindi) return; var yt=adimYapilmaTarihi(c,idx,s); if(yt) adimGunleri.push(yt); });
+    var carpisma=amonyakGunleri.some(function(ag){ return adimGunleri.some(function(yt){ return Math.abs(daysBetween(ag,yt))<=1; }); });
+    if(carpisma) out.push("Amonyak kokusu bildirilirken protokol işlemi yapılmaya devam edilmiş — önce havalandırma/nem sorunu çözülmeliydi.");
+  }
+  return out;
+}
+
+/* Yapay zekâ yorumu — kural tabanlı ama doğal dilde, kısa (1-2 cümle),
+   puanın ALTINDA her zaman gösterilir. Stage/trend/kritik hata durumuna
+   göre en anlamlı şablonu seçer. */
+function _performansYorumUret(c, kategoriler, kritikHatalar, toplamPuan, stageAd){
+  if(kritikHatalar.length){
+    return "Geçmişte yaşanan "+(kritikHatalar.length>1?"sorunlar":"sorun")+" ilerideki flaşları hafif zayıflatabilir; yakından takip önerilir.";
+  }
+  var iklim=kategoriler.filter(function(k){return k.key==="iklim";})[0];
+  var trend=kategoriler.filter(function(k){return k.key==="trend";})[0];
+  if(trend && trend.puan>=trend.maks-1 && iklim && iklim.puan<iklim.maks){
+    return "Son ölçümler ideale yaklaştığı için önceki risk büyük ölçüde azalmış görünüyor.";
+  }
+  if(toplamPuan>=90) return stageAd+" döneminde sorunsuz ilerliyor; mevcut yönetim şekli sürdürülebilir.";
+  if(toplamPuan>=75) return stageAd+" döneminde genel olarak iyi gidiyor, birkaç kategoride küçük iyileştirme fırsatı var.";
+  return stageAd+" döneminde birden fazla kategoride puan kaybı var — en düşük puanlı kategoriye önce odaklanmak faydalı olur.";
+}
+
+/* Tahmin — puan sadece bugünü göstermesin, ileriye dönük öngörü de versin.
+   Mevcut tahminiVerim()/verimFlasOzet() altyapısı (firma/filo geçmişi)
+   TOPLAM verim için zaten var (gereksiz tekrar oluşturmamak için AYNEN
+   kullanılır); flaş1/flaş2 kırılımı tamamlanmış döngülerin ortalama flaş
+   oranından, risk seviyesi güncel puan + kritik hata sayısından türetilir. */
+function _performansTahminUret(c, toplamPuan, kritikHatalar){
+  var tv=tahminiVerim(c); /* {kg, kaynak} ya da null (tonaj/geçmiş veri yoksa) */
+  var oranEsleri=tumTamamlananDongu().map(function(x){
+    var fo=verimFlasOzet(x); var f1=fo.F1?fo.F1.kg:0, f2=fo.F2?fo.F2.kg:0, top=f1+f2;
+    return top>0 ? {f1:f1/top} : null;
+  }).filter(Boolean);
+  var f1Oran = oranEsleri.length ? (oranEsleri.reduce(function(s,x){return s+x.f1;},0)/oranEsleri.length) : 0.55; /* veri yoksa tipik oran */
+  var toplamKg = tv?tv.kg:null;
+  var puanKatsayi = 0.7+(toplamPuan/100)*0.5; /* düşük puan tahmini hafif aşağı, yüksek puan hafif yukarı çeker */
+  var seviyeMetni=function(v){ return v>=80?"yüksek":(v>=55?"orta":"düşük"); };
+
+  var risk;
+  if(kritikHatalar.length>=2 || toplamPuan<55) risk={seviye:"yüksek", aciklama:kritikHatalar.length?"kalıcı kritik hatalar nedeniyle":"düşük puan nedeniyle"};
+  else if(kritikHatalar.length===1 || toplamPuan<75) risk={seviye:"orta", aciklama:"bazı kategorilerde puan kaybı var"};
+  else risk={seviye:"düşük", aciklama:"belirgin bir sorun görünmüyor"};
+
+  return {
+    flas1: toplamKg!=null ? {kg:Math.round(toplamKg*f1Oran*puanKatsayi), seviye:seviyeMetni(toplamPuan)} : null,
+    flas2: toplamKg!=null ? {kg:Math.round(toplamKg*(1-f1Oran)*puanKatsayi), seviye:seviyeMetni(toplamPuan)} : null,
+    toplamVerim: toplamKg!=null ? {kg:Math.round(toplamKg*puanKatsayi), kaynak:tv.kaynak} : null,
+    risk: risk
+  };
+}
+
+/* Güven puanı — tahminin ne kadar veriye dayandığını gösterir ("yeterli
+   veri yok" gibi gerekçeli düşük güven, kullanıcı isteği). Üç sinyal:
+   (1) bu odanın kendi günlük kayıt sayısı, (2) tamamlanmış filo döngü
+   sayısı (fleet tahmininin kalitesi), (3) firma-özel geçmiş var mı. */
+function _performansGuvenPuani(c){
+  var gunlukSayisi=(c.gunluk||[]).length;
+  var filoDongu=tumTamamlananDongu().length;
+  var firmaN=0;
+  if(c.kompostFirma){ var f=firmaOrtalamaKgTon(c.kompostFirma); firmaN=f?f.n:0; }
+  var puan=30+Math.min(30,gunlukSayisi*1.5)+Math.min(25,filoDongu*3)+Math.min(15,firmaN*4);
+  puan=Math.max(5,Math.min(97,Math.round(puan)));
+  var aciklama;
+  if(puan>=80) aciklama="Yeterli günlük kayıt ve geçmiş döngü verisi var.";
+  else if(filoDongu<3) aciklama="Filoda henüz az sayıda tamamlanmış döngü var — tahminler zamanla güçlenecek.";
+  else if(gunlukSayisi<5) aciklama="Bu döngüde henüz az sayıda ölçüm girildi.";
+  else aciklama="Orta düzeyde veri — tahmin ipucu olarak değerlendirilmeli.";
+  return {yuzde:puan, aciklama:aciklama};
+}
+
+function odaPerformans(c){
+  if(c.bosaltimTarihi) return null;
+  var stageAd=stageOf(c).t;
+  var kritikHatalar=_kritikHatalarTespit(c);
+  var kategoriler=[
+    _puanIklim(c),
+    _puanMiselGelisimi(c),
+    _puanProtokolUygunlugu(c),
+    _puanSulamaYonetimi(c),
+    _puanTrendAnalizi(c),
+    _puanRiskFaktorleri(c, kritikHatalar)
+  ];
+  var toplamPuan=Math.max(0,Math.min(100,Math.round(kategoriler.reduce(function(s,k){return s+k.puan;},0))));
+
+  /* Geriye dönük uyumluluk: nedenler düz listesi, kategorilerin kalemlerinden
+     TÜRETİLİR (SSOT — iki ayrı hesap yok) — mevcut çağıranlar (varsa) hâlâ
+     çalışır, ama asıl veri artık kategoriler/kritikHatalar. */
+  var nedenler=[];
+  kategoriler.forEach(function(k){
+    k.kalemler.forEach(function(kl){ nedenler.push({tip:(kl.delta<0?"kritik":(kl.delta>0?"bilgi":"gozlem")), metin:kl.aciklama}); });
   });
-  puan=Math.max(0, Math.min(100, Math.round(puan)));
-  return {puan:puan, nedenler:nedenler};
+  kritikHatalar.forEach(function(h){ nedenler.push({tip:"kritik", metin:h}); });
+
+  var protKat=kategoriler.filter(function(k){return k.key==="protokol";})[0];
+  return {
+    puan: toplamPuan,
+    nedenler: nedenler,
+    kategoriler: kategoriler,
+    kritikHatalar: kritikHatalar,
+    yorum: _performansYorumUret(c, kategoriler, kritikHatalar, toplamPuan, stageAd),
+    tahmin: _performansTahminUret(c, toplamPuan, kritikHatalar),
+    guven: _performansGuvenPuani(c),
+    gecikmisAdimlar: protKat?protKat.gecikmisAdimlar:[],
+    haklıGecikme: protKat?protKat.haklıGecikme:[]
+  };
 }
 function puanRenk(p){ return p>=85?"var(--green)":(p>=70?"var(--amber)":"#c0291f"); }
+/* Kategori/kritik hata/tahmin bloklarının ortak HTML'i — hem oda detayındaki
+   puan kartında (puanCardHTML) hem Raporlar > Analiz'deki Oda Analizi'nde
+   (odaAnalizHTML) AYNEN kullanılır, tek yerden (gereksiz tekrar yok). */
+function _performansDetayHTML(p){
+  var kategorilerHTML=p.kategoriler.map(function(k){
+    var renk=puanRenk(Math.round((k.puan/k.maks)*100));
+    var kalemHTML=k.kalemler.length ? k.kalemler.map(function(kl){
+      var isaret=kl.delta>0?("+"+kl.delta):(""+kl.delta);
+      var kRenk=kl.delta>0?"var(--green-dark)":(kl.delta<0?"#a32d2d":"var(--muted)");
+      return '<div style="display:flex;gap:6px;font-size:12.5px;padding:2px 0;"><span style="color:'+kRenk+';font-weight:700;min-width:26px;">'+(kl.delta?isaret:"·")+'</span><span>'+esc(kl.aciklama)+'</span></div>';
+    }).join('') : '<div class="muted" style="font-size:12.5px;">Bu kategoride kayda değer bir bulgu yok.</div>';
+    return '<div style="margin-top:10px;padding-top:8px;border-top:1px solid #eee;">'
+      +'<div style="display:flex;justify-content:space-between;align-items:baseline;">'
+      +'<span style="font-weight:700;font-size:13.5px;">'+k.ad+'</span>'
+      +'<span style="font-weight:700;color:'+renk+';">'+k.puan+'<span class="muted" style="font-weight:400;font-size:12px;"> /'+k.maks+'</span></span>'
+      +'</div>'+kalemHTML+'</div>';
+  }).join('');
+
+  var kritikHTML = p.kritikHatalar.length ? (
+    '<div style="margin-top:10px;padding:9px 10px;background:#fdf3f3;border:1px solid #f0c9c9;border-radius:8px;">'
+    +'<div style="font-weight:700;font-size:13px;color:#a32d2d;margin-bottom:4px;">🔴 Kritik Hatalar (kalıcı puan kaybı)</div>'
+    +p.kritikHatalar.map(function(h){return '<div style="font-size:12.5px;color:#a32d2d;padding:2px 0;">• '+esc(h)+'</div>';}).join('')
+    +'</div>'
+  ) : '';
+
+  var tahmin=p.tahmin;
+  var riskRenk = tahmin.risk.seviye==="yüksek"?"#a32d2d":(tahmin.risk.seviye==="orta"?"#8a5a1f":"#1f7a4d");
+  var tahminHTML='<div style="margin-top:10px;padding:9px 10px;background:#eef6ff;border:1px solid #b9d7f5;border-radius:8px;">'
+    +'<div style="font-weight:700;font-size:13px;color:#1d4ed8;margin-bottom:4px;">🔮 Tahmin</div>'
+    +(tahmin.flas1?('<div style="font-size:12.5px;">1. Flaş: <b>~'+tahmin.flas1.kg+' kg</b> ('+tahmin.flas1.seviye+')</div>'):'<div class="muted" style="font-size:12.5px;">1. Flaş: tonaj/geçmiş veri yetersiz</div>')
+    +(tahmin.flas2?('<div style="font-size:12.5px;">2. Flaş: <b>~'+tahmin.flas2.kg+' kg</b> ('+tahmin.flas2.seviye+')</div>'):'')
+    +(tahmin.toplamVerim?('<div style="font-size:12.5px;">Toplam verim: <b>~'+tahmin.toplamVerim.kg+' kg</b> <span class="muted">('+esc(tahmin.toplamVerim.kaynak)+')</span></div>'):'')
+    +'<div style="font-size:12.5px;">Risk: <b style="color:'+riskRenk+';">'+tahmin.risk.seviye+'</b> <span class="muted">('+esc(tahmin.risk.aciklama)+')</span></div>'
+    +'<div class="muted" style="font-size:11.5px;margin-top:5px;">Tahmin güveni: <b>%'+p.guven.yuzde+'</b> — '+esc(p.guven.aciklama)+'</div>'
+    +'</div>';
+
+  return kritikHTML+kategorilerHTML+tahminHTML;
+}
 function puanCardHTML(c){
   var p=odaPerformans(c); if(!p) return "";
   var body='<div style="display:flex;align-items:center;gap:14px;">'
     +'<div style="font-size:34px;font-weight:700;color:'+puanRenk(p.puan)+';">'+p.puan+'<span style="font-size:15px;color:var(--muted);">/100</span></div>'
-    +'<div style="flex:1;">'
-    +(!p.nedenler.length
-      ? '<div class="muted" style="font-size:13px;">Belirgin bir sorun tespit edilmedi.</div>'
-      : p.nedenler.map(function(n){
-          var renk = (n.tip==="bilgi") ? "var(--teal)" : "inherit";
-          return '<div style="font-size:13px;padding:2px 0; color:'+renk+';">• '+esc(n.metin)+'</div>';
-        }).join(''))
-    +'</div></div>';
+    +'<div style="flex:1;font-size:13px;font-style:italic;color:var(--muted);">'+esc(p.yorum)+'</div>'
+    +'</div>'
+    +_performansDetayHTML(p);
   return sectionCard('🎯 Üretim performans puanı', body);
 }
 function hasatKaymasi(c){
@@ -3305,26 +3626,34 @@ function phaseCls(t){
   if(t==="1. Misel gelişim"||t==="2. Misel gelişim"||t==="Pimleme dönemi") return "b-teal";
   return "b-harvest";
 }
-function stageOf(c){
+/* stageOf(c)'ün asıl mantığı — ama BUGÜN'e (todayISO()) sabit değil, herhangi
+   bir tarih için hesaplanabilir. Puanlama sistemi (odaPerformans) aynı hatanın
+   farklı biyolojik dönemlerde farklı ağırlıkta puan kırması için (kullanıcı
+   isteği) her günlük kaydın KENDİ tarihindeki aşamayı bilmesi gerekiyor —
+   stageOf sadece "şu an" için çalıştığından bu ihtiyacı karşılamıyordu. Kod
+   tekrarını önlemek için stageOf artık bu fonksiyonun today=todayISO() ile
+   çağrılmış hali (SSOT, tek mantık). */
+function stageAtDate(c, iso){
   if(c.bosaltimTarihi) return {t:"Boşaltıldı", cls:"b-gray"};
   if(c.donemManuel) return {t:c.donemManuel, cls:phaseCls(c.donemManuel)};
-  var today=todayISO(); var m=_mhDates(c);
-  if(!m.toprak || daysBetween(m.toprak,today)<0) return {t:"Kuluçka dönemi", cls:"b-amber"};
-  if(!m.tirmik || daysBetween(m.tirmik,today)<0) return {t:"Toprak dönemi", cls:"b-amber"};
+  var m=_mhDates(c);
+  if(!m.toprak || daysBetween(m.toprak,iso)<0) return {t:"Kuluçka dönemi", cls:"b-amber"};
+  if(!m.tirmik || daysBetween(m.tirmik,iso)<0) return {t:"Toprak dönemi", cls:"b-amber"};
   /* KRİTİK FIX: Hava aşamasına geçmek için GERÇEKTEN kayıtlı bir Hava Başlangıç tarihi
      (c.havaBaslangic) gerekir — sadece "tahmini" tarihin (toprak+offHava) geçmiş olması
      yetmez. Aksi halde kullanıcı yanlışlıkla girip SİLSE bile, tahmini tarih geçmişte
      kaldığı için oda hâlâ "hava başladı" aşamasında görünmeye devam ediyordu. */
-  if(!c.havaBaslangic || daysBetween(c.havaBaslangic,today)<0) return {t:"1. Misel gelişim", cls:"b-teal"};
-  var hd=daysBetween(c.havaBaslangic,today);
+  if(!c.havaBaslangic || daysBetween(c.havaBaslangic,iso)<0) return {t:"1. Misel gelişim", cls:"b-teal"};
+  var hd=daysBetween(c.havaBaslangic,iso);
   if(hd<=5) return {t:"2. Misel gelişim", cls:"b-teal"};
   if(hd<=8) return {t:"Pimleme dönemi", cls:"b-teal"};
   if(hd===9) return {t:"Bezelye boyutu", cls:"b-harvest"};
   if(hd===10) return {t:"Ceviz boyutu", cls:"b-harvest"};
-  var ha=hasatAsama(c, todayISO());
+  var ha=hasatAsama(c, iso);
   if(ha){ var lbl=ha.flas>0?("Hasat F"+ha.flas+" · "+ha.asama):ha.asama; return {t:lbl, cls:"b-harvest"}; }
   return {t:"Hasat", cls:"b-harvest"};
 }
+function stageOf(c){ return stageAtDate(c, todayISO()); }
 function phaseList(c){
   var m=_mhDates(c); var cur=stageOf(c).t;
   function row(ad,tarih,cls){ return {ad:ad, tarih:tarih, cls:cls, current:(ad===cur)}; }
@@ -11156,17 +11485,26 @@ function odaAnalizVeri(c){
     var sonH=(c.hastalikKayitlar||[]).slice().sort(function(x,y){return cmpDate(y.tarih,x.tarih);})[0];
     kritik.push({neden:"Son 14 günde hastalık/zararlı kaydı"+(sonH?(" — "+esc(sonH.tur)):""), sonuc:"Yayılırsa komşu odalara bulaşabilir, verim düşer.", oneri:"Bölgeyi izole et, uygun ilaçlama/temizlik uygula, komşu odaları da kontrol et."});
   }
-  /* KRİTİK: sebepsiz/önlenebilir gecikmeler (uzun adım listeleri kısaltılır) */
-  if(perf) perf.nedenler.filter(function(n){return n.tip==="gecikme";}).forEach(function(n){
-    kritik.push({neden:_analizKisalt(n.metin,150), sonuc:"Protokol sırası bozulur, sonraki adımlar da kayar.", oneri:"Geciken adımı bugün tamamla ya da haklı sebebi (gelişme/sarım) işaretle."});
+  /* KRİTİK: sebepsiz/önlenebilir gecikmeler + kalıcı kritik hatalar — artık
+     nedenler listesinde metin/regex arayarak DEĞİL, odaPerformans'ın
+     yapılandırılmış alanlarından (SSOT, aynı veri Puan Detayı'nda da
+     kullanılıyor) doğrudan okunuyor. */
+  if(perf && perf.gecikmisAdimlar.length){
+    kritik.push({neden:_analizKisalt(perf.gecikmisAdimlar.length+" gecikmiş/atlanmış işlem: "+perf.gecikmisAdimlar.join(", "),150), sonuc:"Protokol sırası bozulur, sonraki adımlar da kayar.", oneri:"Geciken adımı bugün tamamla ya da haklı sebebi (gelişme/sarım) işaretle."});
+  }
+  if(perf) perf.kritikHatalar.forEach(function(h){
+    kritik.push({neden:_analizKisalt(h,150), sonuc:"Kalıcı etkisi olabilecek bir hata — geri alınamaz.", oneri:"Bir sonraki döngüde bu adımın zamanlamasına özellikle dikkat et."});
   });
 
   /* DİKKAT: hafif/kritik sıcaklık (lvl 0-1) */
   odaAlerts.filter(function(a){return a.lvl<=1;}).forEach(function(a){ dikkat.push(a.txt); });
   /* DİKKAT: amonyak */
   if(son && son.amonyak==="Var") dikkat.push("Amonyak kokusu bildirildi — havalandırmayı kontrol et.");
-  /* DİKKAT: geçmiş sıcaklık maruziyeti (kalıcı, artık düzeltilemez ama bilgi) */
-  if(perf) perf.nedenler.filter(function(n){return n.tip==="kritik" && /kald[ıi]/.test(n.metin);}).forEach(function(n){ dikkat.push(_analizKisalt(n.metin,150)); });
+  /* DİKKAT: geçmiş sıcaklık maruziyeti (kalıcı, artık düzeltilemez ama bilgi) — 🌡️ İklim kategorisinin negatif kalemleri */
+  if(perf){
+    var iklimKat=perf.kategoriler.filter(function(k){return k.key==="iklim";})[0];
+    if(iklimKat) iklimKat.kalemler.filter(function(kl){return kl.delta<0;}).forEach(function(kl){ dikkat.push(_analizKisalt(kl.aciklama,150)); });
+  }
   /* DİKKAT: şartlı kurallar (kompost 28°+ vb.) */
   aktifSartliKurallar(c).forEach(function(ak){ dikkat.push(ak.kural.aciklama||ak.kuralHedefTxt); });
 
@@ -11180,9 +11518,9 @@ function odaAnalizVeri(c){
   if(sog===null) eksik.push("Hiç günlük ölçüm kaydı yok — analiz sınırlı.");
   else if(sog>=2) eksik.push("Son ölçüm "+sog+" gün önce — güncel sıcaklık/CO₂ gir.");
 
-  /* OLUMLU */
+  /* OLUMLU — kategorilerin ödül (pozitif) kalemleri, SSOT */
   if(puan!=null && puan>=85 && !odaAlerts.length && !odaHastalikRiskli(c)) olumlu.push("Sorunsuz ilerliyor (puan "+puan+"/100).");
-  if(perf) perf.nedenler.filter(function(n){return n.tip==="bilgi";}).forEach(function(n){ olumlu.push(n.metin); });
+  if(perf) perf.kategoriler.forEach(function(k){ k.kalemler.filter(function(kl){return kl.delta>0;}).forEach(function(kl){ olumlu.push(kl.aciklama); }); });
 
   /* SONRAKİ KRİTİK ADIMLAR */
   var sd=siradakiProtokolAdimi(c);
@@ -11196,7 +11534,7 @@ function odaAnalizVeri(c){
   if(bh){ var hgg=daysBetween(today,bh); if(hgg!=null && hgg>=0 && hgg<=14) sonraki.push("Tahmini 1. Flaş: "+fmtDate(bh)+" ("+hgg+" gün sonra)"); }
 
   return {oda:c.oda, stage:stage, gun:gun, son:son, sonOlcumGun:sog, puan:puan,
-    kritik:kritik, dikkat:dikkat, olumlu:olumlu, eksik:eksik, trendler:trendler, sonraki:sonraki};
+    kritik:kritik, dikkat:dikkat, olumlu:olumlu, eksik:eksik, trendler:trendler, sonraki:sonraki, perf:perf};
 }
 /* Tüm tesis için günlük Üretim Müdürü Raporu verisi. */
 function uretimMuduruRaporVeri(){
@@ -11331,8 +11669,13 @@ function odaAnalizHTML(c){
     if(v.son.nem) olc.push("nem "+esc(v.son.nem));
   }
   var gd='<b>'+esc(v.oda)+'</b> — '+esc(v.stage)+', '+v.gun+'. gün'+(v.puan!=null?(' · puan <b style="color:'+puanRenk(v.puan)+';">'+v.puan+'/100</b>'):'')
-    +(olc.length?('<div class="muted" style="font-size:12.5px;margin-top:2px;">Son ölçüm: '+olc.join(" · ")+(v.sonOlcumGun>0?(" ("+v.sonOlcumGun+" gün önce)"):(v.sonOlcumGun===0?" (bugün)":""))+'</div>'):'');
+    +(olc.length?('<div class="muted" style="font-size:12.5px;margin-top:2px;">Son ölçüm: '+olc.join(" · ")+(v.sonOlcumGun>0?(" ("+v.sonOlcumGun+" gün önce)"):(v.sonOlcumGun===0?" (bugün)":""))+'</div>'):'')
+    +(v.perf?('<div style="font-size:12.5px;font-style:italic;color:var(--muted);margin-top:4px;">'+esc(v.perf.yorum)+'</div>'):'');
   body+=_analizBlokHTML('Genel Durum','#333','<div style="font-size:13px;">'+gd+'</div>');
+  /* Puan Detayı — kullanıcı isteği: "neden 88 aldım" sorusuna kategori
+     kategori (🌡️🍄📋💧📈⚠), kritik hatalar ve tahmin/güven ile tek yerden
+     cevap verilsin. puanCardHTML ile AYNI ortak render fonksiyonu (SSOT). */
+  if(v.perf) body+=_analizBlokHTML('📊 Puan Detayı','#333', _performansDetayHTML(v.perf));
   if(v.kritik.length) body+=_analizBlokHTML('🔴 Kritik Riskler','#c0291f', v.kritik.map(function(k){return '<div style="padding:5px 0;border-bottom:1px solid #f4eaea;font-size:13px;">'+esc(k.neden)+'<div class="muted" style="font-size:12px;">Olası sonuç: '+esc(k.sonuc)+'</div><div style="font-size:12px;color:#1f7a4d;">→ '+esc(k.oneri)+'</div></div>';}).join(''));
   if(v.dikkat.length) body+=_analizBlokHTML('🟡 Dikkat Edilecekler','#c47a1a', v.dikkat.map(function(x){return '<div style="padding:3px 0;font-size:13px;">• '+esc(x)+'</div>';}).join(''));
   if(v.trendler.length) body+=_analizBlokHTML('📈 Trendler','#1d4ed8', v.trendler.map(function(x){return '<div style="padding:3px 0;font-size:13px;">• '+esc(x)+'</div>';}).join(''));
