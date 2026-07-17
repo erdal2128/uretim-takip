@@ -650,7 +650,7 @@ function hasatTartiGetir(oda, tur){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v382";
+var APP_VER = "v383";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -2182,48 +2182,54 @@ function planTarihiOnayla(cid, idx){
   var fark=daysBetween(mevcutTarih, yeniTarih); /* >0: ileri (ertelendi), <0: geri (erkene alındı) */
   planGerekceSorAc(cid, idx, yeniTarih, fark>0);
 }
-/* Gerekçe girişi — kullanıcı isteği: hazır seçenekler yerine gerekçeyi
-   kendisi serbest metin olarak yazar (tıpkı sulama "Değiştir" formundaki
-   zorunlu "değişiklik nedeni" gibi). İleri alma (erteleme) HER ZAMAN normal
-   gecikme sayılır ve puanı kırar — otomatik biyolojik erteleme (sarım
-   kontrolü sorusu, şartlı kurallar) bundan ayrı ve değişmeden puanı
-   kırmadan devam eder (bkz. protokolSartErtele, sarimSoruCevapla). Erkene
-   alma zaten puanı etkilemiyor, sadece kayıt için gerekçe isteniyor. */
+/* Gerekçe girişi — işleme özgü hazır seçeneklerden (bkz. ERTELE_NEDEN_KATALOG/
+   erteleTuruBelirle) seçilir, "Diğer" serbest metinle. İleri alma (erteleme)
+   Yapay Zekâ Kontrolü'nden geçer: 🟢/🟡 verilerle uyumlu/doğrulanamayan
+   kararlar puan KIRMAZ (otomatik biyolojik erteleme ile aynı muafiyet
+   yoluna girer), sadece 🔴 verilerle ÇELİŞEN kararlar normal gecikme
+   sayılır (bkz. protokolSartErtele, sarimSoruCevapla — otomatik biyolojik
+   erteleme bundan ayrı, değişmeden puanı kırmadan devam eder). Erkene alma
+   zaten puanı etkilemiyor, sadece kayıt için gerekçe isteniyor — AI kontrolü
+   çalıştırılmaz. */
 function planGerekceSorAc(cid, idx, yeniTarih, ileriMi){
   var wm=el("warnModal"); if(!wm) return;
   var c=loadData().cycles.find(function(x){return x.id===cid;}); if(!c) return;
   var s=getProtokol()[idx]; if(!s) return;
+  var tur=erteleTuruBelirle(s);
   var h='<div class="modal-bg" onclick="if(event.target===this) closeWarnBox();"><div class="modal">'
     +'<div style="font-weight:700;font-size:17px;margin-bottom:4px;">'+esc(s.txt)+' — gerekçe</div>'
-    +'<div class="muted" style="font-size:12px;margin-bottom:10px;">'+fmtDate(yeniTarih)+' olarak '+(ileriMi?'erteleniyor':'erkene alınıyor')+'.</div>'
-    +'<label>Gerekçe <small class="muted">(zorunlu)</small></label>'
-    +'<textarea id="pgs_diger" rows="2" placeholder="örn. sarım zayıf, personel eksik, hava koşulu" style="width:100%;"></textarea>'
-    +'<div class="row" style="margin-top:10px;"><button class="btn" onclick="planGerekceDigerKaydet(\''+cid+'\','+idx+',\''+yeniTarih+'\','+(ileriMi?'true':'false')+')">Kaydet</button>'
-    +'<button class="btn ghost" onclick="closeWarnBox()">Vazgeç</button></div>'
+    +'<div class="muted" style="font-size:12px;margin-bottom:10px;">'+fmtDate(yeniTarih)+' olarak '+(ileriMi?'erteleniyor':'erkene alınıyor')+'. Bir sebep seç:</div>'
+    +erteleNedenSeciciHTML(tur, function(nedenAdi){ return "planGerekceKaydet('"+cid+"',"+idx+",'"+yeniTarih+"',"+(ileriMi?'true':'false')+",'"+nedenAdi.replace(/'/g,"\\'")+"')"; }, 'pgs_diger', "planGerekceDigerKaydet('"+cid+"',"+idx+",'"+yeniTarih+"',"+(ileriMi?'true':'false')+")")
+    +'<button class="btn ghost" style="width:100%;margin-top:8px;" onclick="closeWarnBox()">Vazgeç</button>'
     +'</div></div>';
   wm.innerHTML=h;
+}
+function planGerekceKaydet(cid, idx, yeniTarih, ileriMi, neden){
+  planGerekceUygula(cid, idx, yeniTarih, ileriMi, neden);
 }
 function planGerekceDigerKaydet(cid, idx, yeniTarih, ileriMi){
   var metin=(el("pgs_diger")&&el("pgs_diger").value.trim())||"";
   if(!metin){ toast("Gerekçe zorunlu"); return; }
-  planGerekceUygula(cid, idx, yeniTarih, (ileriMi?"diger":"erken_diger"), metin);
+  planGerekceUygula(cid, idx, yeniTarih, ileriMi, metin);
 }
-function planGerekceUygula(cid, idx, yeniTarih, sebepKey, sebepAdi){
+function planGerekceUygula(cid, idx, yeniTarih, ileriMi, neden){
   if(!can("edit")) return noPerm();
   var c=loadData().cycles.find(function(x){return x.id===cid;}); if(!c) return;
   var s=getProtokol()[idx]; if(!s) return;
   var base=protokolTarih(c,s); if(!base) return;
   if(!c.ertele) c.ertele={};
   c.ertele["p"+idx]=daysBetween(base, yeniTarih);
-  /* Sadece İLERİ alma (erteleme) puan sistemini etkiler — biyolojik/diğer
-     ayrımı mevcut odaPerformans() ve Protokol Uygunluğu raporuyla aynı alanı
-     (c.erteleSebep) kullanır. Erkene alma bu alana yazılmaz (puanı etkilemez). */
-  if(sebepKey==="biyolojik"||sebepKey==="diger"){
+  var ikonEk="";
+  if(ileriMi){
+    var verdict=erteleNedenAIKontrol(c, neden, todayISO());
     if(!c.erteleSebep) c.erteleSebep={};
-    c.erteleSebep["p"+idx]=sebepKey;
+    if(!c.erteleAIVerdict) c.erteleAIVerdict={};
+    c.erteleSebep["p"+idx] = (verdict.seviye==="kirmizi") ? "diger" : "biyolojik";
+    c.erteleAIVerdict["p"+idx]=verdict.seviye;
+    ikonEk=" · "+(verdict.seviye==="yesil"?"🟢":(verdict.seviye==="kirmizi"?"🔴":"🟡"))+" "+verdict.aciklama;
   }
-  gunlukNotTariheGuncelle(c, todayISO(), esc(s.txt)+" için plan", esc(s.txt)+" için plan "+fmtDate(yeniTarih)+" — gerekçe: "+esc(sebepAdi)+" — "+kimNeZamanEtiketi());
-  touchCycle(c); saveData(); closeWarnBox(); toast("Plan güncellendi: "+fmtDate(yeniTarih)); render();
+  gunlukNotTariheGuncelle(c, todayISO(), esc(s.txt)+" için plan", esc(s.txt)+" için plan "+fmtDate(yeniTarih)+" — gerekçe: "+esc(neden)+" — "+kimNeZamanEtiketi());
+  touchCycle(c); saveData(); closeWarnBox(); toast("Plan güncellendi: "+fmtDate(yeniTarih)+ikonEk); render();
 }
 function protokolYarinaCek(cid, idx){
   if(!can("edit")) return noPerm();
@@ -2653,27 +2659,37 @@ function toggleTask(cid, idx){
 }
 /* Protokol adımı erteleme — SADECE Oda Detayı → Üretim Protokolü tablosundan
    çağrılır (kullanıcı isteği: erteleme/planlama işlemleri tek kontrol
-   noktasında toplansın, diğer ekranlardan kaldırıldı). Sulama "Değiştir"
-   formuyla aynı mantık: hazır "sarım/gelişme yavaş" / "diğer" seçim
-   butonları yerine TEK bir Ertele butonu, gerekçe serbest metin olarak
-   yazılır. Bu manuel erteleme HER ZAMAN normal gecikme sayılır (puanı
-   kırar) — otomatik biyolojik erteleme (sarım kontrolü sorusu, şartlı
-   kurallar) ayrı bir yoldan geçtiği için etkilenmez. */
+   noktasında toplansın, diğer ekranlardan kaldırıldı). Gerekçe artık
+   işleme özgü hazır seçeneklerden (bkz. ERTELE_NEDEN_KATALOG/
+   erteleTuruBelirle) seçilir, "Diğer" serbest metinle. Seçilen gerekçe
+   Yapay Zekâ Kontrolü'nden (erteleNedenAIKontrol) geçer: 🟢/🟡 verilerle
+   uyumlu/doğrulanamayan kararlar puan KIRMAZ (otomatik biyolojik erteleme
+   ile aynı muafiyet yoluna girer), sadece 🔴 verilerle ÇELİŞEN kararlar
+   normal gecikme sayılır — kullanıcı isteği: "doğru gerekçeyle yapılan
+   bilinçli ertelemeler puan düşürmemeli". */
 var _yarinErteleAcik={};
 function yarinErteleAc(cid, idx){ _yarinErteleAcik[cid+"_p"+idx]=true; render(); }
 function yarinErteleVazgec(cid, idx){ delete _yarinErteleAcik[cid+"_p"+idx]; render(); }
-function yarinErteleKaydet(cid, idx){
+function yarinErteleKaydet(cid, idx, neden){
   if(!can("edit")) return noPerm();
   var c=loadData().cycles.find(function(x){return x.id===cid;}); if(!c) return;
-  var neden=(el("yed_"+cid+"_"+idx)&&el("yed_"+cid+"_"+idx).value.trim())||"";
   if(!neden){ toast("Erteleme nedeni zorunlu"); return; }
   var P=getProtokol(); var st=P[idx];
   var yeniTarih=_adimiYarinaTasi(c, idx);
+  var verdict=erteleNedenAIKontrol(c, neden, todayISO());
   if(!c.erteleSebep) c.erteleSebep={};
-  c.erteleSebep["p"+idx]="diger";
+  if(!c.erteleAIVerdict) c.erteleAIVerdict={};
+  c.erteleSebep["p"+idx] = (verdict.seviye==="kirmizi") ? "diger" : "biyolojik";
+  c.erteleAIVerdict["p"+idx]=verdict.seviye;
   if(st) gunlukGorevNotEkle(c, st.txt+" "+fmtDate(yeniTarih)+" tarihine ertelendi (neden: "+neden+") — "+kimNeZamanEtiketi());
   touchCycle(c); saveData(); delete _yarinErteleAcik[cid+"_p"+idx];
-  toast(fmtDate(yeniTarih)+" tarihine ertelendi"); render();
+  var ikon=verdict.seviye==="yesil"?"🟢":(verdict.seviye==="kirmizi"?"🔴":"🟡");
+  toast(fmtDate(yeniTarih)+" tarihine ertelendi · "+ikon+" "+verdict.aciklama); render();
+}
+function yarinErteleDigerKaydet(cid, idx){
+  var metin=(el("yed_"+cid+"_"+idx)&&el("yed_"+cid+"_"+idx).value.trim())||"";
+  if(!metin){ toast("Sebep yaz veya yukarıdan seç"); return; }
+  yarinErteleKaydet(cid, idx, metin);
 }
 /* Bir adımdaki ertelemeyi/erken çekmeyi kaldırıp protokoldeki asıl tarihine
    döndürür — kullanıcı "bu ertelemeyi ben yapmadım" dediğinde ya da yanlışlıkla
@@ -3025,27 +3041,33 @@ function _puanProtokolUygunlugu(c){
 }
 
 /* 💧 Sulama Yönetimi (15) — protokolün önerdiği gün hiç kayıt girilmemiş mi
-   (sessizce atlanmış), bilinçli iptal/değiştir sıklığı. Gerekçeli iptal/
-   değiştir kararları (Günlük Tur'da zaten gerekçeyle kayıt altına alınıyor)
-   ihmal SAYILMAZ ama sık tekrarı protokolün pratikte uygulanamadığının
-   işareti olabileceğinden küçük bir not düşülür. */
+   (sessizce atlanmış, geçerli bir gerekçe YOK — her zaman puan kırar).
+   İptal/değiştir kararları artık Yapay Zekâ Kontrolü'nden (bkz.
+   erteleNedenAIKontrol, gun.sulamaAIVerdict) geçiyor — kullanıcı isteği:
+   "doğru gerekçeyle yapılan bilinçli ertelemeler puan düşürmemeli, hatta
+   olumlu üretim yönetimi olarak değerlendirilebilmeli". Sadece seçilen
+   gerekçenin mevcut verilerle ÇELİŞTİĞİ (🔴) kararlar puan kırar; 🟢/🟡
+   (uyumlu ya da doğrulanamayan) kararlar puanı ETKİLEMEZ. */
 function _puanSulamaYonetimi(c){
   var maks=15, kalemler=[], puan=maks, today=todayISO();
   var gunler=(c.gunluk||[]).filter(function(r){return r.tarih<=today;});
-  var iptalSayisi=0, degistirSayisi=0, kacirilanSayisi=0, toplamGun=0;
+  var kacirilanSayisi=0, toplamGun=0, riskliSayisi=0, uyumluSayisi=0, kararSayisi=0;
   gunler.forEach(function(r){
-    if(r.sulamaDurum==="iptal") iptalSayisi++;
-    else if(r.sulamaDurum==="degistirildi") degistirSayisi++;
+    if(r.sulamaDurum==="iptal" || r.sulamaDurum==="degistirildi"){
+      kararSayisi++;
+      if(r.sulamaAIVerdict==="kirmizi") riskliSayisi++;
+      else if(r.sulamaAIVerdict==="yesil") uyumluSayisi++;
+    }
     var oneri=protokolOneri(c,r.tarih);
     if(!oneri) return;
     toplamGun++;
     var girildi = (numParse(r.su)>0) || (r.sulama&&r.sulama.trim()) || r.sulamaDurum;
     if(!girildi) kacirilanSayisi++;
   });
-  if(kacirilanSayisi>0){ var d1=Math.min(8,kacirilanSayisi*2); puan-=d1; kalemler.push(_kalem(-Math.round(d1), kacirilanSayisi+" gün protokol sulama/ilaç önerdiği halde hiç kayıt girilmemiş")); }
-  if(iptalSayisi>0){ var d2=Math.min(4,iptalSayisi); puan-=d2; kalemler.push(_kalem(-d2, iptalSayisi+" sulama bilinçli olarak iptal edildi")); }
-  if(degistirSayisi>0){ var d3=Math.min(3,Math.round(degistirSayisi*0.5)); if(d3>0){ puan-=d3; kalemler.push(_kalem(-d3, degistirSayisi+" sulama protokolden farklı uygulandı (değiştirildi)")); } }
-  if(toplamGun>0 && !kacirilanSayisi && !iptalSayisi){ puan+=2; kalemler.push(_kalem(2,"Sulama protokole tam uyumlu uygulanıyor")); }
+  if(kacirilanSayisi>0){ var d1=Math.min(8,kacirilanSayisi*2); puan-=d1; kalemler.push(_kalem(-Math.round(d1), kacirilanSayisi+" gün protokol sulama/ilaç önerdiği halde hiç kayıt girilmemiş — geçerli bir gerekçe yok")); }
+  if(riskliSayisi>0){ var d2=Math.min(6,riskliSayisi*3); puan-=d2; kalemler.push(_kalem(-Math.round(d2), riskliSayisi+" sulama kararı seçilen gerekçeyle çelişen verilerle kaydedildi (🔴)")); }
+  if(uyumluSayisi>=2 && !riskliSayisi && !kacirilanSayisi){ puan+=2; kalemler.push(_kalem(2, uyumluSayisi+" sulama kararının gerekçesi verilerle doğrulandı (🟢) — bilinçli, tutarlı yönetim")); }
+  else if(toplamGun>0 && !kacirilanSayisi && !kararSayisi){ puan+=2; kalemler.push(_kalem(2,"Sulama protokole tam uyumlu uygulanıyor")); }
   puan=Math.max(0,Math.min(maks,Math.round(puan)));
   return {key:"sulama", ad:"💧 Sulama Yönetimi", maks:maks, puan:puan, kalemler:kalemler};
 }
@@ -3094,6 +3116,12 @@ function _puanRiskFaktorleri(c, kritikHatalar){
     if(g.uyari.some(function(u){return u.indexOf("⚠️")===0;})){ puan-=3; kalemler.push(_kalem(-3, g.ad+": hasat öncesi bekleme ihlali riski")); }
   });
   if(kritikHatalar.length){ var d=Math.min(6,kritikHatalar.length*2); puan-=d; kalemler.push(_kalem(-d, kritikHatalar.length+" kalıcı kritik hata (aşağıda detaylı)")); }
+  /* Yapay Zekâ Kontrolü'nün "🔴 riskli" bulduğu protokol adımı ertelemeleri —
+     kullanıcı isteği: "erteleme üretim açısından risk oluşturuyorsa puanı
+     etkileyebilir" — normal gecikme cezasının (Protokol Uygunluğu/Misel
+     Gelişimi) ÜSTÜNE, veriyle çelişen gerekçe seçimi için ayrı bir ceza. */
+  var riskliErtelemeSayisi = c.erteleAIVerdict ? Object.keys(c.erteleAIVerdict).filter(function(k){return c.erteleAIVerdict[k]==="kirmizi";}).length : 0;
+  if(riskliErtelemeSayisi>0){ var d2=Math.min(4,riskliErtelemeSayisi*2); puan-=d2; kalemler.push(_kalem(-d2, riskliErtelemeSayisi+" erteleme kararı seçilen gerekçeyle çelişen verilerle kaydedildi (🔴)")); }
   puan=Math.max(0,Math.min(maks,Math.round(puan)));
   return {key:"risk", ad:"⚠ Risk Faktörleri", maks:maks, puan:puan, kalemler:kalemler};
 }
@@ -6537,12 +6565,12 @@ function renderDetail(id){
       var aksiyonHTML='';
       if(can("edit") && !x.hataVar && !x.ar && !x.done && s.tip!=="uyari"){
         if(_yarinErteleAcik[c.id+"_p"+x.idx]){
+          var _erTur=erteleTuruBelirle(s);
           aksiyonHTML='<div style="margin-top:5px;padding:7px;background:#fffaf0;border:1px solid #ecd9b0;border-radius:8px;">'
-            + '<textarea id="yed_'+c.id+'_'+x.idx+'" rows="2" placeholder="Erteleme nedeni" style="width:100%;"></textarea>'
-            + '<div style="display:flex;gap:6px;margin-top:5px;">'
-            + '<button class="btn small" style="flex:1;" onclick="yarinErteleKaydet(\''+c.id+'\','+x.idx+')">Kaydet</button>'
-            + '<button class="btn ghost small" style="flex:1;" onclick="yarinErteleVazgec(\''+c.id+'\','+x.idx+')">Vazgeç</button>'
-            + '</div></div>';
+            + '<div class="muted" style="font-size:11px;margin-bottom:5px;">Erteleme nedeni seç:</div>'
+            + erteleNedenSeciciHTML(_erTur, (function(cid,idx){ return function(nedenAdi){ return "yarinErteleKaydet('"+cid+"',"+idx+",'"+nedenAdi.replace(/'/g,"\\'")+"')"; }; })(c.id,x.idx), 'yed_'+c.id+'_'+x.idx, "yarinErteleDigerKaydet('"+c.id+"',"+x.idx+")")
+            + '<button class="btn ghost small" style="width:100%;margin-top:5px;" onclick="yarinErteleVazgec(\''+c.id+'\','+x.idx+')">Vazgeç</button>'
+            + '</div>';
         } else {
           aksiyonHTML='<div style="margin-top:5px;display:flex;gap:6px;flex-wrap:wrap;">'
             + '<button class="btn ghost small" style="padding:3px 8px;" onclick="yarinErteleAc(\''+c.id+'\','+x.idx+')">⏰ Ertele</button>'
@@ -7973,12 +8001,199 @@ function sulamaMetniSuAyir(txt){
   var kalan=ayr.ilac.concat(ayr.uretim).join(" + ");
   return {su: suToplam>0?(""+suToplam):"", sulama: kalan};
 }
+/* ==================== Erteleme/İptal nedeni kataloğu (tüm işlem türleri) ====================
+   Kullanıcı isteği: uzun/genel bir sebep listesi yerine, İŞLEME ÖZGÜ en fazla
+   6-8 seçenek — en sık kullanılanlar üstte, "Diğer" her zaman en altta ve
+   seçilince açıklama zorunlu. Aynı katalog hem sulama/kimyasal iptal-değiştir
+   (Günlük Tur), hem protokol adımı erteleme (Üretim Protokolü tablosu), hem
+   "Planla" (takvimden tarih seç) akışında kullanılır — tek kaynak. */
+var ERTELE_NEDEN_KATALOG = {
+  sulama: [
+    {ik:"💧", ad:"Nem yeterli"},
+    {ik:"💧", ad:"Kompost fazla ıslak"},
+    {ik:"🦠", ad:"Hastalık riski"},
+    {ik:"🧪", ad:"Kimyasal uygulama yapıldı"},
+    {ik:"📋", ad:"Üretim müdürü kararı"},
+    {ik:"⚙️", ad:"Teknik neden"}
+  ],
+  toprak: [
+    {ik:"🌡️", ad:"Kompost sıcaklığı yüksek"},
+    {ik:"🌡️", ad:"Kompost sıcaklığı düşük"},
+    {ik:"🍄", ad:"Misel gelişimi yetersiz"},
+    {ik:"🌬️", ad:"Amonyak yüksek"},
+    {ik:"📋", ad:"Üretim müdürü kararı"},
+    {ik:"⚙️", ad:"Teknik neden"}
+  ],
+  hava: [
+    {ik:"🍄", ad:"Misel gelişimi yetersiz"},
+    {ik:"🌬️", ad:"Amonyak yüksek"},
+    {ik:"🌡️", ad:"Kompost sıcaklığı uygun değil"},
+    {ik:"📋", ad:"Üretim müdürü kararı"},
+    {ik:"⚙️", ad:"Teknik neden"}
+  ],
+  kimyasal: [
+    {ik:"🌡️", ad:"Ortam koşulları uygun değil"},
+    {ik:"💧", ad:"Sulama nedeniyle ertelendi"},
+    {ik:"🦠", ad:"Hastalık durumu değişti"},
+    {ik:"📋", ad:"Üretim müdürü kararı"},
+    {ik:"⚙️", ad:"Teknik neden"}
+  ],
+  genel: [
+    {ik:"📋", ad:"Üretim müdürü kararı"},
+    {ik:"⚙️", ad:"Teknik neden"},
+    {ik:"👷", ad:"Ekip/personel yetişmedi"}
+  ]
+};
+function erteleNedenleriGetir(tur){ return (ERTELE_NEDEN_KATALOG[tur]||ERTELE_NEDEN_KATALOG.genel).concat([{ik:"✍️", ad:"Diğer"}]); }
+/* Bir protokol adımının hangi neden setini kullanacağını belirler (rol/tip'e göre). */
+function erteleTuruBelirle(s){
+  if(!s) return "genel";
+  if(s.tip==="su") return "sulama";
+  if(s.tip==="ilac") return "kimyasal";
+  if(s.rol==="toprak") return "toprak";
+  if(s.rol==="hava") return "hava";
+  return "genel";
+}
+/* Verilen tarihte protokolün su mu ilaç mı (yoksa ikisi mi) önerdiğini bulur
+   — sulama iptal/değiştir modalinde hangi neden setinin (💧 sulama vs 🧪
+   kimyasal) gösterileceğine karar vermek için. İlaç varsa kimyasal seti
+   gösterilir (daha sonuçlu karar sayılır). */
+function _sulamaGunTuru(c, tarih){
+  var ilacVar=false;
+  getProtokol().forEach(function(s,idx){
+    if(s.silindi || (s.tip!=="su" && s.tip!=="ilac")) return;
+    if(s.tekrarBitisRef){
+      var ar=protokolAdimAraligi(c,s);
+      if(ar && cmpDate(tarih,ar.baslangic)>=0 && cmpDate(tarih,ar.bitis)<=0 && s.tip==="ilac") ilacVar=true;
+      return;
+    }
+    var dt=protokolTarih(c,s); if(!dt) return;
+    var ert=(c.ertele&&c.ertele["p"+idx])||0; if(ert) dt=addDays(dt,ert);
+    if(dt===tarih && s.tip==="ilac") ilacVar=true;
+  });
+  return ilacVar ? "kimyasal" : "sulama";
+}
+
+/* ==================== Yapay zekâ kontrolü ====================
+   Kullanıcı bir erteleme/iptal nedeni seçtiğinde, mevcut verilerle (kompost/
+   oda sıcaklığı, nem, üretim günü, son ölçümler, hastalık kayıtları) ne kadar
+   uyumlu olduğuna dair KURAL TABANLI (gerçek ML değil — uygulamadaki diğer
+   "yorum" fonksiyonlarıyla aynı yaklaşım, açıklanabilir kalması için her
+   zaman kısa bir gerekçeyle döner) bir ön değerlendirme üretir. Sonuç kayıt
+   altına alınır (gun.sulamaAIVerdict / c.erteleAIVerdict) — hem kullanıcıya
+   anında geri bildirim hem ileride "bu tür kararların başarı oranı" gibi
+   makine öğrenmesi analizleri için veri sağlar. */
+function erteleNedenAIKontrol(c, nedenAdi, tarih){
+  var gunler=(c.gunluk||[]).filter(function(r){return r.tarih<=tarih;}).slice().sort(function(a,b){return cmpDate(a.tarih,b.tarih);});
+  var son=gunler[gunler.length-1];
+  var ko=son?numParse(son.kompostC):null, nem=son?son.nem:null, am=son?son.amonyak:null;
+  function sonuc(seviye, aciklama){ return {seviye:seviye, aciklama:aciklama}; }
+
+  if(/^Nem yeterli$/i.test(nedenAdi)){
+    if(nem==="Yüksek"||nem==="Normal") return sonuc("yesil","Son ölçümde nem "+(nem||"normal")+" — kararla uyumlu.");
+    if(nem==="Düşük") return sonuc("kirmizi","Son ölçümde nem DÜŞÜK görünüyor — bu gerekçeyle çelişiyor.");
+    return sonuc("sari","Nem ölçümü kayıtlı değil — doğrulanamıyor.");
+  }
+  if(/^Kompost fazla ıslak$/i.test(nedenAdi)){
+    if(nem==="Yüksek") return sonuc("yesil","Nem yüksek ölçülmüş — kararla uyumlu.");
+    return sonuc("sari","Nem verisi bu gerekçeyi doğrulamıyor.");
+  }
+  if(/^Hastalık/i.test(nedenAdi)){
+    return odaHastalikRiskli(c) ? sonuc("yesil","Son 14 günde hastalık/zararlı kaydı var — kararla uyumlu.") : sonuc("sari","Son 14 günde kayıtlı bir hastalık/zararlı bulunamadı.");
+  }
+  if(/^Kompost sıcaklığı yüksek$/i.test(nedenAdi)){
+    if(ko!=null && ko>=KOMPOST_KRITIK_UST) return sonuc("yesil","Son ölçüm "+ko+"° — kritik/yüksek, kararla uyumlu.");
+    if(ko!=null) return sonuc("kirmizi","Son ölçüm "+ko+"° — yüksek görünmüyor, bu gerekçeyle çelişiyor.");
+    return sonuc("sari","Güncel kompost ölçümü yok — doğrulanamıyor.");
+  }
+  if(/^Kompost sıcaklığı düşük$/i.test(nedenAdi)){
+    if(ko!=null && ko<=KOMPOST_KRITIK_ALT) return sonuc("yesil","Son ölçüm "+ko+"° — kritik/düşük, kararla uyumlu.");
+    if(ko!=null) return sonuc("kirmizi","Son ölçüm "+ko+"° — düşük görünmüyor, bu gerekçeyle çelişiyor.");
+    return sonuc("sari","Güncel kompost ölçümü yok — doğrulanamıyor.");
+  }
+  if(/^Kompost sıcaklığı uygun değil$/i.test(nedenAdi)){
+    if(ko!=null && (ko>=KOMPOST_KRITIK_UST||ko<=KOMPOST_KRITIK_ALT)) return sonuc("yesil","Son ölçüm "+ko+"° — ideal aralığın dışında, kararla uyumlu.");
+    if(ko!=null) return sonuc("sari","Son ölçüm "+ko+"° — ideale yakın görünüyor.");
+    return sonuc("sari","Güncel kompost ölçümü yok — doğrulanamıyor.");
+  }
+  if(/^Amonyak yüksek$/i.test(nedenAdi) || /^Ortam koşulları uygun değil$/i.test(nedenAdi)){
+    return am==="Var" ? sonuc("yesil","Amonyak kokusu bildirilmiş — kararla uyumlu.") : sonuc("sari","Amonyak bildirimi kayıtlı değil.");
+  }
+  if(/^Misel gelişimi yetersiz$/i.test(nedenAdi)){
+    return sonuc("sari","Misel gelişimi ölçülebilir bir veri değil — mühendis gözlemine güveniliyor.");
+  }
+  if(/^Kimyasal uygulama yapıldı$/i.test(nedenAdi)){
+    var ilacBugun=(c.gunluk||[]).some(function(r){return r.tarih===tarih && r.sulama && r.sulama.trim();});
+    return ilacBugun ? sonuc("yesil","Bugün için ayrı bir ilaçlama kaydı var — kararla uyumlu.") : sonuc("sari","Bugün için ayrı bir ilaçlama kaydı bulunamadı.");
+  }
+  if(/^Sulama nedeniyle ertelendi$/i.test(nedenAdi)){
+    var suBugun=(c.gunluk||[]).some(function(r){return r.tarih===tarih && numParse(r.su)>0;});
+    return suBugun ? sonuc("yesil","Bugün için su kaydı var — kararla uyumlu.") : sonuc("sari","Bugün için ayrı bir su kaydı bulunamadı.");
+  }
+  if(/^Hastalık durumu değişti$/i.test(nedenAdi)){
+    return sonuc("sari","Hastalık durumu değişikliği veriyle otomatik doğrulanamıyor — mühendis gözlemine güveniliyor.");
+  }
+  if(/^(Üretim müdürü kararı|Teknik neden|Ekip\/personel yetişmedi)$/i.test(nedenAdi)){
+    return sonuc("sari","Bu, veriyle doğrulanamayan bir yönetim kararı — bilgi amaçlı kaydedildi.");
+  }
+  return sonuc("sari","Bu gerekçe mevcut verilerle otomatik doğrulanamıyor.");
+}
+function erteleAIBadgeHTML(verdict){
+  if(!verdict || !verdict.seviye) return "";
+  var ikon = verdict.seviye==="yesil"?"🟢":(verdict.seviye==="kirmizi"?"🔴":"🟡");
+  var renk = verdict.seviye==="yesil"?"#1f7a4d":(verdict.seviye==="kirmizi"?"#a32d2d":"#8a5a1f");
+  var bg = verdict.seviye==="yesil"?"#eafbef":(verdict.seviye==="kirmizi"?"#fdf3f3":"#fff8e8");
+  return '<div style="margin-top:4px;padding:6px 8px;background:'+bg+';border-radius:7px;font-size:11.5px;color:'+renk+';">'+ikon+' '+esc(verdict.aciklama)+'</div>';
+}
+/* Ortak neden seçici HTML — buton listesi (en sık kullanılan üstte, tek
+   sütun, geniş dokunma alanı — mobil öncelikli, en fazla 6-8 seçenek) + en
+   altta "Diğer" serbest metin alanı (seçilince açıklama zorunlu, kontrol
+   çağıran tarafta yapılır). onclickForNeden(nedenAdi): nedenAdi'yi alıp o
+   butonun onclick="..." içeriğini (string) döndüren fonksiyon — HTML
+   üretimi sırasında (senkron) çağrılır, her kullanım kendi kaydetme
+   fonksiyonunu bağlar. */
+function erteleNedenSeciciHTML(tur, onclickForNeden, digerInputId, digerBtnOnclick){
+  var nedenler=erteleNedenleriGetir(tur);
+  var h='';
+  nedenler.forEach(function(n){
+    if(n.ad==="Diğer") return;
+    h+='<button class="btn ghost" style="width:100%;margin-bottom:6px;text-align:left;padding:11px 12px;" onclick="'+onclickForNeden(n.ad)+'">'+n.ik+' '+esc(n.ad)+'</button>';
+  });
+  h+='<textarea id="'+digerInputId+'" rows="2" placeholder="✍️ Diğer — sebebi yaz (zorunlu)" style="margin-top:2px;width:100%;"></textarea>'
+    +'<button class="btn ghost" style="width:100%;margin-top:6px;" onclick="'+digerBtnOnclick+'">✍️ Diğer sebeple kaydet</button>';
+  return h;
+}
+
 /* Bugünkü Görevler'de sulama/ilaç satırı için "Yapıldı"nın tek seçenek olmaması —
    kullanıcı sulamayı planlanandan farklı uygulayabilir (400 lt yerine 250 lt gibi)
    veya bilinçli olarak hiç uygulamayabilir (nem yüksek, hastalık riski vb.). Bu
    fonksiyonlar o kararı Tur'a gitmeden, tek bir dokunuşla kaydeder. Sonuç,
    gun.sulamaDurum alanında "degistirildi"/"iptal" olarak SSOT'a (c.gunluk) yazılır
    — Bugünkü Görevler, Gün Sonu Özeti ve CSV/PDF raporları aynı alandan okur. */
+/* Sulama/ilaç kararını (değiştir/iptal) SSOT'a yazar — Yapay Zekâ Kontrolü de
+   burada çalışır ve sonucu (gun.sulamaAIVerdict/gun.sulamaAIAciklama) kayda
+   geçer: hem kullanıcıya anında geri bildirim (toast) hem puanlamaya girdi
+   (_puanSulamaYonetimi bu alanı okur — bkz. aşağıda) hem ileride "bu tür
+   kararların başarı oranı" analizleri için veri. */
+function _sulamaKararKaydet(c, tarih, durum, deger, neden){
+  var oneri=protokolOneri(c,tarih)||"";
+  if(!c.gunluk) c.gunluk=[];
+  var gun=c.gunluk.find(function(g){return g.tarih===tarih;});
+  if(!gun){ gun={tarih:tarih}; c.gunluk.push(gun); }
+  if(durum==="iptal"){ gun.sulama=""; gun.su=""; }
+  else { var ayr=sulamaMetniSuAyir(deger); gun.sulama=ayr.sulama; gun.su=ayr.su; }
+  gun.sulamaDurum=durum; gun.sulamaAciklama=neden; gun.sulamaOrijinal=oneri;
+  gun.sulamaKim=kimNeZamanEtiketi();
+  var verdict=erteleNedenAIKontrol(c, neden, tarih);
+  gun.sulamaAIVerdict=verdict.seviye; gun.sulamaAIAciklama=verdict.aciklama;
+  c.gunluk.sort(function(a,b){ return cmpDate(a.tarih,b.tarih); });
+  var eylemTxt = durum==="iptal" ? "Sulama iptal edildi" : ("Sulama değiştirildi: "+deger);
+  gunlukNotTariheEkle(c, tarih, eylemTxt+" (neden: "+neden+") — "+gun.sulamaKim);
+  touchCycle(c); saveData(); closeWarnBox();
+  var ikon=verdict.seviye==="yesil"?"🟢":(verdict.seviye==="kirmizi"?"🔴":"🟡");
+  toast((durum==="iptal"?"İptal edildi":"Değiştirildi")+" · "+ikon+" "+verdict.aciklama);
+  render();
+}
 function sulamaGorevDegistirAc(cid, tarih){
   var wm=el("warnModal"); if(!wm) return;
   var c=loadData().cycles.find(function(x){return x.id===cid;}); if(!c) return;
@@ -7987,49 +8202,41 @@ function sulamaGorevDegistirAc(cid, tarih){
   var mevcut = (gun && ((gun.sulama||"").trim() || numParse(gun.su)>0))
     ? ((numParse(gun.su)>0?gun.su+" lt su":"")+(gun.sulama?(" "+gun.sulama):"")).trim()
     : (protokolOneri(c,tarih)||"");
+  var tur=_sulamaGunTuru(c,tarih);
   wm.innerHTML='<div class="modal-bg" onclick="if(event.target===this) closeWarnBox();"><div class="modal">'
     +'<div style="font-weight:700;font-size:17px;margin-bottom:4px;">'+esc(c.oda)+' — Sulamayı değiştir</div>'
-    +'<div class="muted" style="font-size:12px;margin-bottom:10px;">'+fmtDate(tarih)+' için planlanan: '+esc(mevcut||"—")+'. Gerçekte ne uygulanacaksa (veya uygulandıysa) onu yaz.</div>'
+    +'<div class="muted" style="font-size:12px;margin-bottom:10px;">'+fmtDate(tarih)+' için planlanan: '+esc(mevcut||"—")+'. Gerçekte ne uygulanacaksa (veya uygulandıysa) onu yaz, sonra bir sebep seç.</div>'
     +'<label>Uygulanacak sulama / ilaçlama</label><input type="text" id="sgd_yeni" value="'+esc(mevcut)+'" placeholder="örn. 250 lt su">'
-    +'<label style="margin-top:8px;display:block;">Değişiklik nedeni (zorunlu)</label><textarea id="sgd_neden" rows="2" placeholder="örn. Nem yüksek olduğu için azaltıldı"></textarea>'
-    +'<div class="row" style="margin-top:14px;"><button class="btn" onclick="sulamaGorevDegistirKaydet(\''+cid+'\',\''+tarih+'\')">Kaydet</button>'
-    +'<button class="btn ghost" onclick="closeWarnBox()">Vazgeç</button></div>'
+    +'<label style="margin-top:10px;display:block;">Değişiklik nedeni</label>'
+    +erteleNedenSeciciHTML(tur, function(nedenAdi){ return "sulamaGorevDegistirKaydet('"+cid+"','"+tarih+"','"+nedenAdi.replace(/'/g,"\\'")+"')"; }, 'sgd_neden_diger', "sulamaGorevDegistirDigerKaydet('"+cid+"','"+tarih+"')")
+    +'<button class="btn ghost" style="width:100%;margin-top:8px;" onclick="closeWarnBox()">Vazgeç</button>'
     +'</div></div>';
 }
-function sulamaGorevDegistirKaydet(cid, tarih){
+function sulamaGorevDegistirKaydet(cid, tarih, neden){
   if(!can("edit")) return noPerm();
   var c=loadData().cycles.find(function(x){return x.id===cid;}); if(!c) return;
   tarih = tarih || todayISO();
   var yeni=(el("sgd_yeni")&&el("sgd_yeni").value.trim())||"";
-  var neden=(el("sgd_neden")&&el("sgd_neden").value.trim())||"";
   if(!yeni){ toast("Uygulanan sulama/ilaç bilgisini yaz"); return; }
   if(!neden){ toast("Değişiklik nedeni zorunlu"); return; }
-  var oneri=protokolOneri(c,tarih)||"";
-  if(!c.gunluk) c.gunluk=[];
-  var gun=c.gunluk.find(function(g){return g.tarih===tarih;});
-  if(!gun){ gun={tarih:tarih}; c.gunluk.push(gun); }
-  var ayr=sulamaMetniSuAyir(yeni);
-  gun.sulama=ayr.sulama; gun.su=ayr.su;
-  gun.sulamaDurum="degistirildi"; gun.sulamaAciklama=neden; gun.sulamaOrijinal=oneri;
-  gun.sulamaKim=kimNeZamanEtiketi();
-  c.gunluk.sort(function(a,b){ return cmpDate(a.tarih,b.tarih); });
-  gunlukNotTariheEkle(c, tarih, "Sulama değiştirildi: "+yeni+" (neden: "+neden+") — "+gun.sulamaKim);
-  touchCycle(c); saveData(); closeWarnBox(); toast("Sulama \"değiştirildi\" olarak kaydedildi"); render();
+  _sulamaKararKaydet(c, tarih, "degistirildi", yeni, neden);
 }
-var SULAMA_IPTAL_SEBEPLERI=["Nem yüksek","Hastalık riski","Kompost fazla ıslak","Teknik karar"];
+function sulamaGorevDegistirDigerKaydet(cid, tarih){
+  var c=loadData().cycles.find(function(x){return x.id===cid;}); if(!c) return;
+  var metin=(el("sgd_neden_diger")&&el("sgd_neden_diger").value.trim())||"";
+  if(!metin){ toast("Sebep yaz veya yukarıdan seç"); return; }
+  sulamaGorevDegistirKaydet(cid, tarih, metin);
+}
 function sulamaGorevIptalAc(cid, tarih){
   var wm=el("warnModal"); if(!wm) return;
   var c=loadData().cycles.find(function(x){return x.id===cid;}); if(!c) return;
   tarih = tarih || todayISO();
+  var tur=_sulamaGunTuru(c,tarih);
   var h='<div class="modal-bg" onclick="if(event.target===this) closeWarnBox();"><div class="modal">'
     +'<div style="font-weight:700;font-size:17px;margin-bottom:4px;">'+esc(c.oda)+' — Sulamayı iptal et</div>'
-    +'<div class="muted" style="font-size:12px;margin-bottom:10px;">'+fmtDate(tarih)+' için bir sulama bilinçli olarak iptal ediliyor — bu bir ihmal değil, bilinçli bir üretim kararı olarak kaydedilir, "yapılmadı" görünmez. Bir sebep seç:</div>';
-  SULAMA_IPTAL_SEBEPLERI.forEach(function(s){
-    h+='<button class="btn ghost" style="width:100%;margin-bottom:6px;text-align:left;" onclick="sulamaGorevIptalKaydet(\''+cid+'\',\''+esc(s).replace(/'/g,"\\'")+'\',\''+tarih+'\')">'+esc(s)+'</button>';
-  });
-  h+='<input type="text" id="sgi_diger" placeholder="Diğer sebep (yaz)" style="margin-top:4px;">'
-    +'<div class="row" style="margin-top:10px;"><button class="btn" style="background:var(--red);border-color:var(--red);" onclick="sulamaGorevIptalDigerKaydet(\''+cid+'\',\''+tarih+'\')">İptal Et (yazdığım sebep)</button>'
-    +'<button class="btn ghost" onclick="closeWarnBox()">Vazgeç</button></div>'
+    +'<div class="muted" style="font-size:12px;margin-bottom:10px;">'+fmtDate(tarih)+' için bir sulama bilinçli olarak iptal ediliyor — bu bir ihmal değil, bilinçli bir üretim kararı olarak kaydedilir, "yapılmadı" görünmez. Bir sebep seç:</div>'
+    +erteleNedenSeciciHTML(tur, function(nedenAdi){ return "sulamaGorevIptalKaydet('"+cid+"','"+nedenAdi.replace(/'/g,"\\'")+"','"+tarih+"')"; }, 'sgi_diger', "sulamaGorevIptalDigerKaydet('"+cid+"','"+tarih+"')")
+    +'<button class="btn ghost" style="width:100%;margin-top:8px;" onclick="closeWarnBox()">Vazgeç</button>'
     +'</div></div>';
   wm.innerHTML=h;
 }
@@ -8046,16 +8253,7 @@ function sulamaGorevIptalUygula(cid, sebep, tarih){
   if(!sebep){ toast("Sebep zorunlu"); return; }
   var c=loadData().cycles.find(function(x){return x.id===cid;}); if(!c) return;
   tarih = tarih || todayISO();
-  var oneri=protokolOneri(c,tarih)||"";
-  if(!c.gunluk) c.gunluk=[];
-  var gun=c.gunluk.find(function(g){return g.tarih===tarih;});
-  if(!gun){ gun={tarih:tarih}; c.gunluk.push(gun); }
-  gun.sulama=""; gun.su="";
-  gun.sulamaDurum="iptal"; gun.sulamaAciklama=sebep; gun.sulamaOrijinal=oneri;
-  gun.sulamaKim=kimNeZamanEtiketi();
-  c.gunluk.sort(function(a,b){ return cmpDate(a.tarih,b.tarih); });
-  gunlukNotTariheEkle(c, tarih, "Sulama iptal edildi (neden: "+sebep+") — "+gun.sulamaKim);
-  touchCycle(c); saveData(); closeWarnBox(); toast("Sulama \"iptal edildi\" olarak kaydedildi"); render();
+  _sulamaKararKaydet(c, tarih, "iptal", "", sebep);
 }
 /* ==================== Günlük Tur — sadeleştirilmiş sulama akışı ====================
    Kullanıcı isteği: sulama kutusu (su/doz kaydırıcıları, ilaç seçimi, serbest
@@ -8146,14 +8344,17 @@ function sulamaDuzenleFormuHTML(c, ge, oneri, tarih){
    "yeniden düzenle" ile forma geri dönülebilir. */
 function sulamaSonucOzetiHTML(c, ge){
   var uygulanan=((numParse(ge.su)>0?ge.su+" lt su":"")+(ge.sulama?(" "+ge.sulama):"")).trim();
+  var aiRozet = ge.sulamaAIVerdict ? erteleAIBadgeHTML({seviye:ge.sulamaAIVerdict, aciklama:ge.sulamaAIAciklama}) : '';
   if(ge.sulamaDurum==="iptal"){
     return '<div style="margin:4px 0 8px;padding:9px 11px;background:#fff3e0;border-radius:8px;font-size:13.5px;color:#8a5a1f;">'
       + '❌ <b>İptal edildi</b>'+(ge.sulamaAciklama?('<div style="font-size:12px;opacity:.85;margin-top:2px;">'+esc(ge.sulamaAciklama)+'</div>'):'')
+      + aiRozet
       + '<span style="float:right;text-decoration:underline;cursor:pointer;font-size:12px;" onclick="turSulamaDuzenleAc(\''+c.id+'\')">yeniden düzenle</span></div>';
   }
   if(ge.sulamaDurum==="degistirildi"){
     return '<div style="margin:4px 0 8px;padding:9px 11px;background:#e8f3ff;border-radius:8px;font-size:13.5px;color:#1d4ed8;">'
       + '✏️ <b>Değiştirildi:</b> '+esc(uygulanan)+(ge.sulamaAciklama?('<div style="font-size:12px;opacity:.85;margin-top:2px;">'+esc(ge.sulamaAciklama)+'</div>'):'')
+      + aiRozet
       + '<span style="float:right;text-decoration:underline;cursor:pointer;font-size:12px;" onclick="turSulamaDuzenleAc(\''+c.id+'\')">yeniden düzenle</span></div>';
   }
   return '<div style="margin:4px 0 8px;padding:9px 11px;background:var(--green-soft);border-radius:8px;font-size:13.5px;color:var(--green-dark);">'
@@ -9268,8 +9469,9 @@ function sulamaDurumBadgeHTML(r){
   if(!r || !r.sulamaDurum) return "";
   var iptal=r.sulamaDurum==="iptal";
   var renk=iptal?"#8a5a1f":"#1d4ed8", bg=iptal?"#fff3e0":"#e8f3ff";
-  return '<div style="margin-top:2px;font-size:11px;color:'+renk+';background:'+bg+';display:inline-block;padding:1px 6px;border-radius:6px;">'
-    +(iptal?'❌ İptal edildi':'✏️ Değiştirildi')+(r.sulamaAciklama?(': '+esc(r.sulamaAciklama)):'')
+  var aiIkon = r.sulamaAIVerdict ? ((r.sulamaAIVerdict==="yesil"?"🟢":(r.sulamaAIVerdict==="kirmizi"?"🔴":"🟡"))+" ") : "";
+  return '<div style="margin-top:2px;font-size:11px;color:'+renk+';background:'+bg+';display:inline-block;padding:1px 6px;border-radius:6px;" title="'+esc(r.sulamaAIAciklama||"")+'">'
+    +aiIkon+(iptal?'❌ İptal edildi':'✏️ Değiştirildi')+(r.sulamaAciklama?(': '+esc(r.sulamaAciklama)):'')
     +(r.sulamaKim?(' <span style="opacity:.75;">('+esc(r.sulamaKim)+')</span>'):'')+'</div>';
 }
 /* Kullanıcı isteği: oda detayındaki Günlük Kayıt tablosu, her ertelenmiş/
