@@ -650,7 +650,7 @@ function hasatTartiGetir(oda, tur){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v390";
+var APP_VER = "v391";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -1886,7 +1886,17 @@ function adimTamamla(c, idx, opts){
      halde oda hem "boşaltıldı" (protokolde) hem "hâlâ aktif" (her yerde) görünür.
      Flaş adımları (flas1/flas1bitis/flasarasi/flas2/flas2bitis) ayrı üst-seviye
      alana ihtiyaç duymaz, c.adimDetay zaten SSOT olarak yeterli. */
-  if(alanKey==="hava"){ if(!c.havaBaslangic) c.havaBaslangic=tarih; }
+  if(alanKey==="hava"){
+    if(!c.havaBaslangic) c.havaBaslangic=tarih;
+    /* SSOT: havaya başlama TEK yazma kapısından geçtiği için (Günlük Tur'daki
+       Başlat kartı, Bilgileri Düzenle formu, ileride eklenecek her yeni yol),
+       varsayılan havalandırma planı burada, merkezi olarak kurulur — sadece
+       Başlat kartına bağlı kalırsa "Bilgileri Düzenle"den girilen hava tarihi
+       planı hiç oluşturmazdı (kullanıcı raporu: "otomatik havalandırma planı
+       çıkmıyor"). havaPlaniOtomatikOlustur zaten var olan bir planın üzerine
+       yazmaz (idempotent). */
+    havaPlaniOtomatikOlustur(c);
+  }
   else if(alanKey==="bosaltma"){ if(!c.bosaltimTarihi) c.bosaltimTarihi=tarih; }
   else if(alanKey && ["poset","hasat","kompostindirme","flas1","flas1bitis","flasarasi","flas2","flas2bitis","bosaltma"].indexOf(alanKey)<0){ c[alanKey+"Tarihi"]=tarih; }
 
@@ -8590,8 +8600,9 @@ function havaBaslatKaydet(cid){
   if(saat) detayParcalar.push("Saat: "+saat);
   detayParcalar.push("Yöntem: "+yontem);
   if(notTxt) detayParcalar.push(notTxt);
-  adimTamamla(c, hi, {tarih:todayISO(), not:detayParcalar.join(" · "), sessiz:true});
-  var planOlustu=havaPlaniOtomatikOlustur(c);
+  var hadPlan=!!(c.hava && c.hava.length);
+  adimTamamla(c, hi, {tarih:todayISO(), not:detayParcalar.join(" · "), sessiz:true}); /* adimTamamla SSOT'u havalandırma planını da kurar (bkz. yukarı) */
+  var planOlustu=!hadPlan && !!(c.hava && c.hava.length);
   gunlukGorevNotEkle(c, "Havaya Başlama — 🟢 Başlatıldı"+(saat?(" ("+saat+")"):"")+" · "+yontem+(notTxt?(" — "+notTxt):"")+" — "+kimNeZamanEtiketi());
   touchCycle(c); saveData(); closeWarnBox();
   toast("💨 Havaya başlandı — ilk sulama geri sayımı başladı"+(planOlustu?" · 5 günlük havalandırma planı oluşturuldu":""));
