@@ -650,7 +650,7 @@ function hasatTartiGetir(oda, tur){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v392";
+var APP_VER = "v393";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -2518,13 +2518,13 @@ function kontrolKararSec(cid, idx, secim){
    aittir. Kompost sıcaklığı/amonyak/nem BİLEREK gösterilmiyor: bu aşamaya
    gelindiğinde zaten kontrol edilmiş/uygun olmaları gerekir, tek gerçek
    kriter sarımın yeterliliği. */
-function turHavaBaslamaKartHTML(c, sd){
+function turHavaBaslamaKartHTML(c, sd, gosterimTarihi){
   var tarih=sd.t;
   return '<div style="margin-top:8px; padding:10px; background:#eef6ff; border:1.5px solid #1d4ed8; border-radius:10px;">'
     + '<div style="font-size:12px; font-weight:700; color:#1d4ed8;">📋 Karar Bekleyen İşlem</div>'
     + '<div style="font-size:16px; font-weight:700; margin-top:2px;">💨 Havaya Başlama</div>'
     + '<div style="font-size:11.5px; color:var(--muted); margin-top:8px;">Önerilen Tarih</div>'
-    + '<div style="font-size:15px; font-weight:600;">'+fmtDate(tarih)+(tarih<todayISO()?' <span style="color:#c0291f;font-weight:600;">(gecikti)</span>':'')+'</div>'
+    + '<div style="font-size:15px; font-weight:600;">'+fmtDate(tarih)+(tarih<(gosterimTarihi||todayISO())?' <span style="color:#c0291f;font-weight:600;">(gecikti)</span>':'')+'</div>'
     + '<div style="font-size:11px; color:var(--muted); font-style:italic; margin-top:2px;">Protokole göre önerilen tarihtir.</div>'
     + (can("edit") ? (
         '<div style="font-size:13.5px; font-weight:600; margin-top:10px;">Bugün havaya başlanıyor mu?</div>'
@@ -2576,24 +2576,30 @@ var GUNLUK_KONTROL_LISTESI = {
   "Bezelye boyutu":   ["Hastalık belirtisi kontrol et.", "Hasat ekibini hazırla.", "Su/kalsiyum uygulamasını unutma."],
   "Ceviz boyutu":     ["Hastalık belirtisi kontrol et.", "Hasat ekibi ve kasaları hazırla.", "Son su uygulamasını (sodyum) unutma."]
 };
-function bugunkuKontrollerHTML(c){
-  var liste=GUNLUK_KONTROL_LISTESI[stageOf(c).t];
+function bugunkuKontrollerHTML(c, tarih){
+  var liste=GUNLUK_KONTROL_LISTESI[stageAtDate(c, tarih||todayISO()).t];
   if(!liste || !liste.length) return "";
   return '<div style="margin-top:10px;padding-top:8px;border-top:1px solid #d7e6f2;">'
     + '<div style="font-size:12px;font-weight:700;color:#1d4ed8;">Bugünkü Kontroller</div>'
     + liste.map(function(x){ return '<div style="font-size:13px;margin-top:3px;">• '+esc(x)+'</div>'; }).join('')
     + '</div>';
 }
-function turFlas1TahminKartHTML(c){
+/* gosterimTarihi (opsiyonel): Günlük Tur'da üstteki tarih değiştirilince (kullanıcı
+   isteği: "tarihi değiştiriyorum ama aşağıdaki bilgiler değişmiyor") kalan gün/
+   hedef sıcaklık-CO₂/bugünkü kontroller o güne göre yeniden hesaplanır — tahmin
+   tarihinin KENDİSİ (t.tarih) değişmez, sadece "oradan oraya kaç gün var" ve
+   "o gün için hedef ne" görünümü değişir. Verilmezse gerçek bugün kullanılır. */
+function turFlas1TahminKartHTML(c, gosterimTarihi){
   var t=tahminiFlas1Tarihi(c); if(!t) return "";
-  var kalan=daysBetween(todayISO(), t.tarih);
+  var g=gosterimTarihi||todayISO();
+  var kalan=daysBetween(g, t.tarih);
   var durum = t.kayma<0 ? {ikon:"🔵", txt:"Beklenenden hızlı"} : (t.kayma>0 ? {ikon:"🟡", txt:"Beklenenden yavaş"} : {ikon:"🟢", txt:"Gelişim normal"});
   /* Bugünkü hedef sıcaklık/CO₂: Başlat → Havalandırma Planı ekranında kurulan
      plandan (c.hava, SSOT — aynı veriyi Oda Detayı tablosu da okur) geliyor. */
-  var hedefSatir=havaHedefSatiri(c);
+  var hedefSatir=havaHedefSatiri(c, g);
   var hedefHTML = hedefSatir ? (
-    '<div style="font-size:13.5px; margin-top:6px;">🌡️ Bugünkü hedef sıcaklık: <b>'+esc(hedefSatir.hedefC)+'°</b></div>'
-    + ((hedefSatir.co2alt||hedefSatir.co2ust) ? ('<div style="font-size:13.5px; margin-top:2px;">🌬️ Bugünkü hedef CO₂: <b>'+esc(hedefSatir.co2alt||"?")+'-'+esc(hedefSatir.co2ust||"?")+'</b></div>') : '')
+    '<div style="font-size:13.5px; margin-top:6px;">🌡️ '+(g===todayISO()?"Bugünkü":fmtDate(g)+" için")+' hedef sıcaklık: <b>'+esc(hedefSatir.hedefC)+'°</b></div>'
+    + ((hedefSatir.co2alt||hedefSatir.co2ust) ? ('<div style="font-size:13.5px; margin-top:2px;">🌬️ '+(g===todayISO()?"Bugünkü":fmtDate(g)+" için")+' hedef CO₂: <b>'+esc(hedefSatir.co2alt||"?")+'-'+esc(hedefSatir.co2ust||"?")+'</b></div>') : '')
   ) : '';
   return '<div style="margin-top:8px; padding:10px; background:#eef6ff; border:1.5px solid #1d4ed8; border-radius:10px;">'
     + '<div style="font-size:12px; font-weight:700; color:#1d4ed8;">🍄 Tahmini 1. Flaş</div>'
@@ -2602,12 +2608,12 @@ function turFlas1TahminKartHTML(c){
     + '<div style="font-size:13.5px; margin-top:2px;">'+durum.ikon+' '+durum.txt+'</div>'
     + hedefHTML
     + '<div style="font-size:11px; color:var(--muted); font-style:italic; margin-top:6px;">Bu tarih protokol ve mevcut gelişim verilerine göre hesaplanmış tahmindir. Gerçek tarih biyolojik gelişime göre değişebilir.</div>'
-    + bugunkuKontrollerHTML(c)
+    + bugunkuKontrollerHTML(c, g)
     + '</div>';
 }
-function turSiradakiAdimHTML(c){
+function turSiradakiAdimHTML(c, gosterimTarihi){
   var h="";
-  var flas1Kart=turFlas1TahminKartHTML(c);
+  var flas1Kart=turFlas1TahminKartHTML(c, gosterimTarihi);
   h += flas1Kart;
   /* GENEL SIRADAKİ İŞLEM: eskiden bu bilgi SADECE Odalar > Protokol Özeti'nde
      görünüyordu, Günlük Tur ekranında hiç yoktu — sadece bir Şartlı Kural
@@ -2619,6 +2625,7 @@ function turSiradakiAdimHTML(c){
      başlayana kadar bu blok TAMAMEN devre dışı kalır — yukarıdaki Tahmini
      1. Flaş kartı tek biyolojik hedef olarak yeterlidir, ikisi birlikte
      (biri kilometre taşı, biri tek tek protokol tarihi) çelişkili görünürdü. */
+  var gTarih=gosterimTarihi||todayISO();
   if(!flas1Kart) try{
     var sd=siradakiProtokolAdimi(c);
     if(sd){
@@ -2629,7 +2636,7 @@ function turSiradakiAdimHTML(c){
            — bilgi kartı yerine doğrudan Başlat/Ertele kararı gösterilir, tek
            aksiyon budur (mesafe filtresi burada da uygulanmaz, tirmikHavaArasiMi
            ile aynı pencere). */
-        h += turHavaBaslamaKartHTML(c, sd);
+        h += turHavaBaslamaKartHTML(c, sd, gTarih);
       } else {
       var sdErt=(c.ertele&&c.ertele["p"+sd.idx])?c.ertele["p"+sd.idx]:0;
       var sdTarih=sd.t; /* siradakiProtokolAdimi zaten ertele'yi t içine katıyor */
@@ -2639,12 +2646,12 @@ function turSiradakiAdimHTML(c){
          iş yaklaşınca (yarın, bugün veya zaten gecikmiş) gösterilir; daha
          uzak bir tarihse sessizce gizlenir, gün yaklaştıkça kendiliğinden
          belirir. */
-      var sdOffset=daysBetween(todayISO(), sdTarih);
+      var sdOffset=daysBetween(gTarih, sdTarih);
       if(sdOffset===null || sdOffset<=1){
         h += '<div style="margin-top:8px; padding:8px; background:#eef6ff; border:1px solid #b9d7f5; border-radius:8px;">'
           + '<div style="font-size:12px; font-weight:700; color:#1d4ed8;">📋 Sıradaki işlem</div>'
           + '<div style="font-size:13.5px;margin-top:3px;"><b>'+esc(sd.txt)+'</b></div>'
-          + '<div style="font-size:12px;color:var(--muted);">Planlanan: '+fmtDate(sdTarih)+(sdTarih<todayISO()?' <span style="color:#c0291f;font-weight:600;">(gecikti)</span>':'')+'</div>'
+          + '<div style="font-size:12px;color:var(--muted);">Planlanan: '+fmtDate(sdTarih)+(sdTarih<gTarih?' <span style="color:#c0291f;font-weight:600;">(gecikti)</span>':'')+'</div>'
           + '</div>';
       }
       }
@@ -9247,9 +9254,12 @@ function turOdaKartIcHTML(c, ge, showExtra){
   }
   /* Havaya başlandıysa ve o gün için otomatik/elle bir havalandırma planı
      varsa, mühendis ölçümü yazmadan ÖNCE bugünkü hedefi görsün — Kritik
-     Uyarılar'a girmeden de burada direkt aksiyon alabilsin. */
-  var hedefBugun = airStarted(c) ? havaHedefSatiri(c) : null;
-  var hedefKutusu = hedefBugun ? ('<div style="margin:4px 0 8px; padding:7px 9px; background:#fff3e0; border:1px solid #f0c98a; border-radius:8px; font-size:13.5px; color:#8a5a1f;">🎯 <b>Bugünkü hedef:</b> Oda '+esc(hedefBugun.hedefC)+'°'+((hedefBugun.co2alt||hedefBugun.co2ust)?(' · CO₂ '+esc(hedefBugun.co2alt||"?")+'-'+esc(hedefBugun.co2ust||"?")):'')+'</div>') : '';
+     Uyarılar'a girmeden de burada direkt aksiyon alabilsin. Üstteki tarih
+     değiştirilirse (_turTarihVal) bu kutu da o güne göre güncellenir —
+     kullanıcı isteği: "tarihi değiştiriyorum ama aşağıdaki bilgiler değişmiyor". */
+  var turGosterimTarihi=_turTarihVal||todayISO();
+  var hedefBugun = airStarted(c) ? havaHedefSatiri(c, turGosterimTarihi) : null;
+  var hedefKutusu = hedefBugun ? ('<div style="margin:4px 0 8px; padding:7px 9px; background:#fff3e0; border:1px solid #f0c98a; border-radius:8px; font-size:13.5px; color:#8a5a1f;">🎯 <b>'+(turGosterimTarihi===todayISO()?"Bugünkü hedef":fmtDate(turGosterimTarihi)+" hedefi")+':</b> Oda '+esc(hedefBugun.hedefC)+'°'+((hedefBugun.co2alt||hedefBugun.co2ust)?(' · CO₂ '+esc(hedefBugun.co2alt||"?")+'-'+esc(hedefBugun.co2ust||"?")):'')+'</div>') : '';
   return basHTML+'<div class="muted" style="margin-bottom:6px;">Önceki: '+esc(last)+'</div>'
     +hedefKutusu
     +'<div class="field-row"><div><label>Komp °C alt</label><input type="number" step="0.1" inputmode="decimal" class="tur_komp" value="'+esc(ge.kompostC||"")+'"'+oi+'></div>'
@@ -9263,7 +9273,7 @@ function turOdaKartIcHTML(c, ge, showExtra){
         + '<input type="hidden" class="tur_sulama" value="'+esc(ge.sulama||"")+'">')
       : suKapaliMesajiHTML(c)
         +'<input type="hidden" class="tur_su" value=""><input type="hidden" class="tur_sulama" value="'+esc(ge.sulama||"")+'">')
-    +turSiradakiAdimHTML(c)
+    +turSiradakiAdimHTML(c, turGosterimTarihi)
     +turNotAlaniHTML(c)
     +(showExtra?hasatTakipKart(c):'');
 }
@@ -14167,9 +14177,14 @@ function renderCompare(oda){
    düşüş süresi bittiyse) null döneriz. Aksi halde son günün hedefi (örn. 18°)
    süresiz gösterilmeye devam eder — hâlbuki o noktadan sonra artık "kademeli
    hedef" değil, sabit rejim dönemidir; ayrı bir uyarı kapsamı olmamalı. */
-function havaHedefSatiri(c){
+/* tarih (opsiyonel): hangi güne ait hedefin isteneceği — verilmezse bugün.
+   Günlük Tur'da mühendis üstteki tarihi değiştirip "o gün ne olacaktı"
+   önizlemesi yapabilsin diye (kullanıcı isteği: "tarihi değiştiriyorum ama
+   aşağıdaki bilgiler değişmiyor") — gerçek aksiyonlar (plan kaydı vb.) her
+   zaman todayISO() ile çağrılmaya devam eder, sadece GÖRÜNTÜLEME buradan tarih alır. */
+function havaHedefSatiri(c, tarih){
   if(!c.hava||!c.hava.length) return null;
-  var today=todayISO(), best=null, sonTarih=null;
+  var today=tarih||todayISO(), best=null, sonTarih=null;
   c.hava.forEach(function(r){
     if(!sonTarih || r.tarih>sonTarih) sonTarih=r.tarih;
     if(r.tarih<=today && (!best||r.tarih>best.tarih)) best=r;
@@ -14178,8 +14193,8 @@ function havaHedefSatiri(c){
   if(!best) c.hava.forEach(function(r){ if(!best||r.tarih<best.tarih) best=r; });
   return best;
 }
-function havaHedef(c){
-  var best=havaHedefSatiri(c);
+function havaHedef(c, tarih){
+  var best=havaHedefSatiri(c, tarih);
   return best?numParse(best.hedefC):null;
 }
 
