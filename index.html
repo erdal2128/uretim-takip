@@ -650,7 +650,7 @@ function hasatTartiGetir(oda, tur){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v378";
+var APP_VER = "v379";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -1637,7 +1637,7 @@ function protokolReferansTarihi(c, ref, callerRol, _visiting){
       base=addDays(c.gelisTarihi,getSet(c).offToprak); /* varsayılan/self-referential durum */
     }
     /* Adımın kendisi TOPRAK ise kendi ertelemesini burada eklemeyiz — çağıran
-       (_adimiYarinaTasi, protokolGorevErtele vb.) bunu ayrıca ekliyor. Eklersek
+       (_adimiYarinaTasi vb.) bunu ayrıca ekliyor. Eklersek
        erteleme çift sayılır. Sadece BAŞKA bir adım (örn. "1000 lt su") toprağa
        referans veriyorsa, toprağın ertelemesini bu adıma da yansıtırız. */
     if(callerRol!=="toprak"){
@@ -2414,7 +2414,7 @@ function protokolBugunAc(cid, idx, sebep){
   touchCycle(c); saveData(); toast("Bugün için erken açıldı: "+s.txt); render();
 }
 /* Şartlı kuralın "ertele" yönü: koşul gerçekleşirse (mühendis onaylarsa) hedef işi 1 gün erteler.
-   protokolGorevErtele ile aynı mantık ama açıklaması kuralın kendi metninden geliyor; puan kırılmaz
+   yarinErteleKaydet ile aynı mantık ama açıklaması kuralın kendi metninden geliyor; puan kırılmaz
    (biyolojik/kalite kaynaklı erteleme sayılır — kompost sıcak, sarım zayıf gibi). */
 /* Bir adım ŞU AN ertelenirse GERÇEKTE hangi güne geleceğini hesaplar (yan etkisiz —
    c.ertele'ye YAZMAZ, sadece önizleme/uygulama için tek bir SSOT hesap sağlar).
@@ -2522,7 +2522,6 @@ function turSiradakiAdimHTML(c){
           + '<div style="font-size:12px; font-weight:700; color:#1d4ed8;">📋 Sıradaki işlem</div>'
           + '<div style="font-size:13.5px;margin-top:3px;"><b>'+esc(sd.txt)+'</b></div>'
           + '<div style="font-size:12px;color:var(--muted);">Planlanan: '+fmtDate(sdTarih)+(sdTarih<todayISO()?' <span style="color:#c0291f;font-weight:600;">(gecikti)</span>':'')+'</div>'
-          + (can("edit")?('<button class="btn small" style="margin-top:6px;" onclick="planTarihiDegistirAc(\''+c.id+'\','+sd.idx+')">📅 Planla</button>'):'')
           + '</div>';
       }
     }
@@ -2541,9 +2540,9 @@ function turSiradakiAdimHTML(c){
       var deger=son?son[k.otoAlan]:null;
       olcumTxt='<div class="muted" style="font-size:11px;margin-top:2px;">Son ölçüm: '+esc(deger||"—")+' ('+(k.otoOp==="<"?"< ":"> ")+k.otoDeger+' eşiği)</div>';
     }
-    /* Bare "1 gün ertele" yerine: sıradaki işlem + planlanan tarih + "Planla"
-       (Odalar > Protokol Özeti'ndeki AYNI zengin tarih-seçici — tarih değişince
-       yön tespit edilip gerekçe sorulur, yoksa hiçbir şey yapılmaz). */
+    /* Kullanıcı isteği: erteleme/planlama işlemleri sadece Oda Detayı →
+       Üretim Protokolü sayfasında yapılabilir — buradaki "Planla" butonu
+       kaldırıldı, sadece bilgilendirme kalır. */
     var hedefStep=getProtokol()[sr.hedefIdx];
     var base=hedefStep?protokolTarih(c,hedefStep):null;
     var ert=(c.ertele&&c.ertele["p"+sr.hedefIdx])?c.ertele["p"+sr.hedefIdx]:0;
@@ -2554,14 +2553,12 @@ function turSiradakiAdimHTML(c){
       + '<div style="font-size:12.5px;margin-top:6px;">Sıradaki işlem: <b>'+esc(sr.hedefTxt)+'</b></div>'
       + (sr.atlanan && sr.atlanan.length?('<div style="font-size:11.5px;color:var(--muted);margin-top:2px;">(Bu kuralın asıl hedefi "'+esc(sr.kuralHedefTxt)+'" idi, ama önce '+sr.atlanan.map(esc).join(", ")+' yapılmalı — sıradaki gerçek adım gösteriliyor)</div>'):'')
       + (planliTarih?('<div style="font-size:12.5px;color:var(--muted);">Planlanan: '+fmtDate(planliTarih)+'</div>'):'')
-      + (can("edit")?('<button class="btn small" style="margin-top:6px;" onclick="planTarihiDegistirAc(\''+c.id+'\','+sr.hedefIdx+')">📅 Planla</button>'):'')
       + '</div>';
     }catch(err){
       console.error("Şartlı kural kartı hesaplanamadı:", err);
       h += '<div style="margin-top:8px; padding:8px; background:#fff6e5; border:1px solid #e8c874; border-radius:8px;">'
         + '<div style="font-size:13px; font-weight:600; color:#8a5a1f;">⚠️ '+esc(sr.kural.aciklama)+'</div>'
         + '<div style="font-size:12.5px;margin-top:6px;">Sıradaki işlem: <b>'+esc(sr.kural.hedefTxt)+'</b></div>'
-        + (can("edit")?('<button class="btn small" style="margin-top:6px;" onclick="planTarihiDegistirAc(\''+c.id+'\','+sr.hedefIdx+')">📅 Planla</button>'):'')
         + '</div>';
     }
   });
@@ -2598,58 +2595,25 @@ function turSiradakiAdimHTML(c){
           var iptalBtn = (stSu && (stSu.tip==="ilac"||stSu.tip==="su") && can("edit"))
             ? ('<button class="btn ghost small" style="padding:3px 8px;color:var(--red);border-color:var(--red);" onclick="sulamaGorevIptalAc(\''+c.id+'\',\''+yarinTarih+'\')">❌ İptal Et</button> ')
             : '';
-          /* Onaylanmamış (henüz KIRMIZI) bir işi mühendis erteleyebilir de —
-             örn. sarım zayıfsa toprak/su gibi adımlar bir gün geriye alınır.
-             Onaylanmış işi ertelemek istiyorsa önce "Geri al" der (akış net kalır).
-             Tekrarlı (aralık bazlı, örn. "her gün Serenade") kurallar bu tekli
-             1-gün ertele modeline uymaz — buton göstermek yanıltıcı olurdu.
-             Kullanıcı isteği: sulama "Değiştir" ile AYNI mantık — tek bir Ertele
-             (1 gün, gerekçe serbest yazılır) + Planla (takvimden tarih seç). Hazır
-             "sarım/gelişme yavaş" vs "diğer" seçimi kaldırıldı. Erteleme/Planla
-             butonları Onayla/✎ ile AYNI satırdaki flex-wrap grubuna eklenir —
-             ayrı bir <div> satırı ZORLA ikinci satıra düşürüyordu, oysa çoğu
-             telefonda hepsi tek satıra sığıyor (sığmazsa kendiliğinden sarar). */
+          /* Kullanıcı isteği: erteleme/planlama işlemleri sadece Oda Detayı →
+             Üretim Protokolü sayfasında yapılabilir. Bu kart artık sadece
+             Onayla/Değiştirerek onayla/İptal Et (ad-hoc oda işlerinde Ertele)
+             sunar — protokol adımı Ertele/Planla ve "asıl tarihe dön" buradan
+             kaldırıldı, tek kontrol noktası Üretim Protokolü tablosu. */
           var ertBtnsInline='';
-          var erteleFormBlok='';
-          if(can("edit") && !it.onayli && !it.tekrar){
-            if(it.key.indexOf("og_")===0){
-              var ogId=it.key.slice(3);
-              ertBtnsInline='<button class="btn ghost small" style="padding:3px 8px;" onclick="odaGorevErtele(\''+c.id+'\',\''+ogId+'\')">⏰ Ertele</button>';
-            } else if(pIdxSu>=0){
-              if(_yarinErteleAcik[c.id+"_p"+pIdxSu]){
-                erteleFormBlok='<div style="margin:4px 0 6px;padding:8px;background:#fff;border:1px solid #ecd9b0;border-radius:8px;">'
-                  + '<textarea id="yed_'+c.id+'_'+pIdxSu+'" rows="2" placeholder="Erteleme nedeni (örn. sarım zayıf, personel eksik)" style="width:100%;"></textarea>'
-                  + '<div style="display:flex;gap:6px;margin-top:6px;">'
-                  + '<button class="btn small" style="flex:1;" onclick="yarinErteleKaydet(\''+c.id+'\','+pIdxSu+')">Kaydet</button>'
-                  + '<button class="btn ghost small" style="flex:1;" onclick="yarinErteleVazgec(\''+c.id+'\','+pIdxSu+')">Vazgeç</button>'
-                  + '</div></div>';
-              } else {
-                ertBtnsInline='<button class="btn ghost small" style="padding:3px 8px;" onclick="yarinErteleAc(\''+c.id+'\','+pIdxSu+')">⏰ Ertele</button> '
-                  + '<button class="btn ghost small" style="padding:3px 8px;" onclick="planTarihiDegistirAc(\''+c.id+'\','+pIdxSu+')">📅 Planla</button>';
-              }
-            }
-          }
-          /* Bu adım daha önce Ertele ile ileri bir tarihe kaymışsa (kullanıcı
-             raporu: "topraktan 3. gün olması gerekirken 5. gün gösteriyor" —
-             önceki bir erteleme birikmiş), burada da ("Yarın planlanan"
-             kartının kendisinde, kullanıcının zaten baktığı yerde) asıl
-             protokol tarihine tek dokunuşla dönme imkanı sunulur — Oda
-             detayı → Üretim sekmesine gitmeye gerek kalmadan. */
-          var ertBilgi='';
-          if(pIdxSu>=0 && c.ertele && c.ertele["p"+pIdxSu]){
-            var asilTarihYP=protokolTarih(c, stSu);
-            if(asilTarihYP) ertBilgi='<div class="muted" style="font-size:11px;margin-top:1px;">(protokol: '+fmtDate(asilTarihYP)+') <span style="text-decoration:underline;cursor:pointer;color:#1d4ed8;" onclick="protokolErtelemeSifirla(\''+c.id+'\','+pIdxSu+')">↺ asıl tarihe dön</span></div>';
+          if(can("edit") && !it.onayli && !it.tekrar && it.key.indexOf("og_")===0){
+            var ogId=it.key.slice(3);
+            ertBtnsInline='<button class="btn ghost small" style="padding:3px 8px;" onclick="odaGorevErtele(\''+c.id+'\',\''+ogId+'\')">⏰ Ertele</button>';
           }
           return '<div style="display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:6px; row-gap:4px; padding:4px 0;">'
-            + '<span style="font-size:14px; color:'+(it.onayli?'#1d4ed8':'#c0291f')+'; font-weight:'+(it.onayli?'700':'400')+';">'+(it.onayli?(it.degisti?'✎ ':'✓ '):'')+esc(it.txt)+(it.degisti?' <span class="muted" style="font-size:11px;">(protokol: '+esc(it.orijinal)+')</span>':'')+ertBilgi+'</span>'
+            + '<span style="font-size:14px; color:'+(it.onayli?'#1d4ed8':'#c0291f')+'; font-weight:'+(it.onayli?'700':'400')+';">'+(it.onayli?(it.degisti?'✎ ':'✓ '):'')+esc(it.txt)+(it.degisti?' <span class="muted" style="font-size:11px;">(protokol: '+esc(it.orijinal)+')</span>':'')+'</span>'
             + '<span style="flex:none; display:flex; flex-wrap:wrap; gap:6px; justify-content:flex-end;">'
             + iptalBtn
             + '<button class="btn '+(it.onayli?'ghost ':'')+'small" style="padding:3px 10px;" onclick="yarinOnayToggle(\''+c.id+'\',\''+it.key+'\')">'+(it.onayli?'Geri al':'✓ Onayla')+'</button>'
             + '<button class="btn ghost small" style="padding:3px 8px;" title="Değiştirerek onayla" onclick="yarinDegistirKutu(\''+c.id+'\',\''+it.key+'\')">✎</button>'
             + ertBtnsInline
             + '</span>'
-            + '</div>'
-            + erteleFormBlok;
+            + '</div>';
         }).join('')
       + '</div>';
   }
@@ -2687,30 +2651,14 @@ function toggleTask(cid, idx){
   }
   saveData(); render();
 }
-/* Protokol görevini (Tiftik/Toprak/Poşet kesimi vb.) 1 gün ertele.
-   sebep: "biyolojik" (sarım/gelişme zayıf — haklı sebep, puan kırılmaz) veya
-   "diger" (ekip yetişmedi/unutuldu vb. — önlenebilir, puan kırılır). Sebep, o
-   protokol adımına kalıcı olarak kaydedilir ve odaPerformans() bunu okur. */
-function protokolGorevErtele(cid, idx, sebep){
-  if(!can("edit")) return noPerm();
-  var c=loadData().cycles.find(function(x){return x.id===cid;}); if(!c) return;
-  var P=getProtokol(); var st=P[idx]; var adimTxt=(st?st.txt:"bu işlem");
-  var sebepTxt = (sebep==="biyolojik") ? "gelişme/sarım yavaş olduğu için" : "başka bir sebeple";
-  var onizleme=_adimSonrakiErteleTarihi(c, idx);
-  if(!confirm('"'+adimTxt+'" — '+sebepTxt+' '+fmtDate(onizleme)+' tarihine ertelensin mi?')) return;
-  var yeniTarih=_adimiYarinaTasi(c, idx);
-  if(!c.erteleSebep) c.erteleSebep={};
-  c.erteleSebep["p"+idx]=sebep||"diger";
-  var sebepNot = (sebep==="biyolojik") ? " (gelişme/sarım nedeniyle — puan kırılmaz)" : " (ertelendi)";
-  if(st) gunlukGorevNotEkle(c, st.txt+" "+fmtDate(yeniTarih)+" tarihine ertelendi"+sebepNot+" — "+kimNeZamanEtiketi());
-  touchCycle(c); saveData(); toast(fmtDate(yeniTarih)+" tarihine ertelendi"); render();
-}
-/* "Yarın planlanan (protokol)" kartındaki olay adımları için — kullanıcı
-   isteği: sulama "Değiştir" formuyla aynı mantık — hazır "sarım/gelişme
-   yavaş" / "diğer" seçim butonları yerine TEK bir Ertele butonu, gerekçe
-   serbest metin olarak yazılır. Bu manuel erteleme HER ZAMAN normal
-   gecikme sayılır (puanı kırar) — otomatik biyolojik erteleme (sarım
-   kontrolü sorusu, şartlı kurallar) ayrı bir yoldan geçtiği için etkilenmez. */
+/* Protokol adımı erteleme — SADECE Oda Detayı → Üretim Protokolü tablosundan
+   çağrılır (kullanıcı isteği: erteleme/planlama işlemleri tek kontrol
+   noktasında toplansın, diğer ekranlardan kaldırıldı). Sulama "Değiştir"
+   formuyla aynı mantık: hazır "sarım/gelişme yavaş" / "diğer" seçim
+   butonları yerine TEK bir Ertele butonu, gerekçe serbest metin olarak
+   yazılır. Bu manuel erteleme HER ZAMAN normal gecikme sayılır (puanı
+   kırar) — otomatik biyolojik erteleme (sarım kontrolü sorusu, şartlı
+   kurallar) ayrı bir yoldan geçtiği için etkilenmez. */
 var _yarinErteleAcik={};
 function yarinErteleAc(cid, idx){ _yarinErteleAcik[cid+"_p"+idx]=true; render(); }
 function yarinErteleVazgec(cid, idx){ delete _yarinErteleAcik[cid+"_p"+idx]; render(); }
@@ -2867,10 +2815,6 @@ function ustPano(showTasks){
         + '<div style="flex:1; '+ds+'">'
         + '<div style="font-size:13px; font-weight:700; color:'+wc+'; margin-bottom:2px;">'+when+' \u00b7 <span style="color:var(--teal);">'+esc(i.oda)+'</span>'+rozet+'</div>'
         + '<div style="font-size:15px;">'+icon+esc(i.txt)+'</div>'
-        + (can("edit")?('<div style="margin-top:4px; display:flex; gap:6px; flex-wrap:wrap;">'
-            +'<button class="btn ghost small" onclick="protokolGorevErtele(\''+i.cid+'\','+i.idx+',\'biyolojik\')">🌱 Ertele (gelişme/sarım yavaş)</button>'
-            +'<button class="btn ghost small" onclick="protokolGorevErtele(\''+i.cid+'\','+i.idx+',\'diger\')">⏰ Ertele (diğer)</button>'
-            +'</div>'):'')
         + (can("edit")?atamaCokluHTML(i.atama, (function(cid,idx){ return function(val){ return "atamaTaskToggle('"+cid+"',"+idx+",this,'"+val+"')"; }; })(i.cid, i.idx)):(i.atama?'<div class="muted" style="font-size:13px;margin-top:2px;">'+atamaLabel(i.atama)+'</div>':''))
         + (can("edit")?('<div style="margin-top:6px; display:flex; align-items:center; gap:10px; flex-wrap:wrap;">'
             +'<label style="display:inline-flex; align-items:center; gap:4px; font-size:13px; font-weight:normal;"><input type="checkbox" '+(gorevSecili(i)?"checked":"")+' onchange="gorevSecToggle(\''+gorevSecAnahtar(i)+'\')" style="width:20px;height:20px;">Toplu seç</label>'
@@ -4391,7 +4335,7 @@ function yarinHTML(){
       h+='</div>';
       return;
     }
-    if(can("edit")) h+='<div style="white-space:nowrap;"><button class="btn small" onclick="toggleTask(\''+it.cid+'\','+it.idx+')">✓</button> <button class="btn ghost small" onclick="protokolGorevErtele(\''+it.cid+'\','+it.idx+',\'diger\')">→ Ertele</button></div>';
+    if(can("edit")) h+='<div style="white-space:nowrap;"><button class="btn small" onclick="toggleTask(\''+it.cid+'\','+it.idx+')">✓</button></div>';
     h+='</div>';
     if(can("edit")) h+=atamaCokluHTML(it.atama, (function(cid,idx){ return function(val){ return "atamaTaskToggle('"+cid+"',"+idx+",this,'"+val+"')"; }; })(it.cid, it.idx));
     else if(it.atama) h+='<div class="muted" style="font-size:13px;margin-top:2px;">'+atamaLabel(it.atama)+'</div>';
@@ -6189,8 +6133,16 @@ function renderDetail(id){
        hatasının kök nedeniydi). Şimdi tarih hesaplanamasa bile satır GÖRÜNÜR
        kalır, en üstte "⚠️ tarih hesaplanamadı" notuyla — sessiz kayıp yerine
        teşhis edilebilir hata. */
-    return {s:s, idx:idx, t:t, ar:ar, hataVar:(!t && !ar), ert:_ert, tOrijinal:_tRaw};
+    return {s:s, idx:idx, t:t, ar:ar, hataVar:(!t && !ar), ert:_ert, tOrijinal:_tRaw, done:adimGercektenYapildiMi(c, idx, s)};
   }).filter(function(x){ return !x.s.silindi; });
+  /* Kullanıcı isteği: erteleme/planlama işlemleri SADECE bu sayfada (Oda
+     Detayı → Üretim Protokolü) yapılabilsin — Günlük Tur, Bugün listesi ve
+     Odalar > Protokol Özeti'ndeki Ertele/Planla butonları kaldırıldı (bkz.
+     yarinPlanlanan kartı, panoHTML, odaProtokolOzetSatiriHTML). Buradaki tek
+     kontrol noktası olarak, henüz yapılmamış ve tekrarlı (aralık bazlı)
+     olmayan olay/ilaç/su satırlarına Ertele + Planla eklenir — aynı
+     yarinErteleAc/Kaydet + planTarihiDegistirAc fonksiyonları (cid,idx
+     bazlı, "yarın"a özel değil, herhangi bir sayfadan çağrılabilir). */
   function protTabloHTML(baslik, filtre){
     var liste = protAdimlari.filter(filtre).sort(function(a,b){
       if(a.hataVar!==b.hataVar) return a.hataVar?-1:1; /* hatalılar en üstte, gözden kaçmasın */
@@ -6213,9 +6165,25 @@ function renderDetail(id){
         ? ('<div class="muted" style="font-size:11px;margin-top:2px;">(protokol: '+fmtDate(x.tOrijinal)+') '
           +'<span style="text-decoration:underline;cursor:pointer;color:#1d4ed8;" onclick="protokolErtelemeSifirla(\''+c.id+'\','+x.idx+')">geri al</span></div>')
         : '';
+      var aksiyonHTML='';
+      if(can("edit") && !x.hataVar && !x.ar && !x.done && s.tip!=="uyari"){
+        if(_yarinErteleAcik[c.id+"_p"+x.idx]){
+          aksiyonHTML='<div style="margin-top:5px;padding:7px;background:#fffaf0;border:1px solid #ecd9b0;border-radius:8px;">'
+            + '<textarea id="yed_'+c.id+'_'+x.idx+'" rows="2" placeholder="Erteleme nedeni" style="width:100%;"></textarea>'
+            + '<div style="display:flex;gap:6px;margin-top:5px;">'
+            + '<button class="btn small" style="flex:1;" onclick="yarinErteleKaydet(\''+c.id+'\','+x.idx+')">Kaydet</button>'
+            + '<button class="btn ghost small" style="flex:1;" onclick="yarinErteleVazgec(\''+c.id+'\','+x.idx+')">Vazgeç</button>'
+            + '</div></div>';
+        } else {
+          aksiyonHTML='<div style="margin-top:5px;display:flex;gap:6px;flex-wrap:wrap;">'
+            + '<button class="btn ghost small" style="padding:3px 8px;" onclick="yarinErteleAc(\''+c.id+'\','+x.idx+')">⏰ Ertele</button>'
+            + '<button class="btn ghost small" style="padding:3px 8px;" onclick="planTarihiDegistirAc(\''+c.id+'\','+x.idx+')">📅 Planla</button>'
+            + '</div>';
+        }
+      }
       hh += '<tr'+cls+'><td class="red">'+tarihHucre+ertBilgi+'</td>'
         + '<td class="muted">'+reflbl+'</td>'
-        + '<td class="note">'+icon+esc(s.txt)+'</td></tr>';
+        + '<td class="note">'+icon+esc(s.txt)+aksiyonHTML+'</td></tr>';
     });
     hh+='</tbody></table>';
     return hh;
@@ -9103,21 +9071,29 @@ function buildPrintHTML(c){
     + '<div class="alan"><span class="k">Toplam Su</span><span class="v">'+(tuketimOzet(c).su||0)+' lt</span></div>'
     + '</div>';
 
-  /* Yapılan İşlemler: tam genişlik, gün numarasıyla zaman çizelgesi */
+  /* Yapılan İşlemler: tam genişlik, gün numarasıyla zaman çizelgesi.
+     Erteleme/plan-değişikliği ile ilgili ifadeler (kullanıcı isteği) buradan
+     ayrılıp en alttaki ayrı "Notlar" bölümüne taşınır — kalabalık etmesin,
+     erteleme geçmişi tek bir yerde toplu görünsün. */
+  var ERTELE_NOT_RE = /ertele|için plan/i;
   var islemRows=uretimIslemSatirlari(c);
+  var notRows=[];
   (c.gunluk||[]).forEach(function(r){
     var ayr=gunlukSatirAyristir(r);
     if(ayr.uretim.length) islemRows.push({g:gunNo(c,r.tarih), tarih:r.tarih, t:ayr.uretim.join(" · ")});
-    /* İptal/ertele/erken çekme/plan değişikliği notları (gerekçesiyle) — bu
-       zaman çizelgesinde eskiden hiç yer almıyordu, kullanıcı isteği üzerine
-       eklendi (her biri kendi gününde, ayrı satır olarak). */
     if(r.islemNot) (""+r.islemNot).split(" · ").forEach(function(not){
-      if(not.trim()) islemRows.push({g:gunNo(c,r.tarih), tarih:r.tarih, t:not.trim()});
+      not=not.trim(); if(!not) return;
+      (ERTELE_NOT_RE.test(not) ? notRows : islemRows).push({g:gunNo(c,r.tarih), tarih:r.tarih, t:not});
     });
   });
   islemRows.sort(function(a,b){ return a.g-b.g; });
+  notRows.sort(function(a,b){ return a.g-b.g; });
   var zamanCizelgesi = !islemRows.length ? '<div class="muted">İşlem kaydı yok.</div>'
     : '<div class="tl">'+islemRows.map(function(r){
+        return '<div class="tl-item"><span class="tl-gun">'+r.g+'</span><span class="tl-dot">●</span><span class="tl-txt">'+esc(r.t)+'</span></div>';
+      }).join('')+'</div>';
+  var notlarHTML = !notRows.length ? '<div class="muted">Erteleme/plan değişikliği kaydı yok.</div>'
+    : '<div class="tl">'+notRows.map(function(r){
         return '<div class="tl-item"><span class="tl-gun">'+r.g+'</span><span class="tl-dot">●</span><span class="tl-txt">'+esc(r.t)+'</span></div>';
       }).join('')+'</div>';
 
@@ -9151,6 +9127,7 @@ function buildPrintHTML(c){
     +hasatTartiPrintHTML(c)
     +'<h3>G\u00fcnl\u00fck Kay\u0131t</h3><table><thead><tr><th>Tarih</th><th>G\u00fcn<br>(geli\u015f)</th><th>G\u00fcn<br>(toprak)</th><th>Oda \u00b0C</th><th>Komp \u00b0C</th><th>CO\u2082</th><th>\u00dcretim \u0130\u015flemi</th><th>Sulama</th><th>\u0130la\u00e7lama</th></tr></thead><tbody>'+rows+'</tbody></table>'
     +'<h3>Havaland\u0131rma Plan\u0131</h3><table><thead><tr><th>Tarih</th><th>G\u00fcn</th><th>Hedef \u00b0C</th><th>CO\u2082</th></tr></thead><tbody>'+hr+'</tbody></table>'
+    +'<h3>Notlar</h3>'+notlarHTML
     +'</body></html>';
 }
 function printForm(id){
@@ -9399,9 +9376,10 @@ function yaklasanIslerHTML(active){
    yakın aşama olduğu protokolden biliniyor (kesin tarih uydurulmadan sinyal). */
 /* Kompakt tek satır: bu odada son yapılan olay + sıradaki olay + aksiyon
    butonları. Sulama/ilaçlama HARİÇ — sadece protokol kilometre taşları
-   (tiftik/toprak/tırmık/hava/hasat/poşet/kompost indirme). Aksiyon butonları
-   toggleTask/protokolGorevErtele/protokolYarinaCek'i AYNEN çağırır (SSOT,
-   Günlük Tur'daki ile birebir aynı mantık, kod tekrarı yok). */
+   (tiftik/toprak/tırmık/hava/hasat/poşet/kompost indirme). Erteleme/planlama
+   burada YOK — kullanıcı isteği: bu işlemler sadece Oda Detayı → Üretim
+   Protokolü sayfasında yapılır. Sadece tamamlama (toggleTask/onaylaFonk) ve
+   erken yapma kalıyor. */
 /* Sade tarih düzenleme — tiftik/toprak/tırmık'ın "kim yaptı/doğru mu" modalından
    farklı, sadece tarih. Poşet/hava/hasat/kompost indirme gibi adımlarda ve
    zaten yapılmış herhangi bir adımın tarihini düzeltmede kullanılır. Yazma
@@ -9557,14 +9535,13 @@ function odaProtokolOzetSatiriHTML(c){
       h+='<div style="margin-top:3px;font-size:13px;color:var(--muted);">Henüz zamanı gelmedi</div>';
     }
 
-    if(can("edit")){
+    /* Kullanıcı isteği: erteleme/planlama işlemleri sadece Oda Detayı →
+       Üretim Protokolü sayfasında yapılabilir — "Ertele (1 gün)" ve "Tarihi
+       değiştir" buradan kaldırıldı, "Erken Yap" (tamamlama, erteleme değil)
+       kalıyor. */
+    if(can("edit") && !gecikmisVeyaBugun){
       h+='<div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;">';
-      if(gecikmisVeyaBugun){
-        h+='<button class="btn ghost small" style="flex:1;" onclick="protokolGorevErtele(\''+c.id+'\','+sd.idx+',\'diger\')">Ertele (1 gün)</button>';
-      } else {
-        h+='<button class="btn small" style="flex:1;" onclick="'+onaylaFonk+'">Erken Yap</button>';
-      }
-      h+='<button class="btn ghost small" style="flex:1;" onclick="planTarihiDegistirAc(\''+c.id+'\','+sd.idx+')">📅 Tarihi değiştir</button>';
+      h+='<button class="btn small" style="flex:1;" onclick="'+onaylaFonk+'">Erken Yap</button>';
       h+='</div>';
     }
     h+='</div>';
