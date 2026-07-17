@@ -650,7 +650,7 @@ function hasatTartiGetir(oda, tur){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v383";
+var APP_VER = "v384";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -2707,7 +2707,14 @@ function protokolErtelemeSifirla(cid, idx){
   touchCycle(c); saveData(); toast("Asıl tarihe döndürüldü: "+fmtDate(asilTarih)); render();
 }
 
-function ustPano(showTasks){
+/* Kritik ikaz kartları (sıcaklık/ateşlenme/erken poşet) — kullanıcı isteği:
+   bunlar eskiden SADECE Görevler sekmesinde (ustPano üzerinden) görünüyordu,
+   Bugün sekmesinde sadece küçük bir "Görevler →" rozetiyle dolaylı olarak
+   işaret ediliyordu ("kompost ateşlenmesi gibi kritik işlemler bugünde değil,
+   görevlerde çıkıyor" — kullanıcı raporu). Artık ustPano ile Bugün sekmesi
+   (renderList) AYNI bu fonksiyonu çağırıyor — SSOT, kod tekrarı yok, kart iki
+   yerde de birebir aynı. */
+function kritikIkazKartlariHTML(){
   var d=loadData();
   if(d.cycles.filter(function(c){return !c.bosaltimTarihi;}).length===0) return "";
   var h="";
@@ -2767,6 +2774,13 @@ function ustPano(showTasks){
     });
     h+='</div>';
   }
+  h += kompostGelisIkazlariHTML();
+  return h;
+}
+function ustPano(showTasks){
+  var d=loadData();
+  if(d.cycles.filter(function(c){return !c.bosaltimTarihi;}).length===0) return "";
+  var h=kritikIkazKartlariHTML();
   if(showTasks!==false){
   var items=nextTasks();
   var mod = (showTasks==="bugun") ? items.filter(function(i){return !i.done && (i.overdue||i.off===0||i.devamGun);})
@@ -5848,12 +5862,17 @@ function renderList(){
   var active = d.cycles.filter(function(c){return !c.bosaltimTarihi;});
   var passive = d.cycles.filter(function(c){return c.bosaltimTarihi;});
   var h = "";
-  /* Kritik sıcaklık ikazı + bekleyen görev sayısı — özet rozet (detay Görevler sekmesinde) */
+  /* Kritik sıcaklık ikazı + bekleyen görev sayısı — özet rozet (Görevler'e yönlendirir) */
   h += gorevOzetRozet();
   h += backupBanner();
   if(d.cycles.length===0){
     h += '<div class="empty"><div class="big">🍄</div><div>Henüz döngü yok.<br>Yeni bir oda döngüsü başlatmak için aşağıdaki butona dokun.</div></div>';
   } else {
+    /* Kullanıcı isteği: kompost ateşlenmesi/kompost gelişi gibi kritik
+       kontroller eskiden sadece Görevler sekmesinde görünüyordu, Bugün'de
+       sadece dolaylı bir rozetle işaret ediliyordu. Artık asıl kartlar
+       (Görevler'deki ile birebir aynı, SSOT) doğrudan Bugün'ün en üstünde. */
+    h += kritikIkazKartlariHTML();
     h += bugunOzetiHTML(active);
     if(panoMode){
       h += panoHTML(active);
