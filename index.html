@@ -650,7 +650,7 @@ function hasatTartiGetir(oda, tur){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v385";
+var APP_VER = "v386";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -3281,8 +3281,11 @@ function puanRenk(p){ return p>=85?"var(--green)":(p>=70?"var(--amber)":"#c0291f
 /* Kategori/kritik hata/tahmin bloklarının ortak HTML'i — hem oda detayındaki
    puan kartında (puanCardHTML) hem Raporlar > Analiz'deki Oda Analizi'nde
    (odaAnalizHTML) AYNEN kullanılır, tek yerden (gereksiz tekrar yok). */
-function _performansDetayHTML(p){
-  var kategorilerHTML=p.kategoriler.map(function(k){
+/* Kategori listesinin (delta/açıklama kalemleriyle) ortak HTML'i — oda
+   performansı (_performansDetayHTML) ve firma performansı (firmaPerformansDetayHTML)
+   AYNI görsel dili kullanır, tek yerden (gereksiz tekrar yok). */
+function _kategorilerListHTML(kategoriler){
+  return kategoriler.map(function(k){
     var renk=puanRenk(Math.round((k.puan/k.maks)*100));
     var kalemHTML=k.kalemler.length ? k.kalemler.map(function(kl){
       var isaret=kl.delta>0?("+"+kl.delta):(""+kl.delta);
@@ -3295,6 +3298,9 @@ function _performansDetayHTML(p){
       +'<span style="font-weight:700;color:'+renk+';">'+k.puan+'<span class="muted" style="font-weight:400;font-size:12px;"> /'+k.maks+'</span></span>'
       +'</div>'+kalemHTML+'</div>';
   }).join('');
+}
+function _performansDetayHTML(p){
+  var kategorilerHTML=_kategorilerListHTML(p.kategoriler);
 
   var kritikHTML = p.kritikHatalar.length ? (
     '<div style="margin-top:10px;padding:9px 10px;background:#fdf3f3;border:1px solid #f0c9c9;border-radius:8px;">'
@@ -12139,6 +12145,8 @@ function odaAnalizHTML(c){
 }
 var _analizOda=""; /* seçili oda id — Oda Analizi bölümü için */
 function analizOdaSec(id){ _analizOda=id; window.scrollTo(0,0); render(); }
+var _analizFirma=""; /* seçili kompost firması — Firma Analizi bölümü için */
+function analizFirmaSec(firma){ _analizFirma=firma; window.scrollTo(0,0); render(); }
 /* Bugün ekranından tek dokunuşla Üretim Müdürü Raporu'na (Raporlar → Analiz). */
 function acUretimMuduruRaporu(){ _raporKategori="analiz"; go("reports"); }
 
@@ -12155,6 +12163,7 @@ function renderRaporlar(){
   var KATS=[
     {key:"hasat",    ic:"🌾", ad:"Hasat"},
     {key:"analiz",   ic:"📊", ad:"Analiz"},
+    {key:"firma",    ic:"🏭", ad:"Firma"},
     {key:"protokol", ic:"📋", ad:"Protokol"},
     {key:"disari",   ic:"📤", ad:"Dışa Aktar"}
   ];
@@ -12180,6 +12189,14 @@ function renderRaporlar(){
     if(seciliOda) h+=odaAnalizHTML(seciliOda);
     h+=uretimOgrenmesiHTML();
     h+=dusukVerimliDongulerHTML();
+  }
+  else if(_raporKategori==="firma"){
+    h+=firmaSiralamaHTML();
+    var firmaAdlari=tumFirmaAdlari();
+    var fopts='<option value="">— firma seç —</option>'+firmaAdlari.map(function(f){return '<option value="'+esc(f)+'"'+(_analizFirma===f?' selected':'')+'>'+esc(f)+'</option>';}).join('');
+    h+=sectionCard('🔍 Firma Detayı', '<div class="muted" style="margin-bottom:6px;">Tek bir kompost firmasını seçince tüm kategoriler ve karne detaylı gösterilir.</div>'
+      +'<select onchange="analizFirmaSec(this.value)" style="width:100%;padding:9px;">'+fopts+'</select>');
+    if(_analizFirma) h+=firmaPerformansKartiHTML(_analizFirma);
   }
   else if(_raporKategori==="protokol"){
     h+=protokolUygunlukHTML();
@@ -13436,6 +13453,324 @@ function tahminiVerim(c){
   else { f=filoOrtalamaKgTon(); kaynak=f?("filo geneli ortalaması, n="+f.n):null; }
   if(!f) return null;
   return {kg: f.ort*ton, kaynak: kaynak};
+}
+/* ============ Kompost Firma Performans Analizi ============
+   Her firma, geçmiş TÜM tamamlanmış (boşaltılmış + hasat kaydı olan) odaları
+   üzerinden 7 kategoride 100 puan üzerinden değerlendirilir. Hiçbir puan
+   kalıcı olarak SAKLANMAZ — odaPerformans/hasatEgrisiAnaliz'le aynı mimari:
+   her render'da mevcut veriden CANLI hesaplanır, bu yüzden "her yeni oda
+   tamamlandığında puan güncellensin" isteği ekstra bir tetikleyici kodu
+   gerektirmeden kendiliğinden sağlanır. Kategori fonksiyonları mümkün olan
+   yerde MEVCUT oda-bazlı fonksiyonları (SSOT) yeniden kullanır:
+   _puanIklim/_puanMiselGelisimi (v382), hasatEgrisiAnaliz (v385),
+   firmaOrtalamaKgTon/filoOrtalamaKgTon — tekrar hesaplama YAPILMAZ. */
+
+/* 📋 Protokol Uyumu (20) — kompost ortalama kaçıncı günde tiftik/toprak/
+   hava/ilk flaşa ulaşıyor. Tek başına erken ya da geç olmak CEZALANDIRILMAZ
+   (tutarlı bir erken firma hızlı gelişim demek olabilir) — asıl ölçülen
+   TUTARLILIK (sapma): aynı firma bazen çok erken bazen çok geç kalıyorsa
+   (öngörülemezlik) puan kırılır. */
+function _firmaProtokolUyumu(cycles){
+  var maks=20, puanPerCheckpoint=5;
+  var checkpoints=[
+    {key:'tiftik', ad:'Tiftik', takAd:'Tiftik', gercek:function(c){return c.tiftikTarihi;}},
+    {key:'toprak', ad:'Toprak serimi', takAd:'Toprak', gercek:function(c){return c.toprakTarihi;}},
+    {key:'hava', ad:'Hava başlangıcı', takAd:'Hava', gercek:function(c){return c.havaBaslangic;}},
+    {key:'flas1', ad:'İlk flaş başlangıcı', takAd:'1. Flaş', gercek:function(c){return (c.hasat&&c.hasat.length)?hasatBaslangic(c):null;}}
+  ];
+  var puanToplam=0, kalemler=[], bulgular=[];
+  checkpoints.forEach(function(cp){
+    var farklar=[];
+    cycles.forEach(function(c){
+      var tak=beklenenTakvim(c);
+      var row=tak.filter(function(r){return r.ad===cp.takAd;})[0];
+      var beklenen=row?row.beklenen:null, gercek=cp.gercek(c);
+      if(beklenen && gercek){ var d=daysBetween(beklenen,gercek); if(d!=null) farklar.push(d); }
+    });
+    if(farklar.length<2){ puanToplam+=puanPerCheckpoint; return; } /* yeterli veri yok — nötr (tam puan) */
+    var ort=farklar.reduce(function(a,b){return a+b;},0)/farklar.length;
+    var sapma=Math.sqrt(farklar.reduce(function(s,x){return s+Math.pow(x-ort,2);},0)/farklar.length);
+    var puan=Math.max(0, puanPerCheckpoint-Math.min(puanPerCheckpoint, sapma*1.1));
+    if(Math.abs(ort)>4) puan=Math.max(0, puan-1); /* çok büyük ortalama sapma (tutarlı olsa da) küçük ek not */
+    puanToplam+=puan;
+    if(puan<puanPerCheckpoint-0.5){
+      kalemler.push(_kalem(Math.round((puan-puanPerCheckpoint)*10)/10, cp.ad+" zamanlaması tutarsız (ort. "+(ort>=0?"+":"")+ort.toFixed(1)+" gün, sapma ±"+sapma.toFixed(1)+" gün, n="+farklar.length+")"));
+    }
+    bulgular.push({ad:cp.ad, ortalama:ort, sapma:sapma, n:farklar.length});
+  });
+  if(!kalemler.length) kalemler.push(_kalem(0,"Protokol kilometre taşları öngörülebilir zamanlamayla ilerliyor"));
+  puanToplam=Math.max(0,Math.min(maks,Math.round(puanToplam*10)/10));
+  return {puan:puanToplam, maks:maks, kalemler:kalemler, bulgular:bulgular};
+}
+/* 🌡️ Kompost Kalitesi (20) — sıcaklık stabilitesi (_puanIklim, 12p) + amonyak
+   süresi (4p) + misel gelişim düzenliliği/homojenliği (_puanMiselGelisimi, 4p). */
+function _firmaKompostKalitesi(cycles){
+  var maks=20;
+  var sicaklikPuanlar=cycles.map(function(c){return _puanIklim(c).puan;});
+  var miselPuanlar=cycles.map(function(c){return _puanMiselGelisimi(c).puan;});
+  var amonyakGunler=cycles.map(function(c){return (c.gunluk||[]).filter(function(r){return r.amonyak==="Var";}).length;});
+  var ortSicaklikPuan=sicaklikPuanlar.length?(sicaklikPuanlar.reduce(function(a,b){return a+b;},0)/sicaklikPuanlar.length):25;
+  var ortMiselPuan=miselPuanlar.length?(miselPuanlar.reduce(function(a,b){return a+b;},0)/miselPuanlar.length):20;
+  var ortAmonyak=amonyakGunler.length?(amonyakGunler.reduce(function(a,b){return a+b;},0)/amonyakGunler.length):0;
+
+  var sicaklikKismi=(ortSicaklikPuan/25)*12;
+  var miselKismi=(ortMiselPuan/20)*4;
+  var amonyakKismi=4;
+  var kalemler=[];
+  if(ortAmonyak>4){ var d=Math.min(4,(ortAmonyak-4)*0.8); amonyakKismi-=d; kalemler.push(_kalem(-Math.round(d*10)/10, "Ortalama amonyak süresi "+ortAmonyak.toFixed(1)+" gün — uzun")); }
+  else kalemler.push(_kalem(0,"Amonyak süresi ortalama "+ortAmonyak.toFixed(1)+" gün — normal aralıkta"));
+  if(sicaklikKismi<12*0.8) kalemler.push(_kalem(Math.round((sicaklikKismi-12)*10)/10, "Kompost/oda sıcaklığı yönetimi ortalamanın altında (döngü başına ort. iklim puanı "+ortSicaklikPuan.toFixed(0)+"/25)"));
+  if(miselKismi<4*0.8) kalemler.push(_kalem(Math.round((miselKismi-4)*10)/10, "Misel gelişimi düzensizliği görülüyor (döngü başına ort. misel puanı "+ortMiselPuan.toFixed(0)+"/20)"));
+
+  var puan=Math.max(0,Math.round((sicaklikKismi+miselKismi+amonyakKismi)*10)/10);
+  return {puan:puan, maks:maks, kalemler:kalemler, ortSicaklikPuan:ortSicaklikPuan, ortMiselPuan:ortMiselPuan, ortAmonyak:ortAmonyak};
+}
+/* 🌦️ İklim Toleransı (10) — küçük iklim sapmalarının olduğu döngülerle
+   olmadığı döngüler arasında verim farkı var mı (uretimOgrenmesiVeri'deki
+   medyan-bölme deseniyle AYNI yaklaşım). Fark küçükse firma dayanıklı,
+   büyükse küçük hatalarda bile üretim bozuluyor demektir. */
+function _firmaIklimToleransi(cycles){
+  var maks=10;
+  var veri=cycles.map(function(c){
+    var sapmaGun=0;
+    (c.gunluk||[]).forEach(function(r){
+      var ko=numParse(r.kompostC); if(ko==null) return;
+      if(ko>=KOMPOST_KRITIK_UST||ko<=KOMPOST_KRITIK_ALT||ko>=KOMPOST_TEHLIKELI||ko<=KOMPOST_TEHLIKE_ALT) sapmaGun++;
+    });
+    return {sapmaGun:sapmaGun, kgTon:verimOzet(c).kgTon};
+  }).filter(function(x){return x.kgTon!=null;});
+  if(veri.length<4) return {puan:maks, maks:maks, kalemler:[_kalem(0,"Yeterli veri yok (n="+veri.length+") — nötr puan verildi")]};
+  var sirali=veri.slice().sort(function(a,b){return a.sapmaGun-b.sapmaGun;});
+  var medyan=sirali[Math.floor(sirali.length/2)].sapmaGun;
+  var az=veri.filter(function(x){return x.sapmaGun<=medyan;});
+  var cok=veri.filter(function(x){return x.sapmaGun>medyan;});
+  if(az.length<2||cok.length<2) return {puan:maks, maks:maks, kalemler:[_kalem(0,"Sapma dağılımı yetersiz — nötr puan verildi")]};
+  var ortAz=az.reduce(function(s,x){return s+x.kgTon;},0)/az.length;
+  var ortCok=cok.reduce(function(s,x){return s+x.kgTon;},0)/cok.length;
+  var fark=ortAz>0?((ortAz-ortCok)/ortAz*100):0;
+  var puan, aciklama;
+  if(fark<=5){ puan=maks; aciklama="Az sapmalı ve çok sapmalı döngüler arasında verim farkı yok denecek kadar az — küçük iklim dalgalanmalarında üretim stabil kalıyor."; }
+  else if(fark<=15){ puan=maks-3; aciklama="Çok sapmalı döngülerde verim ortalama %"+fark.toFixed(0)+" daha düşük — orta düzey iklim toleransı."; }
+  else { puan=maks-6; aciklama="Çok sapmalı döngülerde verim ortalama %"+fark.toFixed(0)+" daha düşük ("+ortAz.toFixed(0)+" → "+ortCok.toFixed(0)+" kg/ton) — küçük iklim hatalarında bile üretim belirgin bozuluyor."; }
+  puan=Math.max(0,puan);
+  return {puan:puan, maks:maks, kalemler:[_kalem(puan-maks, aciklama)]};
+}
+/* 📈 Hasat Eğrisi (20) — v385'teki hasatEgrisiAnaliz() (0-100/flaş) firma
+   genelinde ortalanıp 20 puana ölçeklenir; ayrı bir eğri analizi TEKRARLANMAZ. */
+function _firmaHasatEgrisi(cycles){
+  var maks=20;
+  var puanlar=[];
+  cycles.forEach(function(c){ [1,2].forEach(function(f){ var a=hasatEgrisiAnaliz(c,f); if(a) puanlar.push(a.puan); }); });
+  if(!puanlar.length) return {puan:maks, maks:maks, kalemler:[_kalem(0,"Hasat eğrisi verisi yetersiz — nötr puan verildi")]};
+  var ort=puanlar.reduce(function(a,b){return a+b;},0)/puanlar.length;
+  var puan=Math.round((ort/100)*maks*10)/10;
+  return {puan:puan, maks:maks, kalemler:[_kalem(Math.round((puan-maks)*10)/10, "Analiz edilen "+puanlar.length+" flaş eğrisinin ortalama yönetim puanı "+ort.toFixed(0)+"/100")]};
+}
+/* ⚖️ Verim (15) — tek başına belirleyici değil (toplam 100'ün %15'i);
+   firmaOrtalamaKgTon/filoOrtalamaKgTon (mevcut) ile filo geneline kıyaslanır. */
+function _firmaVerim(firma){
+  var maks=15;
+  var f=firmaOrtalamaKgTon(firma);
+  if(!f||f.n<2) return {puan:maks, maks:maks, kalemler:[_kalem(0,"Yeterli tamamlanmış döngü yok — nötr puan verildi")]};
+  var filo=filoOrtalamaKgTon();
+  var puan=maks*0.75, aciklama="Ortalama verim "+f.ort.toFixed(0)+" kg/ton (n="+f.n+")";
+  if(filo&&filo.n>=2){
+    var fark=((f.ort-filo.ort)/filo.ort)*100;
+    if(fark>=10){ puan=maks; aciklama+=", filo ortalamasının %"+fark.toFixed(0)+" üzerinde"; }
+    else if(fark>=-5){ puan=maks*0.85; aciklama+=", filo ortalamasına yakın"; }
+    else if(fark>=-15){ puan=maks*0.6; aciklama+=", filo ortalamasının %"+Math.abs(fark).toFixed(0)+" altında"; }
+    else { puan=maks*0.35; aciklama+=", filo ortalamasının belirgin (%"+Math.abs(fark).toFixed(0)+") altında"; }
+  }
+  puan=Math.round(puan*10)/10;
+  return {puan:puan, maks:maks, kalemler:[_kalem(Math.round((puan-maks)*10)/10, aciklama)]};
+}
+/* 🧺 Kalite ve Fire (10) — VARSA (Hasat Takip tartı programından gelen
+   ana90/kestane/duble/dokme/ikinci kayıtları, bkz. hasatTartiGetir)
+   değerlendirilir; kayıt yoksa nötr bırakılır ("varsa değerlendir" isteği). */
+function _firmaKaliteFire(cycles){
+  var maks=10;
+  var toplam=0, kestane=0, duble=0, dokme=0, ikinci=0, kayitSayisi=0;
+  cycles.forEach(function(c){
+    hasatTartiGetir(c.oda, c.tur).forEach(function(k){
+      var t=(k.ana90||0)+(k.kestane||0)+(k.duble||0)+(k.dokme||0)+(k.ikinci||0);
+      toplam+=t; kestane+=(k.kestane||0); duble+=(k.duble||0); dokme+=(k.dokme||0); ikinci+=(k.ikinci||0);
+      kayitSayisi++;
+    });
+  });
+  if(!kayitSayisi||toplam<=0) return {puan:maks, maks:maks, kalemler:[_kalem(0,"Hasat Takip (tartı) verisi bulunmuyor — bu kategori nötr bırakıldı")]};
+  var kucukOrani=(kestane/toplam)*100;
+  var fireOrani=((duble+dokme+ikinci)/toplam)*100;
+  var puan=maks, kalemler=[];
+  if(kucukOrani>15){ var d=Math.min(4,(kucukOrani-15)*0.3); puan-=d; kalemler.push(_kalem(-Math.round(d*10)/10, "Küçük mantar (kestane) oranı %"+kucukOrani.toFixed(0)+" — yüksek")); }
+  if(fireOrani>20){ var d2=Math.min(6,(fireOrani-20)*0.3); puan-=d2; kalemler.push(_kalem(-Math.round(d2*10)/10, "Fire/alt sınıf (duble+dökme+ikinci) oranı %"+fireOrani.toFixed(0)+" — yüksek")); }
+  if(!kalemler.length) kalemler.push(_kalem(0,"Fire ve küçük mantar oranı düşük, kalite sınıfları dengeli (n="+kayitSayisi+" tartı kaydı)"));
+  puan=Math.max(0,Math.round(puan*10)/10);
+  return {puan:puan, maks:maks, kalemler:kalemler, kucukOrani:kucukOrani, fireOrani:fireOrani};
+}
+/* 🎯 Üretim Kolaylığı (5) — döngü başına müdahale (erteleme/plan değişikliği)
+   sıklığı + sulama iptal/değişikliklerinin AI Kontrolü'nden (v383) geçen
+   verdict oranı ("sulama toleransı"). */
+function _firmaUretimKolayligi(cycles){
+  var maks=5;
+  if(!cycles.length) return {puan:maks, maks:maks, kalemler:[_kalem(0,"Yeterli veri yok — nötr puan verildi")], sulamaToleransEtiket:"—"};
+  var mudahaleToplam=0, sulamaKararToplam=0, sulamaRiskliToplam=0, sulamaUyumluToplam=0;
+  cycles.forEach(function(c){
+    mudahaleToplam+=c.ertele?Object.keys(c.ertele).filter(function(k){return c.ertele[k];}).length:0;
+    (c.gunluk||[]).forEach(function(r){
+      if(r.sulamaDurum==="iptal"||r.sulamaDurum==="degistirildi"){
+        sulamaKararToplam++;
+        if(r.sulamaAIVerdict==="kirmizi") sulamaRiskliToplam++;
+        else if(r.sulamaAIVerdict==="yesil") sulamaUyumluToplam++;
+      }
+    });
+  });
+  var mudahaleOrani=mudahaleToplam/cycles.length;
+  var puan=maks, kalemler=[];
+  if(mudahaleOrani>3){ var d=Math.min(2,(mudahaleOrani-3)*0.4); puan-=d; kalemler.push(_kalem(-Math.round(d*10)/10, "Döngü başına ortalama "+mudahaleOrani.toFixed(1)+" erteleme/plan değişikliği — sık müdahale gerektiriyor")); }
+  var sulamaToleransEtiket="—";
+  if(sulamaKararToplam>0){
+    var riskliOran=(sulamaRiskliToplam/sulamaKararToplam)*100;
+    if(riskliOran>30){ var d2=Math.min(2,riskliOran*0.02); puan-=d2; sulamaToleransEtiket="Düşük"; kalemler.push(_kalem(-Math.round(d2*10)/10, "Sulama iptal/değişikliklerinin %"+riskliOran.toFixed(0)+"'i verilerle çelişen gerekçeyle yapılmış")); }
+    else if(sulamaUyumluToplam>=2){ sulamaToleransEtiket="Yüksek"; kalemler.push(_kalem(0,"Sulama kararlarının çoğu verilerle doğrulanmış — sulama toleransı yüksek")); }
+    else sulamaToleransEtiket="Orta";
+  } /* sulamaKararToplam===0: hiç sulama iptal/değişikliği kaydı yok — "yüksek tolerans" iddia etmek yerine
+       veri yetersiz (—) bırakılır, "varsa değerlendir" ilkesiyle tutarlı. */
+  if(!kalemler.length) kalemler.push(_kalem(0,"Döngü başına müdahale sayısı düşük — kolay yönetilen bir kompost"));
+  puan=Math.max(0,Math.round(puan*10)/10);
+  return {puan:puan, maks:maks, kalemler:kalemler, mudahaleOrani:mudahaleOrani, sulamaToleransEtiket:sulamaToleransEtiket};
+}
+function _firmaYorumUret(kategoriler, protokol, kalite, kolaylik){
+  var cumleler=[];
+  (protokol.bulgular||[]).forEach(function(b){
+    if(b.sapma<=1.2 && Math.abs(b.ortalama)>=0.5){
+      cumleler.push(b.ad+" ortalama "+Math.abs(b.ortalama).toFixed(0)+" gün "+(b.ortalama<0?"erkene alınabilmektedir":"geç kalmaktadır")+".");
+    } else if(b.sapma>1.6){
+      cumleler.push(b.ad+" zamanlaması sık sık tutarsızlaşmaktadır (sapma ±"+b.sapma.toFixed(1)+" gün).");
+    }
+  });
+  if(kalite.ortAmonyak>4) cumleler.push("Kompostlarında amonyak süresi ortalama "+kalite.ortAmonyak.toFixed(1)+" gün ile uzun sürmektedir.");
+  else cumleler.push("Kompost sıcaklığı oldukça stabildir.");
+
+  var sorunluKat=kategoriler.filter(function(k){return k.kalemler.some(function(kl){return kl.delta<0;});}).sort(function(a,b){return (a.puan/a.maks)-(b.puan/b.maks);})[0];
+  if(sorunluKat){
+    var kotuKalem=sorunluKat.kalemler.filter(function(kl){return kl.delta<0;})[0];
+    if(kotuKalem) cumleler.push(kotuKalem.aciklama+".");
+  }
+  var enIyiKat=kategoriler.slice().sort(function(a,b){return (b.puan/b.maks)-(a.puan/a.maks);})[0];
+  if(enIyiKat && (enIyiKat.puan/enIyiKat.maks)>=0.9) cumleler.push(enIyiKat.ad.replace(/^\S+\s/,"")+" güçlü bir yön.");
+
+  if(kolaylik.puan/kolaylik.maks>=0.85) cumleler.push("Üretimi yönetmesi kolaydır.");
+  else if(kolaylik.puan/kolaylik.maks<0.55) cumleler.push("Üretim sürekli müdahale istemektedir, yönetimi zordur.");
+
+  if(!cumleler.length) return "Yeterli veri birikince bu firma için daha ayrıntılı bir değerlendirme oluşacaktır.";
+  return cumleler.slice(0,5).join(" ");
+}
+/* Ana fonksiyon: firma adına göre 7 kategori + genel puan + yorum + karne.
+   Veri yoksa (bu firmadan tamamlanmış döngü yok) null döner. */
+function firmaPerformans(firma){
+  var tamam=tumTamamlananDongu().filter(function(c){return (c.kompostFirma||"")===firma;});
+  if(!tamam.length) return null;
+
+  var protokol=_firmaProtokolUyumu(tamam);
+  var kalite=_firmaKompostKalitesi(tamam);
+  var iklim=_firmaIklimToleransi(tamam);
+  var hasategri=_firmaHasatEgrisi(tamam);
+  var verim=_firmaVerim(firma);
+  var kalitefire=_firmaKaliteFire(tamam);
+  var kolaylik=_firmaUretimKolayligi(tamam);
+
+  var kategoriler=[
+    {key:"protokol",   ad:"📋 Protokol Uyumu",   maks:protokol.maks,   puan:protokol.puan,   kalemler:protokol.kalemler},
+    {key:"kompost",    ad:"🌡️ Kompost Kalitesi", maks:kalite.maks,     puan:kalite.puan,     kalemler:kalite.kalemler},
+    {key:"iklimtol",   ad:"🌦️ İklim Toleransı",  maks:iklim.maks,      puan:iklim.puan,      kalemler:iklim.kalemler},
+    {key:"hasategri",  ad:"📈 Hasat Eğrisi",     maks:hasategri.maks,  puan:hasategri.puan,  kalemler:hasategri.kalemler},
+    {key:"verim",      ad:"⚖️ Verim",            maks:verim.maks,      puan:verim.puan,      kalemler:verim.kalemler},
+    {key:"kalitefire", ad:"🧺 Kalite ve Fire",   maks:kalitefire.maks, puan:kalitefire.puan, kalemler:kalitefire.kalemler},
+    {key:"kolaylik",   ad:"🎯 Üretim Kolaylığı", maks:kolaylik.maks,   puan:kolaylik.puan,   kalemler:kolaylik.kalemler}
+  ];
+  var toplamPuan=Math.max(0,Math.min(100,Math.round(kategoriler.reduce(function(s,k){return s+k.puan;},0)*10)/10));
+  var yorum=_firmaYorumUret(kategoriler, protokol, kalite, kolaylik);
+
+  var kgM2Vals=tamam.map(function(c){return verimOzet(c).kgM2;}).filter(function(v){return v!=null;});
+  var kasaVals=tamam.map(function(c){return verimOzet(c).toplam;});
+  var flasToplam={F1:0,F1n:0,F2:0,F2n:0};
+  tamam.forEach(function(c){
+    var fo=verimFlasOzet(c);
+    if(fo.F1){ flasToplam.F1+=fo.F1.kasa; flasToplam.F1n++; }
+    if(fo.F2){ flasToplam.F2+=fo.F2.kasa; flasToplam.F2n++; }
+  });
+
+  return {
+    firma:firma, n:tamam.length, puan:toplamPuan, kategoriler:kategoriler, yorum:yorum,
+    karne:{
+      ortKgM2: kgM2Vals.length?(kgM2Vals.reduce(function(a,b){return a+b;},0)/kgM2Vals.length):null,
+      ortToplamKasa: kasaVals.length?(kasaVals.reduce(function(a,b){return a+b;},0)/kasaVals.length):null,
+      ortFlas1Kasa: flasToplam.F1n?(flasToplam.F1/flasToplam.F1n):null,
+      ortFlas2Kasa: flasToplam.F2n?(flasToplam.F2/flasToplam.F2n):null,
+      ortMiselPuan: kalite.ortMiselPuan,
+      ortAmonyak: kalite.ortAmonyak,
+      sulamaToleransEtiket: kolaylik.sulamaToleransEtiket
+    }
+  };
+}
+function tumFirmaAdlari(){
+  var set={};
+  loadData().cycles.forEach(function(c){ if(c.kompostFirma) set[c.kompostFirma]=true; });
+  return Object.keys(set).sort();
+}
+function firmaKarneHTML(p){
+  function box(ik,lbl,val,unit){
+    return '<div style="flex:1;min-width:100px;text-align:center;border:1px solid var(--line);border-radius:10px;padding:8px;">'
+      +'<div class="muted" style="font-size:11px;">'+ik+' '+lbl+'</div>'
+      +'<div style="font-size:17px;font-weight:700;">'+val+(unit?'<span style="font-size:11px;"> '+unit+'</span>':'')+'</div></div>';
+  }
+  var byKey={}; p.kategoriler.forEach(function(k){byKey[k.key]=k;});
+  var k=p.karne;
+  return '<div style="display:flex;gap:8px;flex-wrap:wrap;">'
+    +box("🏆","Genel Puan", p.puan, "/100")
+    +box("🌡️","Kompost Kalitesi", byKey.kompost.puan, "/"+byKey.kompost.maks)
+    +box("🍄","Misel Gelişimi", (k.ortMiselPuan!=null?Math.round(k.ortMiselPuan):"—"), "/20")
+    +box("📋","Protokol Başarısı", byKey.protokol.puan, "/"+byKey.protokol.maks)
+    +box("📈","Hasat Eğrisi", byKey.hasategri.puan, "/"+byKey.hasategri.maks)
+    +box("⚖️","Verim Stabilitesi", byKey.verim.puan, "/"+byKey.verim.maks)
+    +box("🧪","Amonyak Süresi", (k.ortAmonyak!=null?k.ortAmonyak.toFixed(1):"—"), "gün")
+    +box("💧","Sulama Toleransı", esc(k.sulamaToleransEtiket||"—"), "")
+    +box("🎯","Yönetim Kolaylığı", byKey.kolaylik.puan, "/"+byKey.kolaylik.maks)
+    +box("📊","Ort. kg/m²", (k.ortKgM2!=null?k.ortKgM2.toFixed(1):"—"), "")
+    +box("📦","Ort. Toplam Kasa", (k.ortToplamKasa!=null?k.ortToplamKasa.toFixed(0):"—"), "")
+    +'</div>';
+}
+function firmaPerformansKartiHTML(firma){
+  var p=firmaPerformans(firma);
+  if(!p) return sectionCard('🏭 '+esc(firma), '<div class="muted">Bu firmadan henüz tamamlanmış (boşaltılmış + hasat kaydı olan) döngü yok — puanlama için yeterli veri birikmedi.</div>');
+  var body='<div style="display:flex;align-items:center;gap:14px;">'
+    +'<div style="font-size:34px;font-weight:700;color:'+puanRenk(p.puan)+';">'+p.puan+'<span style="font-size:15px;color:var(--muted);">/100</span></div>'
+    +'<div style="flex:1;font-size:13px;font-style:italic;color:var(--muted);">'+esc(p.yorum)+'</div>'
+    +'</div>'
+    +'<div class="muted" style="font-size:11.5px;margin-top:2px;">'+p.n+' tamamlanmış döngü üzerinden hesaplandı.</div>'
+    +'<div style="margin-top:10px;">'+firmaKarneHTML(p)+'</div>'
+    +_kategorilerListHTML(p.kategoriler);
+  return sectionCard('🏭 '+esc(firma)+' — Kompost Firma Performansı', body);
+}
+function firmaSiralamaHTML(){
+  var firmalar=tumFirmaAdlari();
+  var puanli=firmalar.map(function(f){return firmaPerformans(f);}).filter(Boolean);
+  if(!puanli.length) return sectionCard('🏭 Kompost Firma Sıralaması', '<div class="muted">Henüz tamamlanmış (boşaltılmış + hasat kaydı olan) döngüsü bulunan bir firma yok.</div>');
+  puanli.sort(function(a,b){return b.puan-a.puan;});
+  var madalyalar=["🥇","🥈","🥉"];
+  var body='';
+  puanli.forEach(function(p,i){
+    var rozet=madalyalar[i]||("#"+(i+1));
+    body+='<div style="padding:8px 0;border-bottom:1px solid #eee;">'
+      +'<div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;">'
+      +'<span style="font-weight:700;">'+rozet+' '+esc(p.firma)+'</span>'
+      +'<span style="font-weight:700;color:'+puanRenk(p.puan)+';font-size:17px;">'+(""+p.puan).replace('.',',')+'</span>'
+      +'</div>'
+      +'<div class="muted" style="font-size:12.5px;margin-top:2px;">'+esc(p.yorum)+'</div>'
+      +'<button class="btn ghost small" style="margin-top:6px;" onclick="analizFirmaSec(\''+esc(p.firma).replace(/'/g,"\\'")+'\')">Detaylı karne →</button>'
+      +'</div>';
+  });
+  return sectionCard('🏭 Kompost Firma Sıralaması', body);
 }
 /* ---------- Oda bazlı geçmiş istatistik ---------- */
 function odaGecmisIstatistik(oda, excludeId){
