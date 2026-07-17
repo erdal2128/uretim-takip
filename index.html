@@ -650,7 +650,7 @@ function hasatTartiGetir(oda, tur){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v384";
+var APP_VER = "v385";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -3442,6 +3442,235 @@ function hasatTakvimHTML(c){
   });
   h+='</tbody></table><div class="muted" style="padding:6px 4px;">1. flaş 5 gün, ara 5 gün, 2. flaş 5 gün, +1 gün boşaltma. Başlangıç: ilk hasat kaydı ya da beklenen hasat. Tarihler tahminî.</div></div>';
   return h;
+}
+/* ============ Yüzdesel Hasat Eğrisi Analizi ============
+   Amaç toplam kasa miktarı değil, bir flaşın 5 günlük hasadının GÜNLERE
+   YÜZDESEL DAĞILIMI — doğru zamanda, dengeli ve kaliteli hasat edilip
+   edilmediğinin göstergesi. HASAT_PLAN'daki kasaMin/kasaMax (haftalık hasat
+   tahmini raporu için, mutlak kasa aralığı) ile KARIŞTIRILMAMALI — burası
+   yüzde bazlı, ayrı bir analiz katmanı. */
+var HASAT_EGRI_REFERANS = [ /* yumuşak/esnek referans — sabit eşik değil, aşağıdaki
+   hasatEgriOgrenilmisReferans() yeterli geçmiş veri birikince bunun yerine
+   gerçek (oda/firma/filo) ortalamasını kullanır */
+  {gun:1, min:3,  max:8},
+  {gun:2, min:15, max:25},
+  {gun:3, min:30, max:40},
+  {gun:4, min:25, max:35},
+  {gun:5, min:8,  max:18}
+];
+var HASAT_EGRI_OGRENME_MIN_ORNEK = 3;
+/* Bir flaşın (1 veya 2) HASAT_PLAN'daki 5 günlük penceresi başlangıcı: flaş1
+   hasatBaslangic() ile aynı gün, flaş2 +10 gün sonra (5 gün flaş + 5 gün
+   hazırlık arası — HASAT_PLAN gun:6-10). */
+function hasatFlasBaslangic(c, flas){
+  var bas=hasatBaslangic(c); if(!bas) return null;
+  return addDays(bas, flas===1?0:10);
+}
+/* Bu flaşın 5 günlük penceresi tamamen geçmiş mi (o yüzden yüzdeler artık
+   anlamlı — pencere bitmeden % hesaplamak yanıltıcı olur, toplam henüz
+   kesinleşmemiş demektir). */
+function hasatFlasTamamlandiMi(c, flas){
+  if(c.bosaltimTarihi) return true;
+  var bugunGun=hasatGunNo(c, todayISO()); if(!bugunGun) return false;
+  var sonGun=(flas===1)?5:15;
+  return bugunGun.gun>sonGun;
+}
+/* Bu flaşın 5 günü için gerçek hasat kayıtlarından (c.hasat) toplanan kasa
+   miktarı — hasatGunNo (SSOT) ile aynı gün/flaş eşlemesini kullanır, ayrı
+   bir tarih hesaplaması TEKRARLANMAZ. */
+function hasatFlasGunlukKasa(c, flas){
+  var ofs=(flas===1)?0:10;
+  var gunler=[0,0,0,0,0];
+  (c.hasat||[]).forEach(function(h){
+    var g=hasatGunNo(c, h.tarih); if(!g || g.flas!==flas) return;
+    var d=g.gun-ofs;
+    if(d>=1 && d<=5) gunler[d-1]+=(numParse(h.kasa)||0);
+  });
+  return gunler;
+}
+function hasatEgrisiYuzdeleri(c, flas){
+  if(!hasatFlasTamamlandiMi(c,flas)) return null;
+  var g=hasatFlasGunlukKasa(c,flas);
+  var t=g.reduce(function(a,b){return a+b;},0);
+  if(t<=0) return null;
+  return g.map(function(k){return k/t*100;});
+}
+/* Referans eğri kademeli öğrenme: kullanıcı isteği "sabit eşik değil, tesis
+   kendi ideal yüzde dağılımını zamanla öğrensin" — tahminiVerim()'deki
+   firma→filo şelalesiyle AYNI desen: önce bu odanın kendi geçmişi (en
+   güvenilir), yoksa aynı kompost firmasının geçmişi, yoksa filo geneli,
+   hiçbiri yeterli değilse sabit varsayılan (HASAT_EGRI_REFERANS). Bu uygulamada
+   ayrı bir "sezon/üretim dönemi" alanı tutulmadığından oda+firma+flaş en
+   yakın pratik vekildir (hasatGercekVeriIstatistik'teki gerçek-veri-
+   varsayılanı-geçersiz-kılar deseniyle tutarlı). */
+function hasatEgriOgrenilmisReferans(c, flas){
+  var aday=tumTamamlananDongu().filter(function(x){return x.id!==c.id;});
+  function ortalama(cycles){
+    var egriler=cycles.map(function(x){return hasatEgrisiYuzdeleri(x,flas);}).filter(Boolean);
+    if(egriler.length<HASAT_EGRI_OGRENME_MIN_ORNEK) return null;
+    var ort=[0,0,0,0,0];
+    egriler.forEach(function(e){ e.forEach(function(v,i){ ort[i]+=v; }); });
+    return {yuzde: ort.map(function(v){return v/egriler.length;}), n:egriler.length};
+  }
+  var r=ortalama(aday.filter(function(x){return normalizeOda(x.oda)===normalizeOda(c.oda);}));
+  if(r) return {yuzde:r.yuzde, kaynak:"bu odanın geçmiş döngüleri (n="+r.n+")"};
+  if(c.kompostFirma){
+    r=ortalama(aday.filter(function(x){return (x.kompostFirma||"")===c.kompostFirma;}));
+    if(r) return {yuzde:r.yuzde, kaynak:"aynı kompost firması geçmişi (n="+r.n+")"};
+  }
+  r=ortalama(aday);
+  if(r) return {yuzde:r.yuzde, kaynak:"filo geneli geçmiş (n="+r.n+")"};
+  return {yuzde: HASAT_EGRI_REFERANS.map(function(x){return (x.min+x.max)/2;}), kaynak:"varsayılan referans eğri (henüz yeterli geçmiş veri birikmedi)"};
+}
+function hasatEgriPuanEtiket(puan){
+  if(puan>=100) return "Mükemmel";
+  if(puan>=90) return "Çok iyi";
+  if(puan>=80) return "İyi";
+  if(puan>=70) return "Orta";
+  if(puan>=60) return "Zayıf";
+  return "Sorunlu";
+}
+function _hasatEgrisiYorumUret(flas, puan, erkenHasat, gecHasat, kirilmaSayisi, simetriTip, pikGun){
+  if(puan>=90 && simetriTip==="simetrik"){
+    return flas+". flaş hasat eğrisi "+pikGun+". günde pik yaparak dengeli, çan eğrisine yakın bir seyir izlemiş; hasat zamanlaması ve dağılımı sağlıklı görünüyor.";
+  }
+  var sorunlar=[];
+  if(erkenHasat) sorunlar.push("hasat erken günlere kaymış görünüyor");
+  if(gecHasat) sorunlar.push("hasat gecikmiş olabilir");
+  if(kirilmaSayisi>0) sorunlar.push(kirilmaSayisi+" günde ani sıçrama/düşüş var");
+  if(simetriTip==="tek-gun") sorunlar.push("hasat neredeyse tek günde yoğunlaşmış");
+  if(simetriTip==="keskin") sorunlar.push("eğri çok keskin/dar bir pik yapıyor");
+  if(simetriTip==="yayvan") sorunlar.push("belirgin bir pik günü oluşmamış");
+  if(!sorunlar.length){
+    return flas+". flaş hasat eğrisi büyük ölçüde beklenen aralıkta; toplam kasa miktarından bağımsız olarak zamanlama ve denge açısından yönetim düzgün görünüyor.";
+  }
+  return flas+". flaş hasat eğrisinde "+sorunlar.join(", ")+" — toplam kasa miktarından bağımsız olarak hasadın doğru zamanda ve dengeli yönetilip yönetilmediği açısından gözden geçirilmesi önerilir.";
+}
+/* Ana analiz — 6 günlük gerçek kasa dağılımını (%) referansla kıyaslar, 0-100
+   yönetim puanı üretir. Kritik: puan TOPLAM VERİMİ değil, hasadın zamanlama/
+   denge kalitesini ölçer — az/çok kasa toplansa da eğri düzgünse puan yüksek
+   kalabilir. */
+function hasatEgrisiAnaliz(c, flas){
+  if(!hasatFlasTamamlandiMi(c,flas)) return null;
+  var gunlukKasa=hasatFlasGunlukKasa(c,flas);
+  var toplam=gunlukKasa.reduce(function(a,b){return a+b;},0);
+  if(toplam<=0) return null;
+  var yuzde=gunlukKasa.map(function(k){return k/toplam*100;});
+  var ref=hasatEgriOgrenilmisReferans(c,flas);
+
+  var bulgular=[];
+  var puan=100;
+
+  var maxIdx=0;
+  for(var i=1;i<5;i++){ if(yuzde[i]>yuzde[maxIdx]) maxIdx=i; }
+  var pikGun=maxIdx+1;
+  var erkenToplam=yuzde[0]+yuzde[1];
+  var gecToplam=yuzde[3]+yuzde[4];
+  var erkenBeklenen=ref.yuzde[0]+ref.yuzde[1];
+  var gecBeklenen=ref.yuzde[3]+ref.yuzde[4];
+
+  var erkenHasat=false;
+  if(erkenToplam>erkenBeklenen+15){
+    erkenHasat=true; puan-=15;
+    bulgular.push({tip:"erken", aciklama:"1. ve 2. gün toplamı %"+erkenToplam.toFixed(0)+" (beklenen ~%"+erkenBeklenen.toFixed(0)+") — Mantarların küçükken toplanmış olma ihtimali bulunmaktadır."});
+  }
+
+  var gecHasat=false;
+  if(yuzde[2]>ref.yuzde[2]+15 && gecToplam<gecBeklenen-15){
+    gecHasat=true; puan-=15;
+    bulgular.push({tip:"gec", aciklama:"3. gün %"+yuzde[2].toFixed(0)+" ile beklenenin belirgin üzerinde, 4.-5. gün toplamı %"+gecToplam.toFixed(0)+" ile düşük kalmış — Hasat gecikmiş olabilir."});
+  }
+
+  var kirilmalar=[];
+  for(var d=1; d<5; d++){
+    var fark=yuzde[d]-yuzde[d-1];
+    if(Math.abs(fark)>20) kirilmalar.push({gunA:d, gunB:d+1, fark:fark});
+  }
+  if(kirilmalar.length){
+    puan-=Math.min(20, kirilmalar.length*8);
+    kirilmalar.forEach(function(k){
+      bulgular.push({tip:"kirilma", aciklama:k.gunA+"→"+k.gunB+". gün arasında %"+Math.abs(k.fark).toFixed(0)+" puanlık ani "+(k.fark>0?"artış":"düşüş")+" — olası nedenler: hasat planlaması, personel yetersizliği, klima ayarları, havalandırma, kompost sıcaklığı, sulama yönetimi."});
+    });
+  }
+
+  var maxYuzde=yuzde[maxIdx];
+  var simetriTip, simetriYorum;
+  if(maxYuzde>60){
+    simetriTip="tek-gun"; puan-=10;
+    simetriYorum="Hasadın çoğunluğu tek bir günde ("+pikGun+". gün, %"+maxYuzde.toFixed(0)+") toplanmış — dağılım tek gün etrafında yoğunlaşmış.";
+  } else if(maxYuzde>45){
+    simetriTip="keskin"; puan-=5;
+    simetriYorum="Eğri "+pikGun+". günde (%"+maxYuzde.toFixed(0)+") çok keskin/dar bir pik yapıyor.";
+  } else if(maxYuzde<22){
+    simetriTip="yayvan";
+    simetriYorum="Belirgin bir pik günü yok, hasat günlere oldukça eşit yayılmış (en yüksek gün %"+maxYuzde.toFixed(0)+") — çok yayvan bir dağılım.";
+  } else if(Math.abs(erkenToplam-gecToplam)<=15 && pikGun>=2 && pikGun<=4){
+    simetriTip="simetrik";
+    simetriYorum="Eğri "+pikGun+". günde pik yapıp çan eğrisine yakın, dengeli biçimde yükselip alçalıyor.";
+  } else if(erkenToplam>gecToplam+15){
+    simetriTip="sol-carpik";
+    simetriYorum="Eğri sola çarpık — ağırlık erken günlerde (1.-2. gün %"+erkenToplam.toFixed(0)+", 4.-5. gün %"+gecToplam.toFixed(0)+").";
+  } else if(gecToplam>erkenToplam+15){
+    simetriTip="sag-carpik";
+    simetriYorum="Eğri sağa çarpık — ağırlık geç günlerde (4.-5. gün %"+gecToplam.toFixed(0)+", 1.-2. gün %"+erkenToplam.toFixed(0)+").";
+  } else {
+    simetriTip="duzensiz";
+    simetriYorum="Dağılım belirgin bir simetri göstermiyor.";
+  }
+
+  puan=Math.max(0, Math.round(puan));
+  var guven = (ref.kaynak.indexOf("bu odanın")===0) ? 85 : (ref.kaynak.indexOf("varsayılan")===0 ? 45 : 65);
+  var yorum=_hasatEgrisiYorumUret(flas, puan, erkenHasat, gecHasat, kirilmalar.length, simetriTip, pikGun);
+
+  return {
+    flas:flas, gunlukKasa:gunlukKasa, toplam:toplam, yuzde:yuzde, ref:ref,
+    pikGun:pikGun, erkenHasat:erkenHasat, gecHasat:gecHasat, kirilmalar:kirilmalar,
+    simetriTip:simetriTip, simetriYorum:simetriYorum, bulgular:bulgular,
+    puan:puan, etiket:hasatEgriPuanEtiket(puan), guven:guven, yorum:yorum
+  };
+}
+function hasatEgrisiDetayHTML(a){
+  var renk=puanRenk(a.puan);
+  var satirlar=a.yuzde.map(function(v,i){
+    var beklenen=a.ref.yuzde[i];
+    var sapma=v-beklenen;
+    var isaret=Math.abs(sapma)<=8?"🟢":(Math.abs(sapma)<=18?"🟡":"🔴");
+    var barGenislik=Math.min(100, Math.max(2, v));
+    return '<div style="display:flex;align-items:center;gap:8px;padding:3px 0;font-size:12.5px;">'
+      +'<div style="width:42px;">'+(i+1)+'. gün</div>'
+      +'<div style="flex:1;background:#eee;border-radius:4px;height:14px;position:relative;overflow:hidden;">'
+      +'<div style="background:'+renk+';height:100%;width:'+barGenislik+'%;"></div></div>'
+      +'<div style="width:46px;text-align:right;font-weight:600;">%'+v.toFixed(0)+'</div>'
+      +'<div style="width:80px;text-align:right;" class="muted">bekl. ~%'+beklenen.toFixed(0)+'</div>'
+      +'<div style="width:18px;text-align:center;">'+isaret+'</div>'
+      +'</div>';
+  }).join('');
+
+  var bulgularHTML = a.bulgular.length ? (
+    '<div style="margin-top:8px;">'
+    + a.bulgular.map(function(b){ return '<div style="font-size:12.5px;color:#8a5a1f;padding:2px 0;">• '+esc(b.aciklama)+'</div>'; }).join('')
+    + '</div>'
+  ) : '';
+
+  return '<div style="margin-top:6px;">'+satirlar+'</div>'
+    + '<div class="muted" style="font-size:12px;margin-top:6px;">Simetri: '+esc(a.simetriYorum)+'</div>'
+    + bulgularHTML
+    + '<div style="margin-top:8px;padding:9px 10px;background:#eef6ff;border:1px solid #b9d7f5;border-radius:8px;font-size:12.5px;font-style:italic;">'+esc(a.yorum)+'</div>'
+    + '<div class="muted" style="font-size:11px;margin-top:6px;">Referans eğri kaynağı: '+esc(a.ref.kaynak)+' — tahmin güveni %'+a.guven+'.</div>';
+}
+function hasatEgrisiHTML(c){
+  var flaslar=[1,2].map(function(f){ return hasatEgrisiAnaliz(c,f); }).filter(Boolean);
+  if(!flaslar.length) return "";
+  var body='';
+  flaslar.forEach(function(a,idx){
+    if(idx>0) body+='<hr style="margin:12px 0;border:none;border-top:1px solid var(--line);">';
+    body+='<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;">'
+      +'<div style="font-weight:700;">'+a.flas+'. Flaş Hasat Eğrisi</div>'
+      +'<div style="font-size:20px;font-weight:700;color:'+puanRenk(a.puan)+';">'+a.puan+'<span style="font-size:12px;color:var(--muted);">/100 · '+a.etiket+'</span></div>'
+      +'</div>'
+      +hasatEgrisiDetayHTML(a);
+  });
+  return sectionCard('📈 Yüzdesel Hasat Eğrisi Analizi', body);
 }
 function beklenenTakvim(c){
   /* SSOT: Her aşama için protokol adımını bul ve protokolTarih() ile hesapla,
@@ -6673,6 +6902,7 @@ function renderDetail(id){
 
   var verim = verimCardHTML(c);
   var hasatTak = hasatTakvimHTML(c);
+  var hasatEgri = hasatEgrisiHTML(c);
   var tuketim = tuketimCardHTML(c);
 
   var sekmeBar = '<div style="display:flex; overflow-x:auto; gap:6px; margin:2px 0 12px; padding-bottom:2px;">'
@@ -6684,7 +6914,7 @@ function renderDetail(id){
 
   var icerik="";
   if(_odaSekme==="gunluk") icerik = gunluk + hava;
-  else if(_odaSekme==="hasat") icerik = hasatKart + hasatTak;
+  else if(_odaSekme==="hasat") icerik = hasatKart + hasatTak + hasatEgri;
   else if(_odaSekme==="hastalik") icerik = hastalikCard + foto;
   else if(_odaSekme==="ilac") icerik = ilacKart + tuketim;
   else if(_odaSekme==="uretim") icerik = puanCard + verim + donem + plan + prot;
