@@ -650,7 +650,7 @@ function hasatTartiGetir(oda, tur){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v389";
+var APP_VER = "v390";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -8557,6 +8557,28 @@ function havaBaslatAc(cid){
     +'<button class="btn ghost" onclick="closeWarnBox()">Vazgeç</button></div>'
     +'</div></div>';
 }
+/* Kullanıcı isteği: "Havaya başla dediğim zaman havalandırma planı otomatik
+   olarak çıkması gerekir" — mühendis Başlat'tan sonra ayrıca Oda Detayı'na
+   gidip elle gün sayısı/sıcaklık girmek zorunda kalmasın diye, protokolün
+   kendi tarif ettiği varsayılan kademeli plan (hava adımı metni: "oda 4-5
+   günde 21-22→18°") Başlat ile AYNI ANDA kurulur. Başlangıç sıcaklığı odanın
+   en son ölçülen oda °C'si varsa ondan (gerçek veri > sabit varsayım), yoksa
+   protokoldeki 22°'den alınır. Zaten bir plan varsa (mühendis önceden elle
+   girmişse) ÜZERİNE YAZILMAZ — havaPlaniOlustur ile aynı hesap, sadece form
+   alanları yerine varsayılan parametrelerle; sonradan Oda Detayı → Havalandırma
+   planı'ndan yine elle düzeltilebilir/silinebilir. */
+function havaPlaniOtomatikOlustur(c){
+  if(c.hava && c.hava.length) return false;
+  var gunSayisi=5, odaHedef=18;
+  var odaBas=lastVal(c,"odaC"); if(odaBas===null) odaBas=22;
+  var baz=c.havaBaslangic||todayISO();
+  c.hava=[];
+  for(var i=0;i<=gunSayisi;i++){
+    var oran=i/gunSayisi;
+    c.hava.push({tarih:addDays(baz,i), hedefC:""+(Math.round((odaBas+(odaHedef-odaBas)*oran)*10)/10), co2alt:"", co2ust:""});
+  }
+  return true;
+}
 function havaBaslatKaydet(cid){
   if(!can("edit")) return noPerm();
   var c=loadData().cycles.find(function(x){return x.id===cid;}); if(!c) return;
@@ -8569,8 +8591,11 @@ function havaBaslatKaydet(cid){
   detayParcalar.push("Yöntem: "+yontem);
   if(notTxt) detayParcalar.push(notTxt);
   adimTamamla(c, hi, {tarih:todayISO(), not:detayParcalar.join(" · "), sessiz:true});
+  var planOlustu=havaPlaniOtomatikOlustur(c);
   gunlukGorevNotEkle(c, "Havaya Başlama — 🟢 Başlatıldı"+(saat?(" ("+saat+")"):"")+" · "+yontem+(notTxt?(" — "+notTxt):"")+" — "+kimNeZamanEtiketi());
-  touchCycle(c); saveData(); closeWarnBox(); toast("💨 Havaya başlandı — ilk sulama geri sayımı başladı"); render();
+  touchCycle(c); saveData(); closeWarnBox();
+  toast("💨 Havaya başlandı — ilk sulama geri sayımı başladı"+(planOlustu?" · 5 günlük havalandırma planı oluşturuldu":""));
+  render();
 }
 function havaErteleAc(cid){
   if(!can("edit")) return noPerm();
