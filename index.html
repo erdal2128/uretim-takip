@@ -650,7 +650,7 @@ function hasatTartiGetir(oda, tur){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v393";
+var APP_VER = "v394";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -2557,15 +2557,36 @@ function fmtDateGun(iso){
    kullanılıyor) eklenir: sıcak kompost hızlanmayı, soğuk kompost yavaşlamayı
    işaret eder. Yeni ölçüm/erteleme girildikçe otomatik güncellenir. Hava henüz
    başlamadıysa veya hasat zaten başladıysa (bu kilometre taşı geride kaldıysa,
-   odak artık gerçek hasat takibine geçer) null döner — kart hiç gösterilmez. */
+   odak artık gerçek hasat takibine geçer) null döner — kart hiç gösterilmez.
+   DAYANIKLILIK (kullanıcı raporu: "tahmini birinci flaş hiç yazmıyor"): protokol
+   satırı "hasat" rolüyle bulunamazsa (Ayarlar → Görevler'de yeniden adlandırılmış/
+   silinmiş olabilir) aynı gerçek anı işaret eden "flas1" rolü denenir; o da
+   yoksa ya da referans zinciri kırıksa (özelleştirilmiş protokolde döngü/eksik
+   referans → protokolTarih null döner) kart tamamen boş kalmak yerine protokolün
+   belgelediği sabit hava+11 varsayımına döner — kompost sapması yine uygulanır.
+   Sadece HER İKİ rol de bulunup GERÇEKTEN tamamlanmışsa (kilometre taşı fiilen
+   geride kaldıysa) null döndürülür. */
 function tahminiFlas1Tarihi(c){
   if(!c || !c.havaBaslangic) return null;
-  var hi=protokolRolIdx("hasat"); if(hi<0) return null;
-  var st=getProtokol()[hi];
-  if(adimGercektenYapildiMi(c, hi, st)) return null;
-  var temel=protokolTarih(c, st); if(!temel) return null;
-  var k=hasatKaymasi(c);
-  return {tarih:(k.kayma?addDays(temel,k.kayma):temel), kayma:k.kayma, neden:k.neden};
+  var adaylarRol=["hasat","flas1"];
+  var herhangiBulundu=false, hicYapilmadi=false;
+  for(var r=0;r<adaylarRol.length;r++){
+    var hi=protokolRolIdx(adaylarRol[r]);
+    if(hi<0) continue;
+    herhangiBulundu=true;
+    var st=getProtokol()[hi];
+    if(adimGercektenYapildiMi(c, hi, st)) continue;
+    hicYapilmadi=true;
+    var temel=protokolTarih(c, st);
+    if(temel){
+      var k=hasatKaymasi(c);
+      return {tarih:(k.kayma?addDays(temel,k.kayma):temel), kayma:k.kayma, neden:k.neden};
+    }
+  }
+  if(herhangiBulundu && !hicYapilmadi) return null; /* hem hasat hem flaş1 zaten yapılmış — kilometre taşı geride kaldı */
+  var k2=hasatKaymasi(c);
+  var temel2=addDays(c.havaBaslangic,11);
+  return {tarih:(k2.kayma?addDays(temel2,k2.kayma):temel2), kayma:k2.kayma, neden:k2.neden};
 }
 /* Odanın bulunduğu biyolojik döneme göre "bugün nelere dikkat edilmeli"
    listesi — sabit bir görev değil, stageOf(c) (SSOT — aynı fonksiyon aşama
@@ -2613,7 +2634,8 @@ function turFlas1TahminKartHTML(c, gosterimTarihi){
 }
 function turSiradakiAdimHTML(c, gosterimTarihi){
   var h="";
-  var flas1Kart=turFlas1TahminKartHTML(c, gosterimTarihi);
+  var flas1Kart="";
+  try{ flas1Kart=turFlas1TahminKartHTML(c, gosterimTarihi)||""; }catch(err){ console.error("Tahmini 1. Flaş kartı hesaplanamadı:", err); }
   h += flas1Kart;
   /* GENEL SIRADAKİ İŞLEM: eskiden bu bilgi SADECE Odalar > Protokol Özeti'nde
      görünüyordu, Günlük Tur ekranında hiç yoktu — sadece bir Şartlı Kural
