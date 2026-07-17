@@ -650,7 +650,7 @@ function hasatTartiGetir(oda, tur){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v391";
+var APP_VER = "v392";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -2529,7 +2529,7 @@ function turHavaBaslamaKartHTML(c, sd){
     + (can("edit") ? (
         '<div style="font-size:13.5px; font-weight:600; margin-top:10px;">Bugün havaya başlanıyor mu?</div>'
         + '<div style="display:flex; gap:8px; margin-top:6px;">'
-        + '<button class="btn" style="flex:1;" onclick="havaBaslatAc(\''+c.id+'\')">🟢 Başlat</button>'
+        + '<button class="btn" style="flex:1;" onclick="go(\'havaplan\',\''+c.id+'\')">🟢 Başlat</button>'
         + '<button class="btn ghost" style="flex:1;" onclick="havaErteleAc(\''+c.id+'\')">🟡 Ertele</button>'
         + '</div>'
       ) : '')
@@ -2588,11 +2588,19 @@ function turFlas1TahminKartHTML(c){
   var t=tahminiFlas1Tarihi(c); if(!t) return "";
   var kalan=daysBetween(todayISO(), t.tarih);
   var durum = t.kayma<0 ? {ikon:"🔵", txt:"Beklenenden hızlı"} : (t.kayma>0 ? {ikon:"🟡", txt:"Beklenenden yavaş"} : {ikon:"🟢", txt:"Gelişim normal"});
+  /* Bugünkü hedef sıcaklık/CO₂: Başlat → Havalandırma Planı ekranında kurulan
+     plandan (c.hava, SSOT — aynı veriyi Oda Detayı tablosu da okur) geliyor. */
+  var hedefSatir=havaHedefSatiri(c);
+  var hedefHTML = hedefSatir ? (
+    '<div style="font-size:13.5px; margin-top:6px;">🌡️ Bugünkü hedef sıcaklık: <b>'+esc(hedefSatir.hedefC)+'°</b></div>'
+    + ((hedefSatir.co2alt||hedefSatir.co2ust) ? ('<div style="font-size:13.5px; margin-top:2px;">🌬️ Bugünkü hedef CO₂: <b>'+esc(hedefSatir.co2alt||"?")+'-'+esc(hedefSatir.co2ust||"?")+'</b></div>') : '')
+  ) : '';
   return '<div style="margin-top:8px; padding:10px; background:#eef6ff; border:1.5px solid #1d4ed8; border-radius:10px;">'
     + '<div style="font-size:12px; font-weight:700; color:#1d4ed8;">🍄 Tahmini 1. Flaş</div>'
     + '<div style="font-size:20px; font-weight:700; margin-top:2px;">'+fmtDateGun(t.tarih)+'</div>'
-    + '<div style="font-size:13.5px; margin-top:4px;">⏳ '+(kalan===null?"—":(kalan>=0?(kalan+" gün kaldı"):((-kalan)+" gün gecikti")))+'</div>'
+    + '<div style="font-size:13.5px; margin-top:4px;">📅 '+(kalan===null?"—":(kalan>=0?(kalan+" gün kaldı"):((-kalan)+" gün gecikti")))+'</div>'
     + '<div style="font-size:13.5px; margin-top:2px;">'+durum.ikon+' '+durum.txt+'</div>'
+    + hedefHTML
     + '<div style="font-size:11px; color:var(--muted); font-style:italic; margin-top:6px;">Bu tarih protokol ve mevcut gelişim verilerine göre hesaplanmış tahmindir. Gerçek tarih biyolojik gelişime göre değişebilir.</div>'
     + bugunkuKontrollerHTML(c)
     + '</div>';
@@ -4131,6 +4139,7 @@ function render(){
       else if(view.name==="yedekleme"){ renderYedekleme(); safeCalled=true; }
       else if(view.name==="toplu"){ renderToplu(view.id); safeCalled=true; }
       else if(view.name==="akis"){ renderOdaAkisi(view.id); safeCalled=true; }
+      else if(view.name==="havaplan"){ renderHavaPlani(view.id); safeCalled=true; }
       else if(view.name==="yoklama"){ renderYoklama(); safeCalled=true; }
       if(!safeCalled){ el("app").innerHTML='<div class="card"><div class="muted">View "'+esc(view.name)+'" tanımlanmamış</div></div>'; }
     }catch(e){
@@ -6802,39 +6811,10 @@ function renderDetail(id){
     + '<button class="btn" style="width:100%;" onclick="turOdadaAc(\''+c.id+'\')">📋 Bu odaya veri girmek için Günlük Tur\'u aç</button>'
     + '</div>';
 
-  /* Havalandırma planı */
-  var hava = '<div class="sec-title">Havalandırma planı (hedef sıcaklık + CO₂)</div><div class="card" style="padding:8px;">'
-    + '<table><thead><tr><th>Tarih</th><th>Gün</th><th>Hedef °C</th><th>CO₂ / Hava</th><th></th></tr></thead><tbody>';
-  if(c.hava && c.hava.length){
-    c.hava.forEach(function(r,i){
-      var co2 = (r.co2alt||r.co2ust) ? ((r.co2alt||"?")+" - "+(r.co2ust||"?")) : "—";
-      hava += '<tr><td>'+fmtDate(r.tarih)+'</td><td>'+gunNo(c,r.tarih)+'</td>'
-        + '<td class="hava-temp">'+esc(r.hedefC)+'°</td><td>'+esc(co2)+'</td>'
-        + '<td><button class="del-x" onclick="delHava(\''+c.id+'\','+i+')">×</button></td></tr>';
-    });
-  } else {
-    hava += '<tr><td colspan="5" class="muted" style="padding:16px;">Havaya başlayınca buraya günlük hedefleri ekle</td></tr>';
-  }
-  hava += '</tbody></table>';
-  hava += '<div style="border-top:1px solid var(--line); margin-top:6px; padding-top:12px;">'
-    + '<div class="muted" style="margin-bottom:8px;">🔄 Otomatik plan: başlangıç → hedefe, seçtiğin gün sayısında kademeli olarak düşürür (her gün ~eşit adımlarla). Oluşturduktan sonra tek tek satırları yine elle düzeltebilir/silebilirsin.</div>'
-    + '<div class="field-row"><div><label>Gün sayısı</label><input type="number" inputmode="numeric" id="hp_gun" placeholder="4 veya 5"></div>'
-    + '<div><label>Başlangıç Oda °C</label><input type="number" step="0.1" inputmode="decimal" id="hp_oda_bas" placeholder="örn. 22"></div></div>'
-    + '<div class="field-row"><div><label>Hedef Oda °C</label><input type="number" step="0.1" inputmode="decimal" id="hp_oda_hedef" value="18"></div><div></div></div>'
-    + '<div class="field-row"><div><label>Başlangıç CO₂ alt</label><input type="number" inputmode="numeric" id="hp_co2alt_bas" placeholder="örn. 8000"></div>'
-    + '<div><label>Başlangıç CO₂ üst</label><input type="number" inputmode="numeric" id="hp_co2ust_bas" placeholder="örn. 9000"></div></div>'
-    + '<div class="field-row"><div><label>Hedef CO₂ alt</label><input type="number" inputmode="numeric" id="hp_co2alt_hedef" placeholder="örn. 2100"></div>'
-    + '<div><label>Hedef CO₂ üst</label><input type="number" inputmode="numeric" id="hp_co2ust_hedef" placeholder="örn. 2400"></div></div>'
-    + '<button class="btn small" style="margin-top:12px; width:100%;" onclick="havaPlaniOlustur(\''+c.id+'\')">🔄 Otomatik plan oluştur</button>'
-    + '</div>';
-  hava += '<div style="border-top:1px solid var(--line); margin-top:14px; padding-top:12px;">'
-    + '<div class="muted" style="margin-bottom:8px;">Tek satır elle ekle:</div>'
-    + '<div class="field-row"><div><label>Tarih</label><input type="date" id="h_tarih" value="'+todayISO()+'"></div>'
-    + '<div><label>Hedef °C</label><input type="number" step="0.1" inputmode="decimal" id="h_temp"></div></div>'
-    + '<div class="field-row"><div><label>CO₂ / Hava alt</label><input type="number" inputmode="numeric" id="h_alt" placeholder="3900"></div>'
-    + '<div><label>CO₂ / Hava üst</label><input type="number" inputmode="numeric" id="h_ust" placeholder="4200"></div></div>'
-    + '<button class="btn small" style="margin-top:12px; width:100%;" onclick="addHava(\''+c.id+'\')">+ Havalandırma satırı ekle</button>'
-    + '</div></div>';
+  /* Havalandırma planı — paylaşılan fonksiyon (bkz. havalandirmaPlaniHTML):
+     hem Oda Detayı'nda hem Başlat'tan açılan ayrı "havaplan" ekranında
+     BİREBİR aynı tablo/form kullanılıyor, tek kaynak. */
+  var hava = havalandirmaPlaniHTML(c);
 
   var footer = '<hr><div class="row">'
     + '<button class="btn ghost" onclick="go(\'list\')">‹ Geri</button>';
@@ -8154,7 +8134,7 @@ function go(name,id){ if(name==="ayarlar") _ayarKategori=null; if(name==="tur"){
 var HDR_BACK_HEDEF={
   detail:"odalar", panoedit:"list", form:"odalar", toplu:"odalar", compare:"odalar",
   tur:"list", plan:"list", recete:"list", arsiv:"list", audit:"ayarlar", yedekleme:"ayarlar", gunsonu:"list",
-  akis:"detail", yoklama:"bugun"
+  akis:"detail", yoklama:"bugun", havaplan:"tur"
 };
 function updateHdrBack(){
   var b=el("hdrBack"); if(!b) return;
@@ -8165,8 +8145,11 @@ function updateHdrBack(){
 function hdrGeri(){
   var hedef=HDR_BACK_HEDEF[view.name]||"list";
   /* "akis" (Oda Akışı) her zaman AYNI odanın detay sayfasından açılır — geri
-     dönüşte de o odaya (id korunarak) dönmeli, listeye değil. */
+     dönüşte de o odaya (id korunarak) dönmeli, listeye değil. "havaplan" da
+     aynı şekilde AYNI odanın Günlük Tur'una dönmeli (go("tur") turIndex'i
+     sıfırlayıp listenin başına atar — id korunmaz). */
   if(hedef==="detail") go(hedef, view.id);
+  else if(view.name==="havaplan" && view.id) turOdayaGit(view.id);
   else go(hedef);
 }
 function openDetail(id){ go("detail",id); }
@@ -8543,40 +8526,24 @@ function erteleNedenSeciciHTML(tur, onclickForNeden, digerInputId, digerBtnOncli
 /* ==================== Havaya Başlama — karar kartı eylemleri ====================
    Kullanıcı isteği: Havaya Başlama tarihi sadece protokol ÖNERİSİDİR, son karar
    ziraat mühendisine ait — bu yüzden "Sıradaki işlem" gibi bilgilendirici bir
-   kart yerine açık bir Başlat/Ertele kararı istenir. Başlatılırsa saat/yöntem/
-   not sorulur (adimTamamla SSOT kapısından, adimDetay'a yazılır — rapor/PDF
-   zaten oradan okuyor). Ertelenirse işleme özgü dar bir neden seti (yalnızca
-   sarım yeterliliği/mühendis kararı/teknik neden — amonyak/sıcaklık/nem BİLEREK
-   sorulmuyor, bu aşamada zaten uygun olmaları gerekir) + Yapay Zekâ Kontrolü
-   üzerinden aynı SSOT (c.ertele/_adimiYarinaTasi) kullanılır. */
-function havaBaslatAc(cid){
-  if(!can("edit")) return noPerm();
-  var wm=el("warnModal"); if(!wm) return;
-  var c=loadData().cycles.find(function(x){return x.id===cid;}); if(!c) return;
-  wm.innerHTML='<div class="modal-bg" onclick="if(event.target===this) closeWarnBox();"><div class="modal">'
-    +'<div style="font-weight:700;font-size:17px;margin-bottom:4px;">'+esc(c.oda)+' — 💨 Havaya Başlama</div>'
-    +'<div class="muted" style="font-size:12px;margin-bottom:10px;">Bugün ('+fmtDate(todayISO())+') havaya başlanıyor olarak kaydedilecek.</div>'
-    +'<label>Başlama saati</label><input type="time" id="hb_saat">'
-    +'<label>Başlatma yöntemi</label><select id="hb_yontem">'
-      +'<option value="Normal">Normal</option>'
-      +'<option value="Kademeli">Kademeli</option>'
-      +'<option value="Diğer">Diğer</option>'
-    +'</select>'
-    +'<label>Not (isteğe bağlı)</label><textarea id="hb_not" rows="2" placeholder="isteğe bağlı"></textarea>'
-    +'<div class="row" style="margin-top:14px;"><button class="btn" onclick="havaBaslatKaydet(\''+cid+'\')">🟢 Başlat</button>'
-    +'<button class="btn ghost" onclick="closeWarnBox()">Vazgeç</button></div>'
-    +'</div></div>';
-}
-/* Kullanıcı isteği: "Havaya başla dediğim zaman havalandırma planı otomatik
-   olarak çıkması gerekir" — mühendis Başlat'tan sonra ayrıca Oda Detayı'na
-   gidip elle gün sayısı/sıcaklık girmek zorunda kalmasın diye, protokolün
-   kendi tarif ettiği varsayılan kademeli plan (hava adımı metni: "oda 4-5
-   günde 21-22→18°") Başlat ile AYNI ANDA kurulur. Başlangıç sıcaklığı odanın
-   en son ölçülen oda °C'si varsa ondan (gerçek veri > sabit varsayım), yoksa
-   protokoldeki 22°'den alınır. Zaten bir plan varsa (mühendis önceden elle
-   girmişse) ÜZERİNE YAZILMAZ — havaPlaniOlustur ile aynı hesap, sadece form
-   alanları yerine varsayılan parametrelerle; sonradan Oda Detayı → Havalandırma
-   planı'ndan yine elle düzeltilebilir/silinebilir. */
+   kart yerine açık bir Başlat/Ertele kararı istenir. Ertelenirse işleme özgü
+   dar bir neden seti (yalnızca sarım yeterliliği/mühendis kararı/teknik neden
+   — amonyak/sıcaklık/nem BİLEREK sorulmuyor, bu aşamada zaten uygun olmaları
+   gerekir) + Yapay Zekâ Kontrolü üzerinden aynı SSOT (c.ertele/_adimiYarinaTasi)
+   kullanılır.
+   Başlat ise (kullanıcı isteği: "Başlat butonuna basınca yalnızca havaya
+   başlama kaydı oluşuyordu, ben bunu istemiyorum") artık kayıt oluşturmuyor —
+   doğrudan mevcut "Havalandırma Planı" ekranını (go("havaplan",...) →
+   renderHavaPlani → havalandirmaPlaniHTML) açıyor. Havaya başlama, YALNIZCA
+   o ekranda plan başarıyla oluşturulunca (havaPlaniOlustur içinde) kaydedilir
+   — sıcaklık/CO₂ yönetimi planı olmadan havaya başlama tamamlanmış sayılmaz. */
+/* Kullanıcı isteği (önceki bir turda): "Havaya başla dediğim zaman havalandırma
+   planı otomatik olarak çıkması gerekir" — bu fonksiyon SADECE havaya başlama
+   SSOT kapısından (adimTamamla) GEÇİP de plan henüz kurulmamış odalar için
+   (örn. "Bilgileri Düzenle" formundan hava tarihi girilirse — Başlat artık bu
+   fonksiyonu tetiklemez, kendi ekranında mühendisin girdiği gerçek değerlerle
+   plan zaten kurulmuş olur) protokolün kendi tarif ettiği varsayılan kademeli
+   planı (4-5 günde 21-22°→18°) sessizce kurar; zaten bir plan varsa dokunmaz. */
 function havaPlaniOtomatikOlustur(c){
   if(c.hava && c.hava.length) return false;
   var gunSayisi=5, odaHedef=18;
@@ -8589,24 +8556,63 @@ function havaPlaniOtomatikOlustur(c){
   }
   return true;
 }
-function havaBaslatKaydet(cid){
-  if(!can("edit")) return noPerm();
-  var c=loadData().cycles.find(function(x){return x.id===cid;}); if(!c) return;
-  var hi=protokolRolIdx("hava"); if(hi<0){ toast("Protokolde havaya başlama adımı tanımlı değil"); return; }
-  var saat=(el("hb_saat")&&el("hb_saat").value)||"";
-  var yontem=(el("hb_yontem")&&el("hb_yontem").value)||"Normal";
-  var notTxt=(el("hb_not")&&el("hb_not").value.trim())||"";
-  var detayParcalar=[];
-  if(saat) detayParcalar.push("Saat: "+saat);
-  detayParcalar.push("Yöntem: "+yontem);
-  if(notTxt) detayParcalar.push(notTxt);
-  var hadPlan=!!(c.hava && c.hava.length);
-  adimTamamla(c, hi, {tarih:todayISO(), not:detayParcalar.join(" · "), sessiz:true}); /* adimTamamla SSOT'u havalandırma planını da kurar (bkz. yukarı) */
-  var planOlustu=!hadPlan && !!(c.hava && c.hava.length);
-  gunlukGorevNotEkle(c, "Havaya Başlama — 🟢 Başlatıldı"+(saat?(" ("+saat+")"):"")+" · "+yontem+(notTxt?(" — "+notTxt):"")+" — "+kimNeZamanEtiketi());
-  touchCycle(c); saveData(); closeWarnBox();
-  toast("💨 Havaya başlandı — ilk sulama geri sayımı başladı"+(planOlustu?" · 5 günlük havalandırma planı oluşturuldu":""));
-  render();
+/* Havalandırma planı tablosu + "Otomatik plan oluştur" formu + tek satır elle
+   ekleme — hem Oda Detayı'nda (mevcut planı görüntüleme/düzenleme) hem
+   Başlat'tan açılan ayrı "havaplan" ekranında (ilk kurulum) BİREBİR aynı HTML,
+   tek kaynak (SSOT). Buton onclick'leri hep aynı (havaPlaniOlustur/addHava/
+   delHava) — hangi BAĞLAMDA çağrıldığı (ilk kurulum mu, düzenleme mi) view.name
+   üzerinden havaPlaniOlustur içinde ayırt edilir, burada dallanma yok. */
+function havalandirmaPlaniHTML(c){
+  var hava = '<div class="sec-title">Havalandırma planı (hedef sıcaklık + CO₂)</div><div class="card" style="padding:8px;">'
+    + '<table><thead><tr><th>Tarih</th><th>Gün</th><th>Hedef °C</th><th>CO₂ / Hava</th><th></th></tr></thead><tbody>';
+  if(c.hava && c.hava.length){
+    c.hava.forEach(function(r,i){
+      var co2 = (r.co2alt||r.co2ust) ? ((r.co2alt||"?")+" - "+(r.co2ust||"?")) : "—";
+      hava += '<tr><td>'+fmtDate(r.tarih)+'</td><td>'+gunNo(c,r.tarih)+'</td>'
+        + '<td class="hava-temp">'+esc(r.hedefC)+'°</td><td>'+esc(co2)+'</td>'
+        + '<td><button class="del-x" onclick="delHava(\''+c.id+'\','+i+')">×</button></td></tr>';
+    });
+  } else {
+    hava += '<tr><td colspan="5" class="muted" style="padding:16px;">Havaya başlayınca buraya günlük hedefleri ekle</td></tr>';
+  }
+  hava += '</tbody></table>';
+  hava += '<div style="border-top:1px solid var(--line); margin-top:6px; padding-top:12px;">'
+    + '<div class="muted" style="margin-bottom:8px;">🔄 Otomatik plan: başlangıç → hedefe, seçtiğin gün sayısında kademeli olarak düşürür (her gün ~eşit adımlarla). Oluşturduktan sonra tek tek satırları yine elle düzeltebilir/silebilirsin.</div>'
+    + '<div class="field-row"><div><label>Gün sayısı</label><input type="number" inputmode="numeric" id="hp_gun" placeholder="4 veya 5"></div>'
+    + '<div><label>Başlangıç Oda °C</label><input type="number" step="0.1" inputmode="decimal" id="hp_oda_bas" placeholder="örn. 22"></div></div>'
+    + '<div class="field-row"><div><label>Hedef Oda °C</label><input type="number" step="0.1" inputmode="decimal" id="hp_oda_hedef" value="18"></div><div></div></div>'
+    + '<div class="field-row"><div><label>Başlangıç CO₂ alt</label><input type="number" inputmode="numeric" id="hp_co2alt_bas" placeholder="örn. 8000"></div>'
+    + '<div><label>Başlangıç CO₂ üst</label><input type="number" inputmode="numeric" id="hp_co2ust_bas" placeholder="örn. 9000"></div></div>'
+    + '<div class="field-row"><div><label>Hedef CO₂ alt</label><input type="number" inputmode="numeric" id="hp_co2alt_hedef" placeholder="örn. 2100"></div>'
+    + '<div><label>Hedef CO₂ üst</label><input type="number" inputmode="numeric" id="hp_co2ust_hedef" placeholder="örn. 2400"></div></div>'
+    + '<button class="btn small" style="margin-top:12px; width:100%;" onclick="havaPlaniOlustur(\''+c.id+'\')">🔄 Otomatik plan oluştur</button>'
+    + '</div>';
+  hava += '<div style="border-top:1px solid var(--line); margin-top:14px; padding-top:12px;">'
+    + '<div class="muted" style="margin-bottom:8px;">Tek satır elle ekle:</div>'
+    + '<div class="field-row"><div><label>Tarih</label><input type="date" id="h_tarih" value="'+todayISO()+'"></div>'
+    + '<div><label>Hedef °C</label><input type="number" step="0.1" inputmode="decimal" id="h_temp"></div></div>'
+    + '<div class="field-row"><div><label>CO₂ / Hava alt</label><input type="number" inputmode="numeric" id="h_alt" placeholder="3900"></div>'
+    + '<div><label>CO₂ / Hava üst</label><input type="number" inputmode="numeric" id="h_ust" placeholder="4200"></div></div>'
+    + '<button class="btn small" style="margin-top:12px; width:100%;" onclick="addHava(\''+c.id+'\')">+ Havalandırma satırı ekle</button>'
+    + '</div></div>';
+  return hava;
+}
+/* Başlat'tan açılan ayrı ekran: SADECE havalandırma planı formu + açıklama +
+   vazgeç. Yeni bir ekran TASARLANMADI — mevcut havalandirmaPlaniHTML(c) aynen
+   kullanılıyor, sadece Oda Detayı'nın geri kalanından (günlük kayıt, protokol
+   tablosu vb.) izole tek başına gösteriliyor ki mühendis Başlat'a basınca
+   doğrudan bu forma düşsün. */
+function renderHavaPlani(id){
+  var c=loadData().cycles.find(function(x){return x.id===id;});
+  if(!c){ go("bugun"); return; }
+  el("hdrTitle").textContent = esc(c.oda)+" — Havalandırma planı";
+  var h='<div class="card" style="border:1.5px solid #1d4ed8; background:#eef6ff;">'
+    + '<div style="font-weight:700; font-size:16px;">💨 Havaya başlamadan önce: havalandırma planı</div>'
+    + '<div class="muted" style="font-size:13px; margin-top:4px;">Havaya başlamakla birlikte sıcaklık ve CO₂ yönetimi de başlar — bu yüzden önce plan kurulmalı. Aşağıdaki formu doldurup "Otomatik plan oluştur"a basınca hem plan hem havaya başlama kaydı birlikte oluşturulur.</div>'
+    + '</div>'
+    + havalandirmaPlaniHTML(c)
+    + '<button class="btn ghost" style="width:100%; margin-top:10px;" onclick="turOdayaGit(\''+c.id+'\')">‹ Vazgeç, Günlük Tur\'a dön</button>';
+  el("app").innerHTML=h;
 }
 function havaErteleAc(cid){
   if(!can("edit")) return noPerm();
@@ -9022,7 +9028,13 @@ function addHava(id){
    gün sayısı kullanılır (mühendis kararı, tipik 4 veya 5 gün). Gün 0 =
    c.havaBaslangic (henüz işaretlenmediyse bugün); gün N = hedef değerler.
    Aynı tarihte satır zaten varsa üzerine yazılır (kopya oluşmaz), böylece
-   plan yanlış girilirse tekrar oluşturup düzeltilebilir. */
+   plan yanlış girilirse tekrar oluşturup düzeltilebilir.
+   ZORUNLU KURAL (kullanıcı isteği): Başlat kartından buraya gelindiyse (hava
+   henüz başlamamışsa VE bu ekran view.name==="havaplan" ise) havaya başlama
+   kaydı YALNIZCA plan burada BAŞARIYLA oluşturulunca, bu satırın sonunda ilk
+   kez yazılır — sıcaklık/CO₂ planı olmadan havaya başlama tamamlanamaz. Oda
+   Detayı'ndan (plan zaten var olan bir odayı düzenlerken) çağrılırsa bu ek
+   adım atlanır, eskisi gibi sadece plan güncellenir. */
 function havaPlaniOlustur(id){
   if(!can("edit")) return noPerm();
   var c = loadData().cycles.find(function(x){return x.id===id;});
@@ -9033,6 +9045,7 @@ function havaPlaniOlustur(id){
   if(odaBas===null || odaHedef===null){ toast("Başlangıç ve hedef Oda °C gir"); return; }
   var co2AltBas = numParse(el("hp_co2alt_bas").value), co2AltHedef = numParse(el("hp_co2alt_hedef").value);
   var co2UstBas = numParse(el("hp_co2ust_bas").value), co2UstHedef = numParse(el("hp_co2ust_hedef").value);
+  var baslatiliyorMu = !c.havaBaslangic && view.name==="havaplan";
   var baz = c.havaBaslangic || todayISO();
   if(!c.hava) c.hava=[];
   for(var i=0;i<=gunSayisi;i++){
@@ -9045,8 +9058,20 @@ function havaPlaniOlustur(id){
     if(idx>=0) c.hava[idx]=satir; else c.hava.push(satir);
   }
   c.hava.sort(function(a,b){ return cmpDate(a.tarih,b.tarih); });
-  touchCycle(c); saveData(); logAudit("havalandırma planı oluşturuldu", c.oda+" · "+gunSayisi+" gün, "+odaBas+"°→"+odaHedef+"°");
-  toast(gunSayisi+" günlük plan oluşturuldu"); renderDetail(id);
+  touchCycle(c); logAudit("havalandırma planı oluşturuldu", c.oda+" · "+gunSayisi+" gün, "+odaBas+"°→"+odaHedef+"°");
+  if(baslatiliyorMu){
+    var hi=protokolRolIdx("hava");
+    if(hi>=0){
+      adimTamamla(c, hi, {tarih:baz, sessiz:true}); /* c.hava'yı az önce biz kurduk — SSOT'taki otomatik-plan zaten var olan planın üzerine yazmaz */
+      gunlukGorevNotEkle(c, "Havaya Başlama — 🟢 Başlatıldı · "+gunSayisi+" günlük havalandırma planı ile ("+odaBas+"°→"+odaHedef+"°) — "+kimNeZamanEtiketi());
+    }
+    saveData();
+    toast("💨 Havaya başlandı — "+gunSayisi+" günlük havalandırma planı oluşturuldu");
+    turOdayaGit(c.id);
+  } else {
+    saveData();
+    toast(gunSayisi+" günlük plan oluşturuldu"); renderDetail(id);
+  }
 }
 function delHava(id,i){
   if(!can("edit")) return noPerm();
