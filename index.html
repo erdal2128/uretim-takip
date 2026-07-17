@@ -650,7 +650,7 @@ function hasatTartiGetir(oda, tur){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v388";
+var APP_VER = "v389";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -2525,33 +2525,83 @@ function turHavaBaslamaKartHTML(c, sd){
       ) : '')
     + '</div>';
 }
-/* Havaya başlandıktan sonraki en kritik yönetim kararı ilk sulamanın zamanlaması
-   olduğu için (protokolde hava+1: "ilk suda son 300 lt'ye Vivando"), Havaya
-   Başlama Başlat ile kaydedilir kaydedilmez burada otomatik bir geri sayım
-   belirir — kullanıcı isteği: mühendisi protokole uymaya zorlamak değil, doğru
-   kararı almasını kolaylaştırmak. Sabit bir "durum" alanı YOK — her zamanki gibi
-   c.havaBaslangic'ten türetilir, hava+1 geçince kendiliğinden kaybolur. */
-function turIlkSulamaGeriSayimHTML(c){
-  if(!c.havaBaslangic) return "";
-  var ilkSulamaTarih=addDays(c.havaBaslangic,1);
-  var kalanGun=daysBetween(todayISO(), ilkSulamaTarih);
-  if(kalanGun===null || kalanGun<0) return "";
-  return '<div style="margin-top:8px; padding:8px; background:#eef9f2; border:1px solid #b7e4c7; border-radius:8px;">'
-    + '<div style="font-size:12px; font-weight:700; color:#1f7a4d;">💧 İlk Sulama Geri Sayımı</div>'
-    + '<div style="font-size:13.5px;margin-top:3px;">'+(kalanGun===0?'Bugün ilk sulama günü.':(kalanGun+' gün kaldı.'))+' <span class="muted">('+fmtDate(ilkSulamaTarih)+')</span></div>'
+/* Havaya başladıktan sonra kullanıcının odağı TAKVİM değil BİYOLOJİK HEDEF
+   olmalı (kullanıcı isteği): "Bugün bunu yapmak zorundasın" yerine "üretim şu
+   aşamada, sıradaki biyolojik hedef bu, mevcut verilere göre beklenen tarih
+   bu — ama kesin değil". Bu yüzden hava başladıktan sonra (hasat/1. flaş
+   fiilen başlayana kadar) tek tek protokol adımlarının tarihini ayrı ayrı
+   göstermek yerine (Hava+6 pimleme, Hava+9 bezelye vb.) TEK bir kilometre
+   taşı — 1. Flaş — bir tahmin olarak gösterilir. */
+function fmtDateGun(iso){
+  if(!iso) return "—";
+  var p=iso.split("-"); if(p.length!==3) return iso;
+  var ay=parseInt(p[1],10)-1;
+  return parseInt(p[2],10)+" "+(YOKLAMA_AY_ADLARI[ay]||p[1]);
+}
+/* Tahmini 1. Flaş tarihi. Taban tarih hasat/flaş1 adımının SSOT zincirinden
+   (protokolTarih→protokolReferansTarihi) gelir — bu zaten GERÇEK hava
+   başlangıcını ve o adıma (ya da hava adımına) yapılmış ertelemeleri/mühendis
+   kararlarını otomatik yansıtır, sabit bir takvim değildir. Üzerine kuluçka
+   dönemi kompost sıcaklığı sapması (hasatKaymasi — zaten var olan SSOT, aynı
+   hesap Raporlar'daki "Tahmini 1. Flaş" ve puan/tahmin kartlarında da
+   kullanılıyor) eklenir: sıcak kompost hızlanmayı, soğuk kompost yavaşlamayı
+   işaret eder. Yeni ölçüm/erteleme girildikçe otomatik güncellenir. Hava henüz
+   başlamadıysa veya hasat zaten başladıysa (bu kilometre taşı geride kaldıysa,
+   odak artık gerçek hasat takibine geçer) null döner — kart hiç gösterilmez. */
+function tahminiFlas1Tarihi(c){
+  if(!c || !c.havaBaslangic) return null;
+  var hi=protokolRolIdx("hasat"); if(hi<0) return null;
+  var st=getProtokol()[hi];
+  if(adimGercektenYapildiMi(c, hi, st)) return null;
+  var temel=protokolTarih(c, st); if(!temel) return null;
+  var k=hasatKaymasi(c);
+  return {tarih:(k.kayma?addDays(temel,k.kayma):temel), kayma:k.kayma, neden:k.neden};
+}
+/* Odanın bulunduğu biyolojik döneme göre "bugün nelere dikkat edilmeli"
+   listesi — sabit bir görev değil, stageOf(c) (SSOT — aynı fonksiyon aşama
+   rozetini de belirliyor) ile otomatik değişir. */
+var GUNLUK_KONTROL_LISTESI = {
+  "2. Misel gelişim": ["Kompost sıcaklığını takip et.", "İlk sulama için hazırlık yap.", "Amonyak kokusu kontrol et."],
+  "Pimleme dönemi":   ["Pin (iğne) oluşumunu gözlemle.", "Nem seviyesini kontrol et.", "Oda sıcaklığını hedefe göre ayarla."],
+  "Bezelye boyutu":   ["Hastalık belirtisi kontrol et.", "Hasat ekibini hazırla.", "Su/kalsiyum uygulamasını unutma."],
+  "Ceviz boyutu":     ["Hastalık belirtisi kontrol et.", "Hasat ekibi ve kasaları hazırla.", "Son su uygulamasını (sodyum) unutma."]
+};
+function bugunkuKontrollerHTML(c){
+  var liste=GUNLUK_KONTROL_LISTESI[stageOf(c).t];
+  if(!liste || !liste.length) return "";
+  return '<div style="margin-top:10px;padding-top:8px;border-top:1px solid #d7e6f2;">'
+    + '<div style="font-size:12px;font-weight:700;color:#1d4ed8;">Bugünkü Kontroller</div>'
+    + liste.map(function(x){ return '<div style="font-size:13px;margin-top:3px;">• '+esc(x)+'</div>'; }).join('')
+    + '</div>';
+}
+function turFlas1TahminKartHTML(c){
+  var t=tahminiFlas1Tarihi(c); if(!t) return "";
+  var kalan=daysBetween(todayISO(), t.tarih);
+  var durum = t.kayma<0 ? {ikon:"🔵", txt:"Beklenenden hızlı"} : (t.kayma>0 ? {ikon:"🟡", txt:"Beklenenden yavaş"} : {ikon:"🟢", txt:"Gelişim normal"});
+  return '<div style="margin-top:8px; padding:10px; background:#eef6ff; border:1.5px solid #1d4ed8; border-radius:10px;">'
+    + '<div style="font-size:12px; font-weight:700; color:#1d4ed8;">🍄 Tahmini 1. Flaş</div>'
+    + '<div style="font-size:20px; font-weight:700; margin-top:2px;">'+fmtDateGun(t.tarih)+'</div>'
+    + '<div style="font-size:13.5px; margin-top:4px;">⏳ '+(kalan===null?"—":(kalan>=0?(kalan+" gün kaldı"):((-kalan)+" gün gecikti")))+'</div>'
+    + '<div style="font-size:13.5px; margin-top:2px;">'+durum.ikon+' '+durum.txt+'</div>'
+    + '<div style="font-size:11px; color:var(--muted); font-style:italic; margin-top:6px;">Bu tarih protokol ve mevcut gelişim verilerine göre hesaplanmış tahmindir. Gerçek tarih biyolojik gelişime göre değişebilir.</div>'
+    + bugunkuKontrollerHTML(c)
     + '</div>';
 }
 function turSiradakiAdimHTML(c){
   var h="";
-  h += turIlkSulamaGeriSayimHTML(c);
+  var flas1Kart=turFlas1TahminKartHTML(c);
+  h += flas1Kart;
   /* GENEL SIRADAKİ İŞLEM: eskiden bu bilgi SADECE Odalar > Protokol Özeti'nde
      görünüyordu, Günlük Tur ekranında hiç yoktu — sadece bir Şartlı Kural
      tetiklenirse bir kart çıkıyordu (o da koşula bağlıydı, her zaman değil).
      Kullanıcı tur sırasında "bu odada sırada ne var" bilgisini HER ZAMAN
      (koşula bağlı olmadan) burada da görmek istedi. Aynı SSOT fonksiyonunu
      (siradakiProtokolAdimi) kullanıyor — Odalar'daki ile birebir aynı sonucu
-     verir, veri kaynağı ikilenmiyor. */
-  try{
+     verir, veri kaynağı ikilenmiyor. Havaya başladıktan hasat/1.flaş fiilen
+     başlayana kadar bu blok TAMAMEN devre dışı kalır — yukarıdaki Tahmini
+     1. Flaş kartı tek biyolojik hedef olarak yeterlidir, ikisi birlikte
+     (biri kilometre taşı, biri tek tek protokol tarihi) çelişkili görünürdü. */
+  if(!flas1Kart) try{
     var sd=siradakiProtokolAdimi(c);
     if(sd){
       var sdStep=getProtokol()[sd.idx];
