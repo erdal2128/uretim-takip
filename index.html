@@ -650,7 +650,7 @@ function hasatTartiGetir(oda, tur){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v395";
+var APP_VER = "v396";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -4130,6 +4130,16 @@ function render(){
     }catch(e){
       console.warn("refreshSicaklik error:", e);
     }
+    /* Günlük Tur'da (tek oda modu) SAYFA İÇİNDE KALAN her aksiyon (sulama
+       onayı, protokol işaretleme, gözlem notu vb.) de render()'ı tetikler —
+       DOM yeniden kurulmadan önce, o an ekranda yazılı ama henüz kaydedilmemiş
+       sıcaklık/CO₂ alanlarını kaybetmemek için koru (bkz. turAcikKartlariKoru
+       yorumu). turTarihDegis/turModDegistir kendi flush'larını zaten yaptığı
+       ve tarihi DEĞİŞTİRDİĞİ için burada bir kez atlanır (_turSkipAutoFlush). */
+    if(_turSkipAutoFlush){ _turSkipAutoFlush=false; }
+    else if(view.name==="tur" && getTurMod()==="tek"){
+      try{ turAcikKartlariKoru(); }catch(e){ console.error("turAcikKartlariKoru error:", e); }
+    }
     if(view.name==="bootwait"){ try{ renderBootWait(); }catch(e){ console.error("renderBootWait error:", e); } return; }
     if(view.name==="setup"){ try{ renderSetup(); }catch(e){ console.error("renderSetup error:", e); } return; }
     if(!currentRole){
@@ -4231,6 +4241,12 @@ var tutarTur=null; /* Türde başlarken hangi odayla başlanacağı (quick acces
 function getTurMod(){ try{ return localStorage.getItem("utp_turMod")||"tek"; }catch(e){ return "tek"; } }
 function setTurMod(m){ try{ localStorage.setItem("utp_turMod", m); }catch(e){ console.warn("tur modu kaydedilemedi", e); } }
 var _turTarihVal=null, _turVakitVal=null;
+/* turTarihDegis/turModDegistir zaten kendi (tam, onaylı) flush'larını yapıp
+   _turTarihVal'i YENİ bir tarihe değiştiriyor — render()'daki genel otomatik
+   koruma o an çalışırsa DOM'da hâlâ ESKİ tarihin değerleri varken bunları
+   YENİ tarihe yazar (veri bozulması). Bu bayrak sadece o iki yerde kısa süre
+   true yapılıp render() içinde hemen tüketilir. */
+var _turSkipAutoFlush=false;
 function togglePano(){ panoMode=!panoMode; render(); }
 function goHome(){ if(currentRole) go("bugun"); }
 function panoEdit(id){ go("panoedit", id); }
@@ -9352,6 +9368,7 @@ function turTarihDegis(){
   var warnLines=[];
   kartlar.forEach(function(card){ try{ if(turKaydetKart(card, eskiTarih, "", warnLines)) saveData(); }catch(e){ console.error("Tur kaydı hatası:", e); } });
   if(warnLines.length) showWarnBox("Uyarı", warnLines);
+  _turSkipAutoFlush=true; /* eski tarih için zaten yukarıda flush edildi — render()'ın genel koruması bunu YENİ tarihe tekrar yazmasın */
   _turTarihVal=el("tur_tarih")?el("tur_tarih").value:_turTarihVal;
   render();
 }
@@ -9360,6 +9377,7 @@ function turModDegistir(){
   var warnLines=[];
   document.querySelectorAll('[data-cid]').forEach(function(card){ try{ if(turKaydetKart(card, eskiTarih, "", warnLines)) saveData(); }catch(e){ console.error("Tur kaydı hatası:", e); } });
   if(warnLines.length) showWarnBox("Uyarı", warnLines);
+  _turSkipAutoFlush=true; /* bkz. turTarihDegis — aynı sebep */
   _turTarihVal=el("tur_tarih")?el("tur_tarih").value:_turTarihVal;
   setTurMod(getTurMod()==="tek"?"liste":"tek");
   turIndex=0;
@@ -9462,6 +9480,43 @@ function turKaydetKart(card, t, vk, warnLines){
     co2alt: g('.tur_co2a'), co2ust: g('.tur_co2u'), sulama: g('.tur_sulama'), su: g('.tur_su')
   };
   return gunlukKaydet(c, t, vk, patch, warnLines);
+}
+/* Kullanıcı raporu: "önce kompost dereceleri ve klimaları giriyorum, sonra
+   sulama ve protokolleri girdiğim zaman dereceler gidiyor". Kök neden:
+   sıcaklık/CO₂ alanları hiçbir onchange/onblur ile kaydedilmiyordu — sadece
+   DOM'da yaşıyordu, turIlerle/turTarihDegis gibi SAYFA DEĞİŞTİREN aksiyonlar
+   flush ediyordu. Ama sulama Onayla/Değiştir/İptal, protokol işaretleme,
+   sarım kontrolü, gözlem notu gibi AYNI SAYFADA KALAN aksiyonlar da
+   render()'ı tetikliyor — kart gunKaydiBul(c)'tan (henüz kaydedilmemiş,
+   dolayısıyla eski/boş) yeniden çiziliyor, yazılan dereceler kayboluyor.
+   Bu fonksiyon her render() öncesi (tek oda modundayken) o an ekranda açık
+   kartların dolu alanlarını SESSİZCE (onay/engelleme sorgusu olmadan —
+   gunlukKaydet'in aksine, amaç nihai kayıt değil ARA KAYIP ÖNLEME) korur.
+   Boş bırakılan bir alana DOKUNULMAZ (henüz bitmemiş form olabilir). */
+function turAcikKartlariKoru(){
+  var kartlar=document.querySelectorAll('[data-cid]');
+  if(!kartlar.length) return;
+  var t=_turTarihVal||todayISO();
+  var degisti=false;
+  kartlar.forEach(function(card){
+    try{
+      var cid=card.getAttribute('data-cid');
+      var c=loadData().cycles.find(function(x){return x.id===cid;}); if(!c) return;
+      function g(sel){ var e=card.querySelector(sel); return e?e.value.trim():null; }
+      var oda=g('.tur_oda'), komp=g('.tur_komp'), kompUst=g('.tur_kompust'), klima=g('.tur_klima'), a=g('.tur_co2a'), u=g('.tur_co2u');
+      if(!oda && !komp && !kompUst && !klima && !a && !u) return; /* hiçbir alan dolu değil, korunacak bir şey yok */
+      if(!c.gunluk) c.gunluk=[];
+      var ex=c.gunluk.find(function(r){return r.tarih===t;});
+      if(!ex){ ex={tarih:t,vakit:"",su:"",sulama:""}; c.gunluk.push(ex); c.gunluk.sort(function(x,y){return cmpDate(x.tarih,y.tarih);}); }
+      if(oda && ex.odaC!==oda){ ex.odaC=oda; degisti=true; }
+      if(komp && ex.kompostC!==komp){ ex.kompostC=komp; degisti=true; }
+      if(kompUst && ex.kompostUst!==kompUst){ ex.kompostUst=kompUst; degisti=true; }
+      if(klima && ex.klimaC!==klima){ ex.klimaC=klima; degisti=true; }
+      if(a && ex.co2alt!==a){ ex.co2alt=a; degisti=true; }
+      if(u && ex.co2ust!==u){ ex.co2ust=u; degisti=true; }
+    }catch(e){ console.error("Tur alanı korunamadı:", e); }
+  });
+  if(degisti) saveData();
 }
 function turIlerle(delta){
   var t=el("tur_tarih").value;
