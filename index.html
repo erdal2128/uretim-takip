@@ -452,9 +452,19 @@ function fbInitAfterAuth(){
           }
         });
       }
-      /* Senkronla gelmiş olabilecek tekrar eden günlük notları temizle */
-      gunlukNotlariTekille(memData);
-      persistData(JSON.stringify(memData));
+      /* Performans (kullanıcı raporu: "hala donuyor"): bu callback SADECE
+         METADATA değiştiğinde de (kendi push ettiğimiz bir yazının sunucu
+         onayı gibi) tetiklenir — realChange bu durumda false kalır. Toplu
+         geçmiş senkron (tur16/17 gibi onlarca oda birden oluşup buluta tek
+         tek push edilince) her onay için ayrı bir tetiklenme demek; içerik
+         GERÇEKTEN değişmediyse koca memData'yı yeniden JSON'a çevirip
+         (persistData) tekrar tekrar diskle yazmanın hiçbir faydası yok,
+         sadece ana thread'i meşgul ediyordu. */
+      if(realChange){
+        /* Senkronla gelmiş olabilecek tekrar eden günlük notları temizle */
+        gunlukNotlariTekille(memData);
+        persistData(JSON.stringify(memData));
+      }
       fbSetStatus(snap.metadata.fromCache?"offline":"synced");
       if(realChange && !isTyping()) render();
     }, function(err){ console.warn("snapshot",err); fbSetStatus("offline"); });
@@ -551,6 +561,7 @@ function fbInitAfterAuth(){
 
     /* Hasat Takip'ten gelen tartı verileri (salt-okunur) */
     FB.hasatColl = db.collection("farms").doc(FARM_CODE).collection("hasat_tarti");
+    var _hasatTartiSenkronTimer=null;
     FB.hasatColl.onSnapshot({includeMetadataChanges:true}, function(snap){
       if(!window._hasatTarti) window._hasatTarti = {};
       var changed=false;
@@ -560,11 +571,22 @@ function fbInitAfterAuth(){
         if(ch.type==="removed"){ delete window._hasatTarti[key]; changed=true; }
         else { window._hasatTarti[key]=data; changed=true; }
       });
-      /* Senkronu Verim/Firma/Analiz raporlarının gerçekten okuduğu c.hasat'a
-         da yansıt (bkz. hasatTartiSenkronEt yorumu) — aksi halde bu raporlar
-         hiç değişmiyordu. */
-      if(changed){ try{ if(hasatTartiTumDonguleriSenkronEt()) changed=true; }catch(e){ console.warn("hasatTartiSenkronEt",e); } }
-      if(changed && !isTyping()) render();
+      if(!changed) return;
+      /* Performans (kullanıcı raporu: "hala donuyor"): geçmiş toplu senkron
+         (tur16/17 backfill gibi) yüzlerce belgeyi Firestore'a TEK TEK
+         gönderiyor — her biri ayrı bir olay olarak buraya düşebiliyor. Her
+         olayda ayrı ayrı senkron+render koşturmak yerine, art arda gelen
+         olaylar kısa bir debounce ile TEK bir senkron+render'a toplanır
+         (window._hasatTarti kendisi HER olayda anında güncelleniyor,
+         sadece Verim/Firma/Analiz'e yansıtma ve ekran yenileme geciktiriliyor). */
+      clearTimeout(_hasatTartiSenkronTimer);
+      _hasatTartiSenkronTimer = setTimeout(function(){
+        /* Senkronu Verim/Firma/Analiz raporlarının gerçekten okuduğu c.hasat'a
+           da yansıt (bkz. hasatTartiSenkronEt yorumu) — aksi halde bu raporlar
+           hiç değişmiyordu. */
+        try{ hasatTartiTumDonguleriSenkronEt(); }catch(e){ console.warn("hasatTartiSenkronEt",e); }
+        if(!isTyping()) render();
+      }, 500);
     }, function(err){ console.warn("snapshotHasat",err); });
 
     /* Ayarlar (firmalar, protokol, oda m², sıcaklık sınırları, konumlar, görev türleri, personel vb.)
@@ -694,7 +716,7 @@ function hasatTartiSenkronEt(c, _idx){
      tur16/17 kayıtlarında) çalışabilmesi. */
   if(!c.kompostFirma){
     var firmaliKayit = kayitlar.filter(function(k){return k.firma;})[0];
-    if(firmaliKayit){ c.kompostFirma=firmaliKayit.firma; degisti=true; }
+    if(firmaliKayit){ c.kompostFirma=firmaAdiCanonik(firmaliKayit.firma); degisti=true; }
   }
   if(!c.tonaj){
     var tonajliKayit = kayitlar.filter(function(k){return numParse(k.tonaj)>0;})[0];
@@ -790,7 +812,7 @@ function hasatTartiTumDonguleriSenkronEt(){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v403";
+var APP_VER = "v404";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -851,7 +873,8 @@ function memDataNormalizeVeGoc(){
   var _degFlasAkisi = flasAkisiVarsayilanEkle(memData);
   var _degFlas1Baglan = flas1DogrudanHavayaBagla(memData);
   var _degSulamaTekrar = sulamaIptalDegistirNotlariniTekille(memData);
-  if(_degMigrasyon || _degTekil || _degKompostInd || _degGorevMukerrer || _degSartliKural || _degEkipDept || _degFlasAkisi || _degFlas1Baglan || _degSulamaTekrar) saveData();
+  var _degFirmaCasing = firmaCasingBirlestir(memData);
+  if(_degMigrasyon || _degTekil || _degKompostInd || _degGorevMukerrer || _degSartliKural || _degEkipDept || _degFlasAkisi || _degFlas1Baglan || _degSulamaTekrar || _degFirmaCasing) saveData();
 }
 /* DÜZELTME (her açılışta çalışır, idempotent): gunlukKaydet()'teki eski bir
    kıyaslama hatası yüzünden (su slider'ı boş alanda "0" döndürür ama İptal
@@ -1060,6 +1083,38 @@ function gorevlerMukerrerleriBirlestir(d){
       yeni.push(ana);
     });
     if(buDegisti){ c.odaGorevleri=yeni; degisti=true; }
+  });
+  return degisti;
+}
+/* Kullanıcı raporu: "iki Özdal var, biri Özdal diğeri özdal, sadece ilk harf
+   farklı". Kök neden: firma adı normalde d.settings.firmalar'daki (elle
+   yönetilen, firmaEkle() zaten büyük/küçük harf FARKINI GÖZ ARDI EDEREK
+   tekrar eklemeyi engelliyor) TEK bir listeden seçiliyordu; ama senkron
+   (hasatTartiSenkronEt), Hasat Takip'ten gelen firma adını bu listeye hiç
+   bakmadan DOĞRUDAN yazınca ("özdal") aynı firma iki farklı yazımla ayrı
+   ayrı görünmeye başladı (Firma Analizi, dropdown, vb. hepsi metni BİREBİR
+   karşılaştırıyor). Bu TEK SEFERLİK geçiş, hem firmalar listesindeki hem de
+   odalardaki büyük/küçük harf farklı yazımları TEK bir yazıma (öncelik:
+   firmalar listesindeki, yoksa ilk görülen) birleştirir. İdempotent. */
+function firmaCasingBirlestir(d){
+  if(!d) return false;
+  var degisti=false;
+  if(!d.settings) d.settings={};
+  if(!Array.isArray(d.settings.firmalar)) d.settings.firmalar=[];
+  var canon={};
+  var temiz=[];
+  d.settings.firmalar.forEach(function(f){
+    if(!f){ return; }
+    var lc=f.toLowerCase();
+    if(lc in canon){ degisti=true; return; }
+    canon[lc]=f; temiz.push(f);
+  });
+  if(temiz.length!==d.settings.firmalar.length){ d.settings.firmalar=temiz; degisti=true; }
+  (d.cycles||[]).forEach(function(c){
+    if(!c.kompostFirma) return;
+    var lc=c.kompostFirma.toLowerCase();
+    if(!(lc in canon)){ canon[lc]=c.kompostFirma; return; }
+    if(canon[lc]!==c.kompostFirma){ c.kompostFirma=canon[lc]; degisti=true; }
   });
   return degisti;
 }
@@ -8133,6 +8188,20 @@ function odaOptions(sel){
   return html;
 }
 function firmaList(){ var d=loadData(); if(!d.settings) d.settings={}; if(!Array.isArray(d.settings.firmalar)||!d.settings.firmalar.length) d.settings.firmalar=["Özdal","Uzman","Sumas","Agromat","Dirican"]; return d.settings.firmalar; }
+/* Büyük/küçük harf farkıyla ("Özdal" / "özdal") aynı firmanın ikiye
+   bölünmesini önler — firmalar listesinde ya da mevcut odalarda aynı
+   (case-insensitive) ada rastlarsa ONUN yazımını döndürür, yoksa verileni
+   olduğu gibi kullanır. Senkrondan gelen firma adını yazmadan önce
+   hasatTartiSenkronEt bunu çağırır (bkz. firmaCasingBirlestir). */
+function firmaAdiCanonik(ad){
+  if(!ad) return ad;
+  var lc=(""+ad).toLowerCase();
+  var bulunan=null;
+  firmaList().some(function(f){ if(f.toLowerCase()===lc){ bulunan=f; return true; } return false; });
+  if(bulunan) return bulunan;
+  (loadData().cycles||[]).some(function(c){ if(c.kompostFirma && c.kompostFirma.toLowerCase()===lc){ bulunan=c.kompostFirma; return true; } return false; });
+  return bulunan || ad;
+}
 function firmaEkle(ad){
   if(!can("manage")) return noPerm();
   ad=(ad||"").trim(); if(!ad){ toast("Firma adı gir"); return; }
