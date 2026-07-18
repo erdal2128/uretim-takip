@@ -668,6 +668,18 @@ function hasatTartiSenkronEt(c){
   if(!kayitlar.length) return false;
   if(!c.hasat) c.hasat=[];
   var degisti=false;
+  /* Firma/tonaj SADECE bu oda kaydında hâlâ BOŞSA senkrondan doldurulur —
+     elle girilmiş bilgi asla ezilmez. Amaç: Firma Analizi'nin, oda elle
+     açılıp firma bilgisi hiç yazılmasa bile (özellikle otomatik oluşan
+     tur16/17 kayıtlarında) çalışabilmesi. */
+  if(!c.kompostFirma){
+    var firmaliKayit = kayitlar.filter(function(k){return k.firma;})[0];
+    if(firmaliKayit){ c.kompostFirma=firmaliKayit.firma; degisti=true; }
+  }
+  if(!c.tonaj){
+    var tonajliKayit = kayitlar.filter(function(k){return numParse(k.tonaj)>0;})[0];
+    if(tonajliKayit){ c.tonaj=""+numParse(tonajliKayit.tonaj); degisti=true; }
+  }
   kayitlar.forEach(function(k){
     var srcKey = k.oda+"__"+k.tarih;
     var normalKasa = (numParse(k.ana90)||0)+(numParse(k.duble)||0)+(numParse(k.dokme)||0)+(numParse(k.ikinci)||0);
@@ -748,7 +760,7 @@ function hasatTartiTumDonguleriSenkronEt(){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v401";
+var APP_VER = "v402";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
