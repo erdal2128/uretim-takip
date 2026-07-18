@@ -873,7 +873,7 @@ function hasatTartiTumDonguleriSenkronEt(){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v412";
+var APP_VER = "v413";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -9238,31 +9238,6 @@ function sulamaKartHTML(c, ge, tarih){
   if(_duzenleAcik) return sulamaDuzenleFormuHTML(c, ge, _on, tarih);
   if(_kararVarMi) return sulamaSonucOzetiHTML(c, ge);
   return sulamaVarsayilanHTML(c, _on, tarih);
-}
-function addGunluk(id){
-  if(!can("edit")) return noPerm();
-  var c = loadData().cycles.find(function(x){return x.id===id;});
-  if(!c){ toast("Kayıt bulunamadı"); return; }
-  var t = el("g_tarih").value;
-  if(!t){ toast("Tarih seç"); return; }
-  if(!c.gunluk) c.gunluk=[];
-  var prev = (editGun>=0 && c.gunluk[editGun]) ? c.gunluk[editGun] : {};
-  var caEl=el("g_co2a"), cuEl=el("g_co2u"), vkEl=el("g_vakit"), suEl=el("g_su"), amEl=el("g_amonyak"), nemEl=el("g_nem");
-  var sulamaTxt=el("g_sulama").value.trim(), suTxt=(suEl?suEl.value.trim():(prev.su||""));
-  var problems=gunlukKontrolMesaji(c, t, !!(sulamaTxt||suTxt));
-  if(problems.some(function(p){return p.tip==="blockAll";})){
-    showWarnBox("Kaydedilemedi", problems.map(function(p){return p.metin;}));
-    return;
-  }
-  var blockSulama=problems.some(function(p){return p.tip==="blockSulama";});
-  var rec = {tarih:t, vakit:(vkEl?vkEl.value:(prev.vakit||"")), odaC:el("g_oda").value.trim(), kompostC:el("g_komp").value.trim(), kompostUst:(el("g_kompust")?el("g_kompust").value.trim():(prev.kompostUst||"")), klimaC:(el("g_klima")?el("g_klima").value.trim():""), co2alt:(caEl?caEl.value.trim():(prev.co2alt||"")), co2ust:(cuEl?cuEl.value.trim():(prev.co2ust||"")), amonyak:(amEl?amEl.value:(prev.amonyak||"")), nem:(nemEl?nemEl.value:(prev.nem||"")), su:(blockSulama?"":suTxt), sulama:(blockSulama?"":sulamaTxt)};
-  if(editGun>=0 && c.gunluk[editGun]){ c.gunluk[editGun]=rec; editGun=-1; toast(blockSulama?"Güncellendi (sulama hariç)":"Kayıt güncellendi"); }
-  else { c.gunluk.push(rec); toast(blockSulama?"Eklendi (sulama hariç)":"Kayıt eklendi"); }
-  c.gunluk.sort(function(a,b){ return cmpDate(a.tarih,b.tarih); });
-  touchCycle(c); saveData(); logAudit("günlük kaydı", c.oda+" · "+t);
-  if(blockSulama) showWarnBox("Kısmen kaydedildi", problems.map(function(p){return p.metin;}));
-  else { var ilacWarn=ilacTekrarKontrolMesaji(c,t,rec.sulama); if(ilacWarn.length) showWarnBox("İlaç tekrar aralığı uyarısı", ilacWarn); }
-  renderDetail(id);
 }
 function delGunluk(id,i){
   if(!can("edit")) return noPerm();
