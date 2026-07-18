@@ -1,0 +1,9 @@
+{
+  "name": "uretim-takip-tests",
+  "private": true,
+  "version": "1.0.0",
+  "description": "index.html içindeki saf iş mantığı fonksiyonları için test paketi (Node built-in test runner, harici bağımlılık yok).",
+  "scripts": {
+    "test": "node --test tests/*.test.js"
+  }
+}
