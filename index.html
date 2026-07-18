@@ -748,7 +748,7 @@ function hasatTartiTumDonguleriSenkronEt(){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v400";
+var APP_VER = "v401";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -10458,12 +10458,12 @@ function buildGenelRaporHTML(){
     toplamKasa+=v.toplam; toplamTon+=v.ton;
     rows+='<tr><td>'+esc(c.oda)+'</td><td>'+(c.tur||"")+'</td><td>'+esc(st.t)+'</td><td>'+fmtDate(c.gelisTarihi)+'</td>'
       +'<td>'+(son?esc(kompStr(son)):"\u2014")+'</td><td>'+(son?esc(son.odaC||""):"\u2014")+'</td>'
-      +'<td>'+v.toplam+'</td><td>'+(v.verim!=null?v.verim.toFixed(1):"\u2014")+'</td></tr>';
+      +'<td>'+Math.round(v.toplam)+'</td><td>'+(v.verim!=null?v.verim.toFixed(1):"\u2014")+'</td></tr>';
   });
   var pRows="";
   pasif.slice().sort(function(a,b){return cmpDate(b.bosaltimTarihi,a.bosaltimTarihi);}).slice(0,30).forEach(function(c){
     var v=verimOzet(c);
-    pRows+='<tr><td>'+esc(c.oda)+'</td><td>'+(c.tur||"")+'</td><td>'+fmtDate(c.gelisTarihi)+'</td><td>'+fmtDate(c.bosaltimTarihi)+'</td><td>'+v.toplam+'</td><td>'+(v.verim!=null?v.verim.toFixed(1):"\u2014")+'</td></tr>';
+    pRows+='<tr><td>'+esc(c.oda)+'</td><td>'+(c.tur||"")+'</td><td>'+fmtDate(c.gelisTarihi)+'</td><td>'+fmtDate(c.bosaltimTarihi)+'</td><td>'+Math.round(v.toplam)+'</td><td>'+(v.verim!=null?v.verim.toFixed(1):"\u2014")+'</td></tr>';
   });
   return '<html><head><meta charset="utf-8"><title>Genel \u00dcretim Raporu</title>'
     +'<style>body{font-family:Arial,sans-serif;font-size:12px;color:#000;padding:14px;}h1{font-size:18px;margin:0 0 4px;}h3{margin:16px 0 4px;font-size:14px;}'
@@ -12203,7 +12203,7 @@ function hasatRaporuHTML(){
   });
   function box(lbl,val,unit){ return '<div style="flex:1;min-width:84px;text-align:center;border:1px solid var(--line);border-radius:10px;padding:8px;"><div class="muted" style="font-size:12px;">'+lbl+'</div><div style="font-size:19px;font-weight:700;">'+val+(unit?'<span style="font-size:11px;"> '+unit+'</span>':'')+'</div></div>'; }
   var body='<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;">'
-    +box("Bugün",gunlukKasa,"kasa")+box("Son 7 gün",haftalikKasa,"kasa")+box("Son 30 gün",aylikKasa,"kasa")
+    +box("Bugün",Math.round(gunlukKasa),"kasa")+box("Son 7 gün",Math.round(haftalikKasa),"kasa")+box("Son 30 gün",Math.round(aylikKasa),"kasa")
     +box("Bugün",(gunlukKasa*S.kasaAgirlik).toFixed(0),"kg")+box("Son 30 gün",(aylikKasa*S.kasaAgirlik).toFixed(0),"kg")
     +'</div>';
 
@@ -12211,7 +12211,7 @@ function hasatRaporuHTML(){
   if(odaKeys.length){
     body+='<div class="muted" style="margin-bottom:4px;">Oda bazında (son 30 gün):</div>';
     odaKeys.forEach(function(o){
-      body+='<div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid #eee;font-size:13px;"><span><b>'+esc(o)+'</b></span><span class="note">'+odaToplam[o]+' kasa ('+(odaToplam[o]*S.kasaAgirlik).toFixed(0)+' kg)</span></div>';
+      body+='<div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid #eee;font-size:13px;"><span><b>'+esc(o)+'</b></span><span class="note">'+Math.round(odaToplam[o])+' kasa ('+(odaToplam[o]*S.kasaAgirlik).toFixed(0)+' kg)</span></div>';
     });
   }
 
@@ -14255,13 +14255,13 @@ function verimCardHTML(c){
   function box(lbl,val,unit){ return '<div style="flex:1;min-width:84px;text-align:center;border:1px solid var(--line);border-radius:10px;padding:8px;"><div class="muted" style="font-size:12px;">'+lbl+'</div><div style="font-size:19px;font-weight:700;">'+val+(unit?'<span style="font-size:11px;"> '+unit+'</span>':'')+'</div></div>'; }
   var h='<div class="sec-title">Hasat / Verim</div><div class="card" style="padding:10px;">'
     +'<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;">'
-    +box("Toplam",v.toplam,"kasa")+box("Kestane",v.kestane,"")+box("Normal",v.normal,"")+box("Verim",(v.verim!=null?v.verim.toFixed(1):"—"),"kasa/ton")
+    +box("Toplam",Math.round(v.toplam),"kasa")+box("Kestane",Math.round(v.kestane),"")+box("Normal",Math.round(v.normal),"")+box("Verim",(v.verim!=null?v.verim.toFixed(1):"—"),"kasa/ton")
     +box("Toplam",v.kg.toFixed(0),"kg")+box("Verim",(v.kgTon!=null?v.kgTon.toFixed(0):"—"),"kg/ton")+(v.kgM2!=null?box("Verim",v.kgM2.toFixed(1),"kg/m²"):'')
     +'</div>';
   var fo=verimFlasOzet(c);
   var fKeys=Object.keys(fo);
   if(fKeys.length){
-    h+='<div class="muted" style="margin-bottom:8px;">Flaş bazında: '+fKeys.sort().map(function(k){ return k+': '+fo[k].kasa+' kasa ('+fo[k].kg.toFixed(0)+' kg)'; }).join(' · ')+'</div>';
+    h+='<div class="muted" style="margin-bottom:8px;">Flaş bazında: '+fKeys.sort().map(function(k){ return k+': '+Math.round(fo[k].kasa)+' kasa ('+fo[k].kg.toFixed(0)+' kg)'; }).join(' · ')+'</div>';
   }
   if(!c.bosaltimTarihi){
     var tv=tahminiVerim(c);
