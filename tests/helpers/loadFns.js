@@ -36,8 +36,14 @@ function extractFunctionSource(name) {
 // yapar) testlerde yanlışlıkla başarısız olur. runInThisContext ile fonksiyonlar
 // global'e tanımlanır ve referansları alınır (node:test her dosyayı ayrı
 // process'te çalıştırdığı için bu, test dosyaları arasında sızıntı yapmaz).
-function loadFns(names) {
-  var src = names.map(extractFunctionSource).join("\n");
+// shimSrc (opsiyonel): loadData()/getSet() gibi global duruma (memData,
+// localStorage) bağımlı fonksiyonları test edilebilir kılmak için, gerçek
+// fonksiyonlardan ÖNCE çalıştırılan küçük bir yerine-koyma kaynağı — örn.
+// "function loadData(){ return global.__TEST_DATA; }". Uygulama fonksiyonları
+// index.html'den DEĞİŞTİRİLMEDEN alınır, sadece dışa bağımlılığı test ortamına
+// bağlanır.
+function loadFns(names, shimSrc) {
+  var src = (shimSrc ? shimSrc + "\n" : "") + names.map(extractFunctionSource).join("\n");
   var script = new vm.Script(src, { filename: names.join(",") + ".js" });
   script.runInThisContext();
   var out = {};
