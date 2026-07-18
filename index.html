@@ -867,7 +867,7 @@ function hasatTartiTumDonguleriSenkronEt(){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v409";
+var APP_VER = "v410";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -14507,16 +14507,28 @@ function delHasat(id,i){
   if(!can("edit")) return noPerm(); var c=loadData().cycles.find(function(x){return x.id===id;}); if(!c||!c.hasat) return; c.hasat.splice(i,1); saveData(); renderDetail(id); }
 
 /* ---------- Tüketim özeti ---------- */
+/* Kullanıcı raporu: "oda akışı ve pdf de toplam su ile verdiğim su miktarı
+   uyuşmuyor." Kök sebep: bu fonksiyon "Toplam Su" için KENDİ AYRI, basit
+   bir regex (r.sulama içindeki TÜM "sayı+lt" kalıplarını TOPLAR) kullanıyordu
+   — oysa PDF/Oda Akışı'ndaki günlük "Sulama" sütunu (gunlukSatirAyristir) ve
+   grafikteki su çubukları (gunlukSuMiktari) çok daha sofistike bir
+   sınıflandırıcı kullanıyor (miktar+madde adı ayrımı yapar, TOPLAMAK yerine
+   günün en büyük tek sayısını alır). İki ayrı yol aynı veriyi farklı
+   yorumlayınca, PDF'in üstündeki toplam ile altındaki günlük satırlar
+   birbirini tutmuyordu. Artık BURASI DA gunlukSuMiktari'yi (SSOT) kullanıyor
+   — üç yer de (toplam, günlük satır, grafik) garanti olarak aynı sonucu verir. */
 function tuketimOzet(c){
   var su=0, kim={}, n=0, approx=false; var suGunSayisi=0; var flasSu={};
   (c.gunluk||[]).forEach(function(r){
     var sn=numParse(r.su); var hasText=!!r.sulama;
     if(sn===null && !hasText) return;
     n++;
-    var buSu=0;
-    if(sn!==null){ buSu=sn; su+=sn; }
-    else if(hasText){ var m=(""+r.sulama).match(/(\d+(?:[.,]\d+)?)\s*lt/gi); if(m){ approx=true; m.forEach(function(x){ var num=parseFloat(x.replace(/[^\d.,]/g,'').replace(',','.')); if(!isNaN(num)){ su+=num; buSu+=num; } }); } }
-    if(buSu>0){ suGunSayisi++; var ha=hasatAsama(c,r.tarih); var key=(ha&&ha.flas>0)?("F"+ha.flas):"hazırlık/kuluçka"; flasSu[key]=(flasSu[key]||0)+buSu; }
+    var buSu=gunlukSuMiktari(r);
+    if(buSu>0){
+      su+=buSu;
+      if(sn===null) approx=true; /* değer temiz sayısal r.su'dan değil, serbest metinden okundu */
+      suGunSayisi++; var ha=hasatAsama(c,r.tarih); var key=(ha&&ha.flas>0)?("F"+ha.flas):"hazırlık/kuluçka"; flasSu[key]=(flasSu[key]||0)+buSu;
+    }
     if(hasText){ ["Serenade","Vivando","Tezguard","insektisit","formaldehit","Asena","kalsiyum","sodyum"].forEach(function(kw){ if(new RegExp(kw,"i").test(r.sulama)) kim[kw]=(kim[kw]||0)+1; }); }
   });
   var ton=(numParse(c.tonaj)||0)/1000; var alan=numParse(c.alanM2);
