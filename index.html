@@ -650,7 +650,7 @@ function hasatTartiGetir(oda, tur){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v394";
+var APP_VER = "v395";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -5825,7 +5825,7 @@ function renderBugun(){
         +'<div>'
         +'<div style="font-weight:600;'+(done&&!(t.tipo==="sulama"&&t.durum==="iptal")?'text-decoration:line-through;':'')+'">'+esc(t.oda||"Genel")+(t.islem||t.baslik?' — '+esc(t.islem||t.baslik):'')+'</div>'
         +'<div style="font-size:11px;margin-top:2px;'+(done?(t.tipo==="sulama"&&t.durum==="iptal"?'color:#c77c1f;font-weight:600;':(t.tipo==="sulama"&&t.durum==="degistirildi"?'color:#1d6fd8;font-weight:600;':'color:var(--green);')):(gec?'color:var(--red);font-weight:600;':'color:var(--muted);'))+'">'
-        +(done?(t.tipo==="ariza"?'✓ Tamir edildi':(t.tipo==="sulama"&&t.durum==="iptal"?'❌ İptal Edildi'+(t.aciklama?(': '+esc(t.aciklama)):''):(t.tipo==="sulama"&&t.durum==="degistirildi"?'✏️ Değiştirildi'+(t.aciklama?(': '+esc(t.aciklama)):''):'✓ Yapıldı'))):((gec?('⚠️ '+gecGun+' gün gecikti · '):'')+esc(t.atama||(t.tipo==="protokol"?"Protokol adımı":(t.tipo==="sulama"?"Sulama/İlaç":(t.tipo==="ariza"?"Arıza":"Atanmamış"))))))
+        +(done?(t.tipo==="ariza"?'✓ Tamir edildi':(t.tipo==="sulama"&&t.durum==="iptal"?'❌ İptal Edildi'+(t.aciklama?(': '+esc(t.aciklama)):''):(t.tipo==="sulama"&&t.durum==="degistirildi"?'✏️ Değiştirildi'+(t.aciklama?(': '+esc(t.aciklama)):''):'✓ Yapıldı'))):((gec?('⚠️ '+gecGun+' gün gecikti · '):'')+(t.atama?atamaLabel(t.atama):esc(t.tipo==="protokol"?"Protokol adımı":(t.tipo==="sulama"?"Sulama/İlaç":(t.tipo==="ariza"?"Arıza":"Atanmamış"))))))
         +'</div>'
         +'</div>'
         +'</div>'
