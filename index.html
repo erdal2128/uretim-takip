@@ -662,9 +662,29 @@ function hasatTartiGetir(oda, tur){
    (oda+tarih) ile işaretlenir: aynı gün yeniden senkronlanınca ESKİ satırın
    YERİNE geçer (çift sayım olmaz), 0'a düşen bir kategori satırı silinir.
    Elle girilmiş ("+ Hasat ekle") kayıtlara ASLA dokunulmaz, ayrı kalır. */
-function hasatTartiSenkronEt(c){
+/* Performans: window._hasatTarti'de biriken TÜM kayıtları her cycle için
+   TEKRAR TEKRAR taramak (hasatTartiGetir'in yaptığı gibi) tur 16/17 geçmiş
+   verisi + zamanla büyüyen günlük senkron sonrasında (yüzlerce kayıt ×
+   onlarca oda) her açılışta gözle görülür bir yavaşlığa yol açtı (kullanıcı
+   raporu: "yavaş açılıyor"). Bu index tüm kayıtları TEK GEÇİŞTE oda+tur'a
+   göre gruplar; hasatTartiTumDonguleriSenkronEt bunu bir kez kurup her
+   cycle'a O(1) erişim için geçer. hasatTartiGetir (Oda Detayı gibi TEK bir
+   oda için çağrılan diğer yerler) değişmedi, hâlâ tek başına kullanılabilir. */
+function _hasatTartiIndexOlustur(){
+  var idx={};
+  var store=window._hasatTarti||{};
+  Object.keys(store).forEach(function(key){
+    var d=store[key]; if(!d || !d.oda) return;
+    var gk=d.oda+"__"+String(d.tur);
+    if(!idx[gk]) idx[gk]=[];
+    idx[gk].push(d);
+  });
+  Object.keys(idx).forEach(function(gk){ idx[gk].sort(function(a,b){ return cmpDate(a.tarih,b.tarih); }); });
+  return idx;
+}
+function hasatTartiSenkronEt(c, _idx){
   if(!c || !c.oda || c.tur==null || c.tur==="") return false;
-  var kayitlar = hasatTartiGetir(c.oda, c.tur);
+  var kayitlar = _idx ? (_idx[c.oda+"__"+String(c.tur)]||[]) : hasatTartiGetir(c.oda, c.tur);
   if(!kayitlar.length) return false;
   if(!c.hasat) c.hasat=[];
   var degisti=false;
@@ -680,16 +700,24 @@ function hasatTartiSenkronEt(c){
     var tonajliKayit = kayitlar.filter(function(k){return numParse(k.tonaj)>0;})[0];
     if(tonajliKayit){ c.tonaj=""+numParse(tonajliKayit.tonaj); degisti=true; }
   }
+  /* c.hasat'ta sourceKey+tip'e göre mevcut satırı bulmak için de aynı
+     O(kayıt×hasat) taraması vardı — tek geçişte bir haritaya çevrildi. */
+  var hasatIdx={};
+  c.hasat.forEach(function(h,i){ if(h.sourceKey) hasatIdx[h.sourceKey+"__"+h.tip]=i; });
   kayitlar.forEach(function(k){
     var srcKey = k.oda+"__"+k.tarih;
     var normalKasa = (numParse(k.ana90)||0)+(numParse(k.duble)||0)+(numParse(k.dokme)||0)+(numParse(k.ikinci)||0);
     var kestaneKasa = numParse(k.kestane)||0;
     [["normal",normalKasa],["kestane",kestaneKasa]].forEach(function(pair){
       var tip=pair[0], kasa=pair[1];
-      var idx=-1;
-      for(var i=0;i<c.hasat.length;i++){ if(c.hasat[i].sourceKey===srcKey && c.hasat[i].tip===tip){ idx=i; break; } }
+      var mapKey=srcKey+"__"+tip;
+      var idx = (mapKey in hasatIdx) ? hasatIdx[mapKey] : -1;
       if(kasa<=0){
-        if(idx>=0){ c.hasat.splice(idx,1); degisti=true; }
+        if(idx>=0){
+          c.hasat.splice(idx,1); degisti=true;
+          delete hasatIdx[mapKey];
+          Object.keys(hasatIdx).forEach(function(mk){ if(hasatIdx[mk]>idx) hasatIdx[mk]--; });
+        }
         return;
       }
       var kasaStr=""+kasa;
@@ -697,6 +725,7 @@ function hasatTartiSenkronEt(c){
         if(c.hasat[idx].kasa!==kasaStr){ c.hasat[idx].kasa=kasaStr; degisti=true; }
       } else {
         c.hasat.push({tarih:k.tarih, tip:tip, kasa:kasaStr, personel:"Hasat Takip (senkron)", source:"hasat_tarti_sync", sourceKey:srcKey});
+        hasatIdx[mapKey]=c.hasat.length-1;
         degisti=true;
       }
     });
@@ -750,9 +779,10 @@ function hasatTartiEksikOdalariOlustur(){
    her güncellendiğinde (onSnapshot) çağrılır. Sadece gerçekten değişiklik
    olduysa saveData() tetikler (gereksiz yazma/senkron trafiği olmasın). */
 function hasatTartiTumDonguleriSenkronEt(){
+  var idx = _hasatTartiIndexOlustur();
   var otoEklendi = hasatTartiEksikOdalariOlustur();
   var d=loadData(); var degisti=otoEklendi;
-  (d.cycles||[]).forEach(function(c){ if(hasatTartiSenkronEt(c)) degisti=true; });
+  (d.cycles||[]).forEach(function(c){ if(hasatTartiSenkronEt(c, idx)) degisti=true; });
   if(degisti){ d.cycles.forEach(function(c){ if(c.hasat) c.hasat.sort(function(a,b){ return cmpDate(a.tarih,b.tarih); }); }); saveData(); }
   return degisti;
 }
@@ -760,7 +790,7 @@ function hasatTartiTumDonguleriSenkronEt(){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v402";
+var APP_VER = "v403";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
