@@ -867,7 +867,7 @@ function hasatTartiTumDonguleriSenkronEt(){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v408";
+var APP_VER = "v409";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -14301,18 +14301,32 @@ function _firmaYorumUret(kategoriler, protokol, kalite, kolaylik){
   return cumleler.slice(0,5).join(" ");
 }
 /* Ana fonksiyon: firma adına göre 7 kategori + genel puan + yorum + karne.
-   Veri yoksa (bu firmadan tamamlanmış döngü yok) null döner. */
-function firmaPerformans(firma){
-  var tamam=tumTamamlananDongu().filter(function(c){return (c.kompostFirma||"")===firma;});
-  if(!tamam.length) return null;
+   Hiç oda yoksa (bu firma hiç kullanılmamış) null döner.
 
-  var protokol=_firmaProtokolUyumu(tamam);
-  var kalite=_firmaKompostKalitesi(tamam);
+   Kullanıcı isteği: "Uzman/ersanlar için anlamlı bir kısmi karne çıksın,
+   Özdal dahil yap" — önceden TÜM analiz "tamamlanmış (boşaltılmış+hasat
+   kaydı olan) döngü" şartına bağlıydı; oda bitmeden hiçbir firma için
+   hiçbir şey görünmüyordu. Ama 7 kategoriden 5'i (Protokol Uyumu, Kompost
+   Kalitesi, Hasat Eğrisi, Kalite ve Fire, Üretim Kolaylığı) kesin/final
+   verim bilgisi GEREKTİRMİYOR — aktif odalardaki BUGÜNE KADARKİ gerçek
+   veriyle de hesaplanabilir. Sadece Verim ve İklim Toleransı, kesin toplam
+   verim bilinmeden anlamlı olmadığı için tamamlanmış döngülerle sınırlı
+   kaldı (veri yoksa kendi "nötr puan" mantıklarına düşerler). Sonuçta
+   `kismi:true` işaretlenir ki arayüz bunun geçici/eksik bir değerlendirme
+   olduğunu açıkça göstersin. */
+function firmaPerformans(firma){
+  var tumCycles=(loadData().cycles||[]).filter(function(c){return (c.kompostFirma||"")===firma;});
+  if(!tumCycles.length) return null;
+  var tamam=tumCycles.filter(function(c){return c.bosaltimTarihi && (c.hasat||[]).length;});
+  var kismi=!tamam.length;
+
+  var protokol=_firmaProtokolUyumu(tumCycles);
+  var kalite=_firmaKompostKalitesi(tumCycles);
   var iklim=_firmaIklimToleransi(tamam);
-  var hasategri=_firmaHasatEgrisi(tamam);
+  var hasategri=_firmaHasatEgrisi(tumCycles);
   var verim=_firmaVerim(firma);
-  var kalitefire=_firmaKaliteFire(tamam);
-  var kolaylik=_firmaUretimKolayligi(tamam);
+  var kalitefire=_firmaKaliteFire(tumCycles);
+  var kolaylik=_firmaUretimKolayligi(tumCycles);
 
   var kategoriler=[
     {key:"protokol",   ad:"📋 Protokol Uyumu",   maks:protokol.maks,   puan:protokol.puan,   kalemler:protokol.kalemler},
@@ -14336,7 +14350,8 @@ function firmaPerformans(firma){
   });
 
   return {
-    firma:firma, n:tamam.length, puan:toplamPuan, kategoriler:kategoriler, yorum:yorum,
+    firma:firma, n:tamam.length, nAktif:tumCycles.length-tamam.length, kismi:kismi,
+    puan:toplamPuan, kategoriler:kategoriler, yorum:yorum,
     karne:{
       ortKgM2: kgM2Vals.length?(kgM2Vals.reduce(function(a,b){return a+b;},0)/kgM2Vals.length):null,
       ortToplamKasa: kasaVals.length?(kasaVals.reduce(function(a,b){return a+b;},0)/kasaVals.length):null,
@@ -14377,20 +14392,27 @@ function firmaKarneHTML(p){
 }
 function firmaPerformansKartiHTML(firma){
   var p=firmaPerformans(firma);
-  if(!p) return sectionCard('🏭 '+esc(firma), '<div class="muted">Bu firmadan henüz tamamlanmış (boşaltılmış + hasat kaydı olan) döngü yok — puanlama için yeterli veri birikmedi.</div>');
-  var body='<div style="display:flex;align-items:center;gap:14px;">'
+  if(!p) return sectionCard('🏭 '+esc(firma), '<div class="muted">Bu firmadan hiç oda/döngü kaydı yok.</div>');
+  var body='';
+  if(p.kismi){
+    body+='<div style="padding:9px 10px;background:#fff8ec;border:1px solid #e8c27a;border-radius:8px;font-size:12.5px;margin-bottom:10px;">'
+      +'⏳ <b>Kısmi analiz</b> — bu firmadan henüz tamamlanmış (boşaltılmış) bir döngü yok, aşağıdaki puanlar '+p.nAktif+' aktif odanın bugüne kadarki gerçek verisine dayanıyor. '
+      +'<b>⚖️ Verim</b> ve <b>🌦️ İklim Toleransı</b> kesin toplam verim bilinmeden hesaplanamaz, ilk döngü tamamlanınca dolacak.'
+      +'</div>';
+  }
+  body+='<div style="display:flex;align-items:center;gap:14px;">'
     +'<div style="font-size:34px;font-weight:700;color:'+puanRenk(p.puan)+';">'+p.puan+'<span style="font-size:15px;color:var(--muted);">/100</span></div>'
     +'<div style="flex:1;font-size:13px;font-style:italic;color:var(--muted);">'+esc(p.yorum)+'</div>'
     +'</div>'
-    +'<div class="muted" style="font-size:11.5px;margin-top:2px;">'+p.n+' tamamlanmış döngü üzerinden hesaplandı.</div>'
+    +'<div class="muted" style="font-size:11.5px;margin-top:2px;">'+(p.kismi?(p.nAktif+' aktif oda üzerinden (kısmi)'):(p.n+' tamamlanmış döngü üzerinden'))+' hesaplandı.</div>'
     +'<div style="margin-top:10px;">'+firmaKarneHTML(p)+'</div>'
     +_kategorilerListHTML(p.kategoriler);
-  return sectionCard('🏭 '+esc(firma)+' — Kompost Firma Performansı', body);
+  return sectionCard('🏭 '+esc(firma)+' — Kompost Firma Performansı'+(p.kismi?' (kısmi)':''), body);
 }
 function firmaSiralamaHTML(){
   var firmalar=tumFirmaAdlari();
   var puanli=firmalar.map(function(f){return firmaPerformans(f);}).filter(Boolean);
-  if(!puanli.length) return sectionCard('🏭 Kompost Firma Sıralaması', '<div class="muted">Henüz tamamlanmış (boşaltılmış + hasat kaydı olan) döngüsü bulunan bir firma yok.</div>');
+  if(!puanli.length) return sectionCard('🏭 Kompost Firma Sıralaması', '<div class="muted">Henüz hiçbir firmadan oda/döngü kaydı yok.</div>');
   puanli.sort(function(a,b){return b.puan-a.puan;});
   var madalyalar=["🥇","🥈","🥉"];
   var body='';
@@ -14398,7 +14420,7 @@ function firmaSiralamaHTML(){
     var rozet=madalyalar[i]||("#"+(i+1));
     body+='<div style="padding:8px 0;border-bottom:1px solid #eee;">'
       +'<div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;">'
-      +'<span style="font-weight:700;">'+rozet+' '+esc(p.firma)+'</span>'
+      +'<span style="font-weight:700;">'+rozet+' '+esc(p.firma)+(p.kismi?' <span style="font-weight:400;font-size:11px;color:#a06a1a;">(kısmi ⏳)</span>':'')+'</span>'
       +'<span style="font-weight:700;color:'+puanRenk(p.puan)+';font-size:17px;">'+(""+p.puan).replace('.',',')+'</span>'
       +'</div>'
       +'<div class="muted" style="font-size:12.5px;margin-top:2px;">'+esc(p.yorum)+'</div>'
