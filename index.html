@@ -305,6 +305,36 @@ function gorevMukerrerBulutTemizle(){
   d._gorevMukerrerSil=[];
   saveData();
 }
+/* Kullanıcı isteği: "geçmiş senkronu (tur16/17) devre dışı bırakırım, hala
+   donuyor" → tur16/17'den otomatik oluşan onlarca arşiv odası (v406'da
+   senkronu durdurduk ama VERİYİ silmedik) hâlâ TÜM Raporlar/Analiz
+   hesaplamalarına (tamamlanmış döngü taramaları) dahil oluyor ve yavaşlatmaya
+   devam ediyordu. Bu TEK SEFERLİK geçiş, source:"hasat_tarti_sync" ile
+   işaretli (yani hasatTartiEksikOdalariOlustur'un otomatik oluşturduğu,
+   elle açılmamış) TÜM odaları kalıcı olarak siler. Veri kaybolmaz — Hasat
+   Takip'in kendi veritabanında duruyor, gecmis_tur_senkron.py tekrar
+   çalıştırılıp HASAT_GECMIS_OTO_TUR/HASAT_SENKRON_DEVRE_DISI_TUR listeleri
+   açılırsa yeniden aktarılabilir. Bulut silme işlemi FB.ready olana kadar
+   d._hasatOtoOdaSil kuyruğunda bekler (bkz. hasatOtoOdaBulutTemizle,
+   gorevMukerrerBulutTemizle ile birebir aynı desen). */
+function hasatTartiOtoOdalariSil(d){
+  if(!d || !d.cycles) return false;
+  var silinecek=d.cycles.filter(function(c){ return c.source==="hasat_tarti_sync"; });
+  if(!silinecek.length) return false;
+  if(!Array.isArray(d._hasatOtoOdaSil)) d._hasatOtoOdaSil=[];
+  silinecek.forEach(function(c){ silinenIdEkle(c.id); d._hasatOtoOdaSil.push(c.id); });
+  var silinecekIdSet={}; silinecek.forEach(function(c){ silinecekIdSet[c.id]=true; });
+  d.cycles=d.cycles.filter(function(c){ return !silinecekIdSet[c.id]; });
+  return true;
+}
+function hasatOtoOdaBulutTemizle(){
+  if(!FB.ready || !FB.coll) return;
+  var d=loadData();
+  if(!Array.isArray(d._hasatOtoOdaSil) || !d._hasatOtoOdaSil.length) return;
+  d._hasatOtoOdaSil.forEach(function(id){ fbDelete(id); });
+  d._hasatOtoOdaSil=[];
+  saveData();
+}
 /* ---- Eşzamanlı düzenleme: döngü birleştirme (veri kaybı olmasın) ---- */
 function mergeArr(localArr, remoteArr, keyFn, preferLocal){
   var map={}, order=[];
@@ -395,6 +425,9 @@ function fbInitAfterAuth(){
     /* Bulut bağlantısı kurulur kurulmaz, geriye dönük mükerrer görev
        temizliğinin kuyruğa aldığı fazlalık dokümanları da sil. */
     setTimeout(gorevMukerrerBulutTemizle, 1500);
+    /* Aynı şekilde: tur16/17'den otomatik oluşup artık silinen odaların
+       bulut kopyalarını da temizle (bkz. hasatTartiOtoOdalariSil). */
+    setTimeout(hasatOtoOdaBulutTemizle, 1500);
     FB.coll.onSnapshot({includeMetadataChanges:true}, function(snap){
       loadData();
       var realChange=false, needPush=false;
@@ -834,7 +867,7 @@ function hasatTartiTumDonguleriSenkronEt(){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v406";
+var APP_VER = "v407";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -896,7 +929,8 @@ function memDataNormalizeVeGoc(){
   var _degFlas1Baglan = flas1DogrudanHavayaBagla(memData);
   var _degSulamaTekrar = sulamaIptalDegistirNotlariniTekille(memData);
   var _degFirmaCasing = firmaCasingBirlestir(memData);
-  if(_degMigrasyon || _degTekil || _degKompostInd || _degGorevMukerrer || _degSartliKural || _degEkipDept || _degFlasAkisi || _degFlas1Baglan || _degSulamaTekrar || _degFirmaCasing) saveData();
+  var _degHasatOtoSil = hasatTartiOtoOdalariSil(memData);
+  if(_degMigrasyon || _degTekil || _degKompostInd || _degGorevMukerrer || _degSartliKural || _degEkipDept || _degFlasAkisi || _degFlas1Baglan || _degSulamaTekrar || _degFirmaCasing || _degHasatOtoSil) saveData();
 }
 /* DÜZELTME (her açılışta çalışır, idempotent): gunlukKaydet()'teki eski bir
    kıyaslama hatası yüzünden (su slider'ı boş alanda "0" döndürür ama İptal
