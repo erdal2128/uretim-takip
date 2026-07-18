@@ -691,11 +691,55 @@ function hasatTartiSenkronEt(c){
   });
   return degisti;
 }
+/* Kullanıcı isteği: "sadece 16. tur ve 17. turun hasat değerlerini al ama
+   üretim takipten oda açma" — bu iki tur Üretim Takip'te hiç oda kaydı
+   (cycle) olarak yok (uygulama 18. turdan itibaren kullanılmaya başlanmış),
+   bu yüzden senkronlanan veri hiçbir yere yazılamıyordu. Bu fonksiyon,
+   SADECE bu iki tur için, karşılığı olmayan her oda+tur kombinasyonuna
+   otomatik ve DOĞRUDAN ARŞİVLENMİŞ (bosaltimTarihi dolu) minimal bir kayıt
+   açar — elle "Oda Oluştur" akışına hiç girilmez, bosaltimTarihi baştan
+   dolu olduğu için Günlük Tur/Bugün/protokol ekranlarında da hiç görünmez,
+   sadece geçmişe dönük Hasat/Analiz raporlarında sayılır. 18. tur ve
+   sonrası kasıtlı olarak KAPSAM DIŞI — odalar orada zaten elle açılıyor,
+   unutulan bir oda varsa sessizce "hayali oda" oluşturmasın diye liste
+   sabit tutuluyor. */
+var HASAT_GECMIS_OTO_TUR = [16,17];
+function hasatTartiEksikOdalariOlustur(){
+  var d=loadData();
+  var mevcutSet={};
+  (d.cycles||[]).forEach(function(c){ mevcutSet[normalizeOda(c.oda)+"__"+String(c.tur)]=true; });
+  var gruplar={};
+  Object.keys(window._hasatTarti||{}).forEach(function(key){
+    var k=window._hasatTarti[key];
+    if(!k || !k.oda || k.tur==null || k.tur==="") return;
+    var turNo=Number(k.tur);
+    if(HASAT_GECMIS_OTO_TUR.indexOf(turNo)<0) return;
+    var gk=normalizeOda(k.oda)+"__"+String(turNo);
+    if(mevcutSet[gk]) return;
+    if(!gruplar[gk]) gruplar[gk]={oda:k.oda, tur:turNo, tarihler:[], gelis:""};
+    gruplar[gk].tarihler.push(k.tarih);
+    if(k.gelis_tarihi) gruplar[gk].gelis=k.gelis_tarihi;
+  });
+  var eklendi=false;
+  Object.keys(gruplar).forEach(function(gk){
+    var g=gruplar[gk];
+    if(!g.tarihler.length) return;
+    var sirali=g.tarihler.slice().sort();
+    var c={id:uid(), oda:g.oda, tur:g.tur, gelisTarihi:(g.gelis||sirali[0]), gunluk:[], hava:[], hasat:[],
+      bosaltimTarihi:sirali[sirali.length-1], source:"hasat_tarti_sync"};
+    d.cycles.push(c);
+    mevcutSet[gk]=true;
+    eklendi=true;
+  });
+  if(eklendi) saveData();
+  return eklendi;
+}
 /* Tüm döngüler için hasatTartiSenkronEt çalıştırır — hasat_tarti koleksiyonu
    her güncellendiğinde (onSnapshot) çağrılır. Sadece gerçekten değişiklik
    olduysa saveData() tetikler (gereksiz yazma/senkron trafiği olmasın). */
 function hasatTartiTumDonguleriSenkronEt(){
-  var d=loadData(); var degisti=false;
+  var otoEklendi = hasatTartiEksikOdalariOlustur();
+  var d=loadData(); var degisti=otoEklendi;
   (d.cycles||[]).forEach(function(c){ if(hasatTartiSenkronEt(c)) degisti=true; });
   if(degisti){ d.cycles.forEach(function(c){ if(c.hasat) c.hasat.sort(function(a,b){ return cmpDate(a.tarih,b.tarih); }); }); saveData(); }
   return degisti;
@@ -704,7 +748,7 @@ function hasatTartiTumDonguleriSenkronEt(){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v398";
+var APP_VER = "v399";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
