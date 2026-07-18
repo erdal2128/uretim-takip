@@ -560,6 +560,10 @@ function fbInitAfterAuth(){
         if(ch.type==="removed"){ delete window._hasatTarti[key]; changed=true; }
         else { window._hasatTarti[key]=data; changed=true; }
       });
+      /* Senkronu Verim/Firma/Analiz raporlarının gerçekten okuduğu c.hasat'a
+         da yansıt (bkz. hasatTartiSenkronEt yorumu) — aksi halde bu raporlar
+         hiç değişmiyordu. */
+      if(changed){ try{ if(hasatTartiTumDonguleriSenkronEt()) changed=true; }catch(e){ console.warn("hasatTartiSenkronEt",e); } }
       if(changed && !isTyping()) render();
     }, function(err){ console.warn("snapshotHasat",err); });
 
@@ -646,11 +650,61 @@ function hasatTartiGetir(oda, tur){
   out.sort(function(a,b){ return cmpDate(a.tarih,b.tarih); });
   return out;
 }
+/* Kullanıcı raporu: "Hasat Takip senkronu geldi ama Raporlar > Hasat/Firma/
+   Analiz hiç değişmedi." Kök neden: hasatTartiGetir() SADECE Oda Detayı'ndaki
+   küçük "Hasat Takip" kartını besliyordu — Verim/Firma/Analiz/Excel'in
+   GERÇEKTEN okuduğu tek kaynak c.hasat dizisi (elle "+ Hasat ekle" ile
+   doldurulan) hiç güncellenmiyordu, senkronla bağlantısı yoktu.
+   Bu fonksiyon, senkronlanan her tartı kaydını (ana90+duble+dokme+ikinci →
+   "normal", kestane → "kestane") c.hasat'a birebir aynı formatta yazar —
+   böylece TÜM mevcut rapor/verim/analiz fonksiyonları (hiçbiri değiştirilmeden)
+   senkronu otomatik görür. Satırlar source:"hasat_tarti_sync" + sourceKey
+   (oda+tarih) ile işaretlenir: aynı gün yeniden senkronlanınca ESKİ satırın
+   YERİNE geçer (çift sayım olmaz), 0'a düşen bir kategori satırı silinir.
+   Elle girilmiş ("+ Hasat ekle") kayıtlara ASLA dokunulmaz, ayrı kalır. */
+function hasatTartiSenkronEt(c){
+  if(!c || !c.oda || c.tur==null || c.tur==="") return false;
+  var kayitlar = hasatTartiGetir(c.oda, c.tur);
+  if(!kayitlar.length) return false;
+  if(!c.hasat) c.hasat=[];
+  var degisti=false;
+  kayitlar.forEach(function(k){
+    var srcKey = k.oda+"__"+k.tarih;
+    var normalKasa = (numParse(k.ana90)||0)+(numParse(k.duble)||0)+(numParse(k.dokme)||0)+(numParse(k.ikinci)||0);
+    var kestaneKasa = numParse(k.kestane)||0;
+    [["normal",normalKasa],["kestane",kestaneKasa]].forEach(function(pair){
+      var tip=pair[0], kasa=pair[1];
+      var idx=-1;
+      for(var i=0;i<c.hasat.length;i++){ if(c.hasat[i].sourceKey===srcKey && c.hasat[i].tip===tip){ idx=i; break; } }
+      if(kasa<=0){
+        if(idx>=0){ c.hasat.splice(idx,1); degisti=true; }
+        return;
+      }
+      var kasaStr=""+kasa;
+      if(idx>=0){
+        if(c.hasat[idx].kasa!==kasaStr){ c.hasat[idx].kasa=kasaStr; degisti=true; }
+      } else {
+        c.hasat.push({tarih:k.tarih, tip:tip, kasa:kasaStr, personel:"Hasat Takip (senkron)", source:"hasat_tarti_sync", sourceKey:srcKey});
+        degisti=true;
+      }
+    });
+  });
+  return degisti;
+}
+/* Tüm döngüler için hasatTartiSenkronEt çalıştırır — hasat_tarti koleksiyonu
+   her güncellendiğinde (onSnapshot) çağrılır. Sadece gerçekten değişiklik
+   olduysa saveData() tetikler (gereksiz yazma/senkron trafiği olmasın). */
+function hasatTartiTumDonguleriSenkronEt(){
+  var d=loadData(); var degisti=false;
+  (d.cycles||[]).forEach(function(c){ if(hasatTartiSenkronEt(c)) degisti=true; });
+  if(degisti){ d.cycles.forEach(function(c){ if(c.hasat) c.hasat.sort(function(a,b){ return cmpDate(a.tarih,b.tarih); }); }); saveData(); }
+  return degisti;
+}
 
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v397";
+var APP_VER = "v398";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -14170,7 +14224,17 @@ function verimCardHTML(c){
   }
   h+='<table><thead><tr><th>Tarih</th><th>Aşama</th><th>Tür</th><th>Kasa</th><th>Personel</th><th></th></tr></thead><tbody>';
   if(c.hasat&&c.hasat.length){
-    c.hasat.forEach(function(r,i){ var ha=hasatAsama(c,r.tarih); h+='<tr><td>'+fmtDate(r.tarih)+'</td><td class="muted" style="font-size:12px;">'+(ha?esc(ha.asama):'')+'</td><td>'+esc(r.tip==="kestane"?"Kestane":"Normal")+'</td><td>'+esc(r.kasa)+'</td><td>'+esc(r.personel||"")+'</td><td><button class="del-x" onclick="delHasat(\''+c.id+'\','+i+')">×</button></td></tr>'; });
+    c.hasat.forEach(function(r,i){
+      var ha=hasatAsama(c,r.tarih);
+      /* Senkron kaynaklı satırlar (bkz. hasatTartiSenkronEt) silinemez —
+         Hasat Takip'ten bir sonraki senkronda ZATEN aynı değerle geri gelir,
+         "sildim ama geri geliyor" kafa karışıklığı olmasın diye bunun yerine
+         kaynağını belli eden bir rozet gösterilir. */
+      var eylemHucre = r.source==="hasat_tarti_sync"
+        ? '<span class="muted" style="font-size:11px;" title="Hasat Takip programından otomatik geldi">🔄 senkron</span>'
+        : '<button class="del-x" onclick="delHasat(\''+c.id+'\','+i+')">×</button>';
+      h+='<tr><td>'+fmtDate(r.tarih)+'</td><td class="muted" style="font-size:12px;">'+(ha?esc(ha.asama):'')+'</td><td>'+esc(r.tip==="kestane"?"Kestane":"Normal")+'</td><td>'+esc(r.kasa)+'</td><td>'+esc(r.personel||"")+'</td><td>'+eylemHucre+'</td></tr>';
+    });
   } else { h+='<tr><td colspan="6" class="muted" style="padding:12px;">Henüz hasat kaydı yok</td></tr>'; }
   h+='</tbody></table>'
     +'<div style="border-top:1px solid var(--line);margin-top:6px;padding-top:12px;">'
