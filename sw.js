@@ -1,4 +1,4 @@
-const CACHE = "uretim-takip-cache-v309";
+const CACHE = "uretim-takip-cache-v310";
 const CORE_ASSETS = ["./", "./index.html"];
 
 self.addEventListener("install", function(e){
@@ -15,10 +15,19 @@ self.addEventListener("install", function(e){
 });
 
 self.addEventListener("activate", function(e){
+  /* KRİTİK: eskiden burada self.clients.claim() da çağrılıyordu — bu,
+     hâlâ AÇIK olan sekmeleri yeni SW yayına girer girmez ANINDA ele
+     geçiriyordu. Kullanıcı bir sayfayı açık tutarken arka planda yeni bir
+     sw.js sürümü algılanınca (skipWaiting zaten hemen aktive ediyor),
+     clients.claim() o an devam eden fetch isteklerini yetim bırakıp
+     "tamamen bomboş ekran, 2-3 yenilemede düzeliyor" hatasına yol açıyordu
+     (kullanıcı raporu). claim() kaldırıldı: açık sekmeler eski SW ile
+     sorunsuz çalışmaya devam eder, yeni SW sadece bir SONRAKİ tam
+     yenilemede/navigasyonda devreye girer — anlık kesinti olmaz. */
   e.waitUntil(
     caches.keys().then(function(keys){
       return Promise.all(keys.filter(function(k){ return k!==CACHE; }).map(function(k){ return caches.delete(k); }));
-    }).then(function(){ return self.clients.claim(); })
+    })
   );
 });
 
