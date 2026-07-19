@@ -928,7 +928,7 @@ function hasatTartiTumDonguleriSenkronEt(){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v420";
+var APP_VER = "v421";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -2957,6 +2957,106 @@ function turFlas1TahminKartHTML(c, gosterimTarihi){
     + '<div style="font-size:13.5px; margin-top:4px;">📅 '+(kalan===null?"—":(kalan>=0?(kalan+" gün kaldı"):((-kalan)+" gün gecikti")))+'</div>'
     + '<div style="font-size:13.5px; margin-top:2px;">'+durum.ikon+' '+durum.txt+'</div>'
     + '</div>';
+}
+/* ==================== Mühendis Değerlendirmesi ====================
+   Kullanıcı isteği (ÜRETİM DEĞERLENDİRME SİSTEMİ, Bölüm 1): Tiftik/Sarım,
+   Toprak Serimi, Tırmık, Havaya Başlama ve 1. Flaş Hazırlığı için Günlük
+   Tur'da hızlı, 5 seviyeli (Çok İyi/İyi/Normal/Kötü/Çok Kötü) değerlendirme.
+   Mühendise ASLA 1-10 puan girdirilmez — sayısal puanlama gerekirse (ileride
+   firma karnesi/hasat eğrisi gibi bölümlerde) sistem bu seviyeleri arka
+   planda kendi hesaplar. Tek dokunuşla seviye seçilir, gözlem notu isteğe
+   bağlı ayrı bir adımda eklenir. SSOT: c.muhendisDegerlendirme["p"+idx] =
+   {seviye, not, tarih, kim} — idx, getProtokol()'deki adımın indeksidir
+   (aynı c.ertele/c.adimDetay deseni). Diğer bölümler (beklenen/gerçekleşen
+   karşılaştırması, firma karnesi vb.) bu veriyi okuyacak. */
+var MUHENDIS_DEGERLENDIRME_SEVIYELER = [
+  {key:"cok_iyi", ikon:"🟢", ad:"Çok İyi"},
+  {key:"iyi", ikon:"🟢", ad:"İyi"},
+  {key:"normal", ikon:"🟡", ad:"Normal"},
+  {key:"kotu", ikon:"🟠", ad:"Kötü"},
+  {key:"cok_kotu", ikon:"🔴", ad:"Çok Kötü"}
+];
+function muhendisSeviyeBul(key){ return MUHENDIS_DEGERLENDIRME_SEVIYELER.find(function(s){return s.key===key;}) || null; }
+/* "1. Flaş Hazırlığı" -> flas1 rolüne bağlanır: "1. Flaş" adımının kendisi
+   protokolde flas1 rolüyle tanımlı (bkz. PROTOKOL), erken/olumlu/olumsuz
+   değerlendirme o adıma bağlanır. */
+var MUHENDIS_DEGERLENDIRME_ROLLER = [
+  {rol:"tiftik", ad:"🍄 Tiftik / Sarım"},
+  {rol:"toprak", ad:"🌱 Toprak Serimi"},
+  {rol:"tirmik", ad:"🪮 Tırmık"},
+  {rol:"hava", ad:"🌬️ Havaya Başlama"},
+  {rol:"flas1", ad:"🍄 1. Flaş Hazırlığı"}
+];
+var _muhendisDegNotAcik={};
+function muhendisDegNotAc(cid, idx){ _muhendisDegNotAcik[cid+"_p"+idx]=true; render(); }
+function muhendisDegNotVazgec(cid, idx){ delete _muhendisDegNotAcik[cid+"_p"+idx]; render(); }
+function muhendisDegSec(cid, idx, seviye){
+  if(!can("edit")) return noPerm();
+  var c=loadData().cycles.find(function(x){return x.id===cid;}); if(!c) return;
+  var st=getProtokol()[idx]; if(!st) return;
+  if(!c.muhendisDegerlendirme) c.muhendisDegerlendirme={};
+  var mevcut=c.muhendisDegerlendirme["p"+idx]||{};
+  c.muhendisDegerlendirme["p"+idx]={seviye:seviye, not:mevcut.not||"", tarih:todayISO(), kim:kimNeZamanEtiketi()};
+  var rolBilgi=MUHENDIS_DEGERLENDIRME_ROLLER.find(function(r){return r.rol===st.rol;});
+  var sv=muhendisSeviyeBul(seviye);
+  gunlukGorevNotEkle(c, (rolBilgi?rolBilgi.ad:st.txt)+" değerlendirmesi: "+(sv?sv.ikon+" "+sv.ad:seviye)+" — "+kimNeZamanEtiketi());
+  touchCycle(c); saveData(); toast("Değerlendirme kaydedildi: "+(sv?sv.ikon+" "+sv.ad:seviye)); render();
+}
+function muhendisDegNotKaydet(cid, idx){
+  if(!can("edit")) return noPerm();
+  var c=loadData().cycles.find(function(x){return x.id===cid;}); if(!c) return;
+  var metin=(el("mdn_"+cid+"_"+idx)&&el("mdn_"+cid+"_"+idx).value.trim())||"";
+  if(!c.muhendisDegerlendirme) c.muhendisDegerlendirme={};
+  var mevcut=c.muhendisDegerlendirme["p"+idx]||{seviye:"", tarih:todayISO(), kim:kimNeZamanEtiketi()};
+  mevcut.not=metin; mevcut.tarih=mevcut.tarih||todayISO(); mevcut.kim=mevcut.kim||kimNeZamanEtiketi();
+  c.muhendisDegerlendirme["p"+idx]=mevcut;
+  touchCycle(c); saveData(); delete _muhendisDegNotAcik[cid+"_p"+idx];
+  toast(metin?"Not kaydedildi":"Not temizlendi"); render();
+}
+function muhendisDegSeviyeSeciciHTML(cid, idx){
+  return '<div style="display:flex;gap:5px;flex-wrap:wrap;">'
+    + MUHENDIS_DEGERLENDIRME_SEVIYELER.map(function(s){
+        return '<button class="btn ghost small" style="padding:4px 8px;" onclick="muhendisDegSec(\''+cid+'\','+idx+',\''+s.key+'\')">'+s.ikon+' '+s.ad+'</button>';
+      }).join('')
+    + '</div>';
+}
+/* Günlük Tur'da bir oda kartına, o odada FİİLEN TAMAMLANMIŞ (henüz
+   yapılmamış adımlar için değerlendirme sorulmaz) tiftik/toprak/tırmık/
+   hava/1.flaş adımları için değerlendirme kartı/özeti ekler. */
+function muhendisDegKartHTML(c){
+  if(!c || c.bosaltimTarihi) return "";
+  var h="";
+  MUHENDIS_DEGERLENDIRME_ROLLER.forEach(function(r){
+    var idx=protokolRolIdx(r.rol); if(idx<0) return;
+    var st=getProtokol()[idx]; if(!st || st.silindi) return;
+    if(!adimGercektenYapildiMi(c, idx, st)) return;
+    var mevcut=c.muhendisDegerlendirme && c.muhendisDegerlendirme["p"+idx];
+    var notAcik=_muhendisDegNotAcik[c.id+"_p"+idx];
+    if(mevcut && mevcut.seviye){
+      var sv=muhendisSeviyeBul(mevcut.seviye);
+      h+='<div style="margin-top:8px;padding:8px;background:#f4faf6;border:1px solid #cfe8d8;border-radius:8px;">'
+        + '<div style="font-size:12.5px;display:flex;justify-content:space-between;align-items:center;">'
+        + '<span>'+r.ad+': <b>'+(sv?sv.ikon+' '+sv.ad:mevcut.seviye)+'</b></span>'
+        + (can("edit")?('<span style="text-decoration:underline;cursor:pointer;color:#1d4ed8;font-size:11.5px;" onclick="'+(notAcik?'muhendisDegNotVazgec':'muhendisDegNotAc')+'(\''+c.id+'\','+idx+')">'+(notAcik?'vazgeç':'düzenle')+'</span>'):'')
+        + '</div>'
+        + (mevcut.not && !notAcik?('<div class="muted" style="font-size:12px;margin-top:3px;">'+esc(mevcut.not)+'</div>'):'')
+        + (notAcik?(
+            '<div style="margin-top:6px;">'
+            + (can("edit")?muhendisDegSeviyeSeciciHTML(c.id, idx):'')
+            + '<textarea id="mdn_'+c.id+'_'+idx+'" rows="2" placeholder="Kısa gözlem notu (isteğe bağlı) — örn. \'Sarım çok güçlü ve homojen.\'" style="width:100%;margin-top:6px;">'+esc(mevcut.not||"")+'</textarea>'
+            + '<button class="btn small" style="margin-top:5px;" onclick="muhendisDegNotKaydet(\''+c.id+'\','+idx+')">Kaydet</button>'
+            + '<button class="btn ghost small" style="margin-top:5px;margin-left:5px;" onclick="muhendisDegNotVazgec(\''+c.id+'\','+idx+')">Vazgeç</button>'
+            + '</div>'
+          ):'')
+        + '</div>';
+    } else if(can("edit")){
+      h+='<div style="margin-top:8px;padding:8px;background:#eef6ff;border:1px solid #b9d7f5;border-radius:8px;">'
+        + '<div style="font-size:12.5px;font-weight:700;color:#1d4ed8;margin-bottom:6px;">'+r.ad+' değerlendirmesi</div>'
+        + muhendisDegSeviyeSeciciHTML(c.id, idx)
+        + '</div>';
+    }
+  });
+  return h;
 }
 function turSiradakiAdimHTML(c, gosterimTarihi){
   var h="";
@@ -9736,6 +9836,7 @@ function turOdaKartIcHTML(c, ge, showExtra){
       : suKapaliMesajiHTML(c)
         +'<input type="hidden" class="tur_su" value=""><input type="hidden" class="tur_sulama" value="'+esc(ge.sulama||"")+'">')
     +turSiradakiAdimHTML(c, turGosterimTarihi)
+    +muhendisDegKartHTML(c)
     +turNotAlaniHTML(c)
     +(showExtra?hasatTakipKart(c):'');
 }
