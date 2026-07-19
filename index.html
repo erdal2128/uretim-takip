@@ -928,7 +928,7 @@ function hasatTartiTumDonguleriSenkronEt(){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v424";
+var APP_VER = "v425";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -3790,7 +3790,24 @@ function _puanProtokolUygunlugu(c){
     var ert=(c.ertele&&c.ertele["p"+idx])||0; var planli=addDays(t,ert);
     if(adimGercektenYapildiMi(c,idx,s)){
       var real=adimYapilmaTarihi(c,idx,s);
-      if(real && real<planli && daysBetween(real,planli)>=2) erken++;
+      /* Bölüm 3/9 (ÜRETİM DEĞERLENDİRME SİSTEMİ): protokol ZORUNLU bir takvim
+         değil, referans plan — sarım/misel gelişimi çok iyi olduğu için bir
+         adım erken yapılmışsa (örn. tırmık+3 yerine hava tırmık+1'de
+         başlamış) bu otomatik puan KIRMAMALI. Mühendis o adımı (Bölüm 1,
+         c.muhendisDegerlendirme["p"+idx]) İyi/Çok İyi değerlendirmişse
+         biyolojik olarak gerekçeli sayılır, "erken" cezasına dahil edilmez.
+         Değerlendirme YOKSA ya da Kötü/Çok Kötü ise davranış DEĞİŞMEZ (eski
+         temkinli varsayılan korunur) — sadece POZİTİF kanıt cezayı kaldırır,
+         veri eksikliği avantaj sağlamaz. */
+      if(real && real<planli && daysBetween(real,planli)>=2){
+        var _mDeg=c.muhendisDegerlendirme && c.muhendisDegerlendirme["p"+idx];
+        var _mSv=_mDeg && _mDeg.seviye ? muhendisSeviyeBul(_mDeg.seviye) : null;
+        if(_mSv && (_mSv.key==="iyi" || _mSv.key==="cok_iyi")){
+          haklı.push(s.txt+" (erken — mühendis: "+_mSv.ikon+" "+_mSv.ad+")");
+        } else {
+          erken++;
+        }
+      }
       return;
     }
     if(planli<today){
@@ -3802,7 +3819,7 @@ function _puanProtokolUygunlugu(c){
   });
   if(atlanmis.length){ var d1=Math.min(12,atlanmis.length*4); puan-=d1; kalemler.push(_kalem(-Math.round(d1), atlanmis.length+" işlem ciddi gecikmiş/atlanmış: "+atlanmis.slice(0,3).join(", "))); }
   if(gecikmis.length){ var d2=Math.min(8,gecikmis.length*2); puan-=d2; kalemler.push(_kalem(-Math.round(d2), gecikmis.length+" işlem gecikmiş: "+gecikmis.slice(0,3).join(", "))); }
-  if(haklı.length){ kalemler.push(_kalem(0, haklı.length+" işlem haklı sebeple (gelişme/sarım) ertelendi — puan kırılmadı")); }
+  if(haklı.length){ kalemler.push(_kalem(0, haklı.length+" işlem haklı sebeple (gelişme/sarım/mühendis kararı) protokolden saptı — puan kırılmadı")); }
   if(erken>=2){ puan-=1; kalemler.push(_kalem(-1, erken+" işlem planlanandan belirgin erken yapılmış — sıra kontrolü öneriliir")); }
   if(!atlanmis.length && !gecikmis.length){ puan+=3; kalemler.push(_kalem(3,"Tüm işlemler zamanında yapılıyor")); }
   puan=Math.max(0,Math.min(maks,Math.round(puan)));
