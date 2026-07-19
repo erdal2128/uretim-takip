@@ -85,7 +85,6 @@
   th,td{padding:9px 8px; text-align:center; border-bottom:1px solid var(--line);}
   th{color:var(--muted); font-weight:600; font-size:13px; text-transform:uppercase;}
   td.note{text-align:left;}
-  .tbl-input{padding:8px 8px; font-size:15px; border:1px solid var(--line); border-radius:8px;}
   .del-x{color:var(--red); font-weight:700; background:none; border:none; font-size:20px; padding:9px 13px; min-height:40px;}
   .fab{
     position:fixed; right:18px; bottom:78px; z-index:40;
@@ -502,9 +501,7 @@ function fbInitAfterAuth(){
         if(data.id && silinenIdMi(data.id)){
           if(ch.type!=="removed"){
             /* Gelen kayıt silinen listesindeyse, YOK SAY ve buluttan sil */
-            FB.coll.doc(data.id).delete().then(function(){
-              console.log("👻 Hayalet kayıt geri geldi → tekrar silindi:", data.id);
-            }).catch(function(e){ console.warn("hayalet yeniden silinemedi", data.id, e); });
+            FB.coll.doc(data.id).delete().catch(function(e){ console.warn("hayalet yeniden silinemedi", data.id, e); });
           }
           return;  /* Yerel listeye ASLA ekleme */
         }
@@ -539,7 +536,6 @@ function fbInitAfterAuth(){
           if(cloud[id]){
             FB.coll.doc(id).delete().then(function(){
               silinenIdTemizle(id);
-              console.log("hayalet kayıt buluttan temizlendi:", id);
             }).catch(function(e){
               console.warn("hayalet silme hatası", id, e);
             });
@@ -939,7 +935,7 @@ function hasatTartiTumDonguleriSenkronEt(){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v430";
+var APP_VER = "v431";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -1670,13 +1666,6 @@ function yoklamaKaydet(tarih, personelId, durum, gerekce){
   var g=(durum==="gelmedi")?(gerekce||"habersiz"):"";
   if(y){ y.durum=durum; y.gerekce=g; y._at=new Date().toISOString(); y._by=whoTag(); }
   else { L.push({id:uid(), tarih:tarih, personelId:personelId, durum:durum, gerekce:g, _at:new Date().toISOString(), _by:deviceName()}); }
-  saveData(); render();
-}
-function yoklamaSil(id){
-  if(!can("edit")) return noPerm();
-  var d=loadData();
-  d.yoklamalar=getYoklamalar().filter(function(x){return x.id!==id;});
-  fbDeleteYoklama(id);
   saveData(); render();
 }
 /* Atama değeri kodlaması: "" (atanmadı) | "grup:<ekipId>" | "kisi:<personelId>" */
@@ -2609,15 +2598,6 @@ function protokolYarinaCek(cid, idx){
 }
 /* "Dün ne yaptıysan aynısı" — sulama/ilaçlama genelde birkaç gün aynı gidiyor,
    dropdown'dan tekrar seçmek yerine dünkü kaydı tek dokunuşla kopyalar. */
-function peKopyalaDun(cid){
-  var c=loadData().cycles.find(function(x){return x.id===cid;}); if(!c) return;
-  var dun=addDays(todayISO(),-1);
-  var dr=(c.gunluk||[]).find(function(r){return r.tarih===dun;});
-  if(!dr || (!dr.sulama && !dr.su)){ toast("Dün için sulama/ilaç kaydı yok"); return; }
-  if(el("pe_islem")) el("pe_islem").value = dr.sulama||"";
-  if(el("pe_su")){ el("pe_su").value = dr.su||0; if(el("pe_su_lbl")) el("pe_su_lbl").textContent=(dr.su||0)+" lt"; }
-  toast("Dünkü sulama/ilaç kopyalandı — kontrol et");
-}
 /* Günlük Tur / panoEdit ekranında, sulamanın altında sıradaki adımı gösterir.
    Adım BUGÜN (ya da daha erken/gecikmiş) ise direkt işaretlenebilir bir kutucuk
    çıkar — Görevler sekmesine ayrıca gitmeye gerek kalmaz. İleri bir tarihse
@@ -2760,22 +2740,6 @@ function aktifSartliKurallar(c){
 }
 /* Bir protokol adımını BUGÜNE çeker (protokolYarinaCek'in "bugün" versiyonu) —
    misel patlaması gibi koşullu erken tetikleyiciler için kullanılır. */
-function protokolBugunAc(cid, idx, sebep){
-  if(!can("edit")) return noPerm();
-  var c=loadData().cycles.find(function(x){return x.id===cid;}); if(!c) return;
-  var s=getProtokol()[idx]; if(!s) return;
-  if(!confirm('"'+s.txt+'" bugün için erken açılsın mı?\n\nSebep: '+(sebep||"ziraat mühendisi kararı"))) return;
-  var base=protokolTarih(c,s); if(!base) return;
-  var bugun=todayISO();
-  var mevcutErt=(c.ertele && c.ertele["p"+idx])?c.ertele["p"+idx]:0;
-  var mevcutTarih=addDays(base,mevcutErt);
-  var fark=daysBetween(mevcutTarih,bugun);
-  if(fark===null || fark>=0){ toast("Bu iş zaten bugün veya geçmiş için planlı"); return; }
-  if(!c.ertele) c.ertele={};
-  c.ertele["p"+idx]=mevcutErt+fark;
-  gunlukGorevNotEkle(c, s.txt+" bugüne erken çekildi ("+(sebep||"ziraat mühendisi kararı")+") — "+kimNeZamanEtiketi());
-  touchCycle(c); saveData(); toast("Bugün için erken açıldı: "+s.txt); render();
-}
 /* Şartlı kuralın "ertele" yönü: koşul gerçekleşirse (mühendis onaylarsa) hedef işi 1 gün erteler.
    yarinErteleKaydet ile aynı mantık ama açıklaması kuralın kendi metninden geliyor; puan kırılmaz
    (biyolojik/kalite kaynaklı erteleme sayılır — kompost sıcak, sarım zayıf gibi). */
@@ -2944,14 +2908,6 @@ var GUNLUK_KONTROL_LISTESI = {
   "Bezelye boyutu":   ["Hastalık belirtisi kontrol et.", "Hasat ekibini hazırla.", "Su/kalsiyum uygulamasını unutma."],
   "Ceviz boyutu":     ["Hastalık belirtisi kontrol et.", "Hasat ekibi ve kasaları hazırla.", "Son su uygulamasını (sodyum) unutma."]
 };
-function bugunkuKontrollerHTML(c, tarih){
-  var liste=GUNLUK_KONTROL_LISTESI[stageAtDate(c, tarih||todayISO()).t];
-  if(!liste || !liste.length) return "";
-  return '<div style="margin-top:10px;padding-top:8px;border-top:1px solid #d7e6f2;">'
-    + '<div style="font-size:12px;font-weight:700;color:#1d4ed8;">Bugünkü Kontroller</div>'
-    + liste.map(function(x){ return '<div style="font-size:13px;margin-top:3px;">• '+esc(x)+'</div>'; }).join('')
-    + '</div>';
-}
 /* gosterimTarihi (opsiyonel): Günlük Tur'da üstteki tarih değiştirilince (kullanıcı
    isteği: "tarihi değiştiriyorum ama aşağıdaki bilgiler değişmiyor") kalan gün/
    hedef sıcaklık-CO₂/bugünkü kontroller o güne göre yeniden hesaplanır — tahmin
@@ -3872,26 +3828,6 @@ function _puanSulamaYonetimi(c){
 
 /* 📈 Trend Analizi (10) — son ölçümler ideale mi yaklaşıyor uzaklaşıyor mu,
    risk (art arda kötüleşen ölçüm sayısı) artıyor mu. */
-function _puanTrendAnalizi(c){
-  var maks=10, kalemler=[], puan=maks, today=todayISO();
-  var t=analizTrend(c,"kompostC",4);
-  if(t && t.yon!=="sabit"){
-    var ortaIdeal=(KOMPOST_IDEAL_MIN+KOMPOST_IDEAL_MAX)/2;
-    var oncekiSapma=Math.abs(t.ilk-ortaIdeal), sonSapma=Math.abs(t.son-ortaIdeal);
-    if(sonSapma<oncekiSapma-0.5){ puan+=2; kalemler.push(_kalem(2,"Kompost sıcaklığı ideale doğru düzeliyor ("+t.ilk+"→"+t.son+")")); }
-    else if(sonSapma>oncekiSapma+0.5){ puan-=2; kalemler.push(_kalem(-2,"Kompost sıcaklığı idealden uzaklaşıyor ("+t.ilk+"→"+t.son+")")); }
-  }
-  var to=analizTrend(c,"odaC",4);
-  if(to && to.yon==="sabit"){ puan+=1; kalemler.push(_kalem(1,"Oda sıcaklığı son ölçümlerde stabil")); }
-
-  var sonKayitlar=(c.gunluk||[]).filter(function(r){return r.tarih<=today;}).slice().sort(function(a,b){return cmpDate(a.tarih,b.tarih);}).slice(-3);
-  var kotuSayisi=0;
-  sonKayitlar.forEach(function(r){ var ko=numParse(r.kompostC); if(ko!=null && (ko>=KOMPOST_KRITIK_UST||ko<=KOMPOST_KRITIK_ALT)) kotuSayisi++; });
-  if(kotuSayisi>=2){ puan-=3; kalemler.push(_kalem(-3,"Son "+sonKayitlar.length+" ölçümün "+kotuSayisi+"'ünde kompost kritik/tehlikeli seviyede — risk artıyor")); }
-
-  puan=Math.max(0,Math.min(maks,Math.round(puan)));
-  return {key:"trend", ad:"📈 Trend Analizi", maks:maks, puan:puan, kalemler:kalemler};
-}
 /* Bölüm 7 (ÜRETİM DEĞERLENDİRME SİSTEMİ) — kullanıcı isteği: "Trend Analizi"
    kategorisini KALDIR, yerine "Hasat Eğrisi" koy. Mevcut hasatEgrisiAnaliz
    motorunu (0-100 zamanlama/denge puanı) yeniden kullanır, 10 puanlık bu
@@ -4278,10 +4214,6 @@ var HASAT_EGRI_OGRENME_MIN_ORNEK = 3;
 /* Bir flaşın (1 veya 2) HASAT_PLAN'daki 5 günlük penceresi başlangıcı: flaş1
    hasatBaslangic() ile aynı gün, flaş2 +10 gün sonra (5 gün flaş + 5 gün
    hazırlık arası — HASAT_PLAN gun:6-10). */
-function hasatFlasBaslangic(c, flas){
-  var bas=hasatBaslangic(c); if(!bas) return null;
-  return addDays(bas, flas===1?0:10);
-}
 /* Bu flaşın 5 günlük penceresi tamamen geçmiş mi (o yüzden yüzdeler artık
    anlamlı — pencere bitmeden % hesaplamak yanıltıcı olur, toplam henüz
    kesinleşmemiş demektir). */
@@ -5060,29 +4992,6 @@ function renderPanoEdit(id){
     +'</div>';
   el("app").innerHTML=h;
 }
-function panoEditSave(id){
-  if(!can("edit")) return noPerm();
-  var c=loadData().cycles.find(function(x){return x.id===id;}); if(!c) return;
-  var today=todayISO();
-  var vk="";
-  var patch={
-    odaC: el("pe_oda").value.trim(), kompostC: el("pe_komp").value.trim(),
-    kompostUst: el("pe_kompust")?el("pe_kompust").value.trim():"", klimaC: el("pe_klima").value.trim(),
-    co2alt: el("pe_co2a")?el("pe_co2a").value.trim():"", co2ust: el("pe_co2u")?el("pe_co2u").value.trim():"",
-    sulama: el("pe_islem").value.trim(), su: el("pe_su")?el("pe_su").value.trim():""
-  };
-  var warnLines=[];
-  var n=gunlukKaydet(c, today, vk, patch, warnLines);
-  if(n){ touchCycle(c); saveData(); logAudit("pano hızlı kayıt", (c.oda||"")+" · "+today+" · "+vk); }
-  if(warnLines.length){
-    toast(n?"Kaydedildi (bazı uyarılarla)":"Kaydedilemedi");
-    showWarnBox(n?"Kısmen kaydedildi":"Kaydedilemedi", warnLines);
-    if(!n) return;
-  } else {
-    toast(n?"Kaydedildi":"Değişiklik yok");
-  }
-  go("bugun");
-}
 /* Kısa gün adı — planlama içeren tarihlerin yanına (kompost teslim, protokol
    sıradaki adım vb). Pazar özellikle vurgulanır ("Pazarı bilelim, önlem alalım"). */
 var GUN_KISA=["Paz","Pzt","Sal","Çar","Per","Cum","Cmt"]; /* getUTCDay(): 0=Pazar */
@@ -5608,12 +5517,6 @@ function arizaEkleKaydet(){
     _arizaFotoGecici=null;
     _arizaFormAcik=false;
   }
-}
-function teknisyenTelKaydetHizli(){
-  if(!can("manage")) return noPerm();
-  var v=(el("az_tel_hizli").value||"").trim();
-  var d=loadData(); if(!d.settings) d.settings={};
-  d.settings.teknisyenTel=v; saveData(); toast("Kaydedildi"); render();
 }
 /* ---- Konumlar (oda/alan/bahçe/blok) ve Görev türleri — ayarlardan ---- */
 var KONUM_VARSAYILAN = ["Genel alan","Bahçe","A blok","B blok","Koridor"];
@@ -6410,26 +6313,6 @@ function getRecentActions(){
 }
 
 /* Helper: Günün ilerleme bilgisi */
-function getDayProgress(){
-  /* TEK KAYNAK: hem "kalan" hem "tamamlanan", getTodaysTasks()'in DÖNDÜRDÜĞÜ
-     AYNI listeden sayılır — liste zaten 4 kategoriyi de (oda görevleri, genel
-     görevler, protokol adımları, sulama/ilaç) doğru "done" bayrağıyla içeriyor.
-     ESKİDEN "tamamlanan" ayrı, sadece oda+genel görevlerini sayan bir mantıkla
-     hesaplanıyordu — protokol adımı ve sulama/ilaç tamamlamaları hiç
-     sayılmıyordu. Sonuç: liste "5 tamamlandı" derken özet kartı "0/0"
-     gösteriyordu (KRİTİK BUG, düzeltildi). İki ayrı sayma mantığı olduğu
-     sürece bu tür sapmalar tekrar olur — tek kaynağa indirgemek kalıcı çözüm. */
-  var tasks = getTodaysTasks()||[];
-  var tamamlanan = tasks.filter(function(t){return t.done;}).length;
-  var kalan = tasks.filter(function(t){return !t.done;}).length;
-  var toplam = tamamlanan+kalan;
-  return {
-    toplam: toplam,
-    tamamlanan: tamamlanan,
-    kalan: kalan,
-    yuzde: toplam>0?Math.round((tamamlanan/toplam)*100):0
-  };
-}
 
 /* renderBugun() — Saha personelinin ana çalışma ekranı */
 function renderBugun(){
@@ -6872,10 +6755,6 @@ function gorevTamamla(id, tipo, cyclicId){
 }
 
 /* Helper: Tarih adı (Pazartesi, vb.) */
-function todayName(){
-  var names=["Pazar","Pazartesi","Salı","Çarşamba","Perşembe","Cuma","Cumartesi"];
-  return names[new Date(todayISO()).getDay()];
-}
 
 /* ========== ANA SAYFA (5 KART DASHBOARD) — Opsiyonel Backup ========== */
 function renderHome(){
@@ -8308,21 +8187,6 @@ function odaIslemGecmisi(c){
   out.sort(function(a,b){ return cmpDate(b.tarih, a.tarih); });
   return out;
 }
-function odaIslemGecmisiHTML(c){
-  var kayitlar=odaIslemGecmisi(c);
-  if(!kayitlar.length){
-    return '<div class="muted" style="padding:8px 0;font-style:italic;">Henüz işlem kaydı yok</div>';
-  }
-  var h='<div style="max-height:260px;overflow-y:auto;">';
-  kayitlar.forEach(function(k){
-    h+='<div style="padding:7px 0;border-bottom:1px solid var(--line);display:flex;gap:10px;align-items:baseline;font-size:13px;">'
-      +'<span style="color:var(--muted);white-space:nowrap;min-width:70px;">'+fmtDate(k.tarih)+'</span>'
-      +'<span style="flex:1;">'+esc(k.metin)+'</span>'
-      +'</div>';
-  });
-  h+='</div>';
-  return h;
-}
 
 function komposGelisKontrolHTML(c){
   if(!c) return "";
@@ -8940,11 +8804,6 @@ function openForm(id,prefillOda){ _formPrefillOda=prefillOda||null; go("form",id
    "Bilgileri düzenle" formu ve hızlı tur ekranındaki "işaretle" butonları
    bu TEK fonksiyonu ortak kullanır — iki yerde ayrı ayrı yazılıp birbirinden
    kopmasınlar diye (daha önce tam bu yüzden bir hata olmuştu). */
-function protokolGoreviTamamla(c, key, tarih){
-  var pi=protokolRolIdx(key); if(pi<0) return;
-  /* SSOT: tek yazma kapısından geç — bayrak, özel tarih ve günlük not birlikte yazılır */
-  adimTamamla(c, pi, {tarih:tarih});
-}
 /* Tiftik/Toprak/Tırmık/Hava'nın "Bilgileri düzenle" formunda ZATEN özel alanları var
    (c.tiftikTarihi vb.) — bunların protokoldeki karşılık geldiği satır index'lerini bulur,
    böylece "Diğer Üretim İşlemleri" listesi bu 4'ünü TEKRAR göstermez. */
@@ -10331,21 +10190,8 @@ function turBitir(){
   turIndex=0; _turTarihVal=null; _turVakitVal=null;
   go("bugun");  /* go() → render() → header otomatik güncellenir */
 }
-function saveTur(){
-  var t=el("tur_tarih").value;
-  if(!t){ toast("Tarih seç"); return; }
-  var vk=el("tur_vakit")?el("tur_vakit").value:"";
-  var cards=document.querySelectorAll('[data-cid]'); var n=0; var warnLines=[];
-  cards.forEach(function(card){ n+=turKaydetKart(card,t,vk,warnLines); });
-  saveData(); toast(n+" odaya kaydedildi");
-  if(warnLines.length) showWarnBox("Bazı odalar atlandı/kısıtlandı", warnLines);
-  turIndex=0; _turTarihVal=null; _turVakitVal=null;
-  go("bugun");
-}
 
 /* ---------- Günlük satır düzenleme / tur / dönem ---------- */
-function editGunluk(id,i){ editGun=i; renderDetail(id); window.scrollTo(0,0); }
-function cancelEditGun(id){ editGun=-1; renderDetail(id); }
 function setManuelDonem(id,val){
   if(!can("edit")) return noPerm();
   var c=loadData().cycles.find(function(x){return x.id===id;});
@@ -10632,18 +10478,6 @@ function uretimIslemSatirlari(c){
     rows.push({g:gunNo(c,tarih), tarih:tarih, t:s.txt+(detay.not?(" — "+detay.not):"")});
   });
   return rows.filter(function(x){ return x.g!=="" && x.g!==null && x.g!==undefined; });
-}
-function islemlerHTML(c){
-  var rows=uretimIslemSatirlari(c);
-  (c.gunluk||[]).forEach(function(r){
-    var ayr=gunlukSatirAyristir(r);
-    if(ayr.uretim.length) rows.push({g:gunNo(c,r.tarih), tarih:r.tarih, t:ayr.uretim.join(" · ")});
-  });
-  rows.sort(function(a,b){ return a.g-b.g; });
-  if(!rows.length) return '<div style="color:#777;font-size:11px;">İşlem kaydı yok.</div>';
-  return '<div style="columns:2;-webkit-columns:2;font-size:11px;line-height:1.6;">'
-    + rows.map(function(r){ return '<div><b>'+r.g+'. gün:</b> '+esc(r.t)+'</div>'; }).join("")
-    + '</div>';
 }
 function kompostChartSVG(c){
   var T=[], CO=[], S=[];
@@ -11325,19 +11159,6 @@ function yaklasanIslerHTML(active){
    farklı, sadece tarih. Poşet/hava/hasat/kompost indirme gibi adımlarda ve
    zaten yapılmış herhangi bir adımın tarihini düzeltmede kullanılır. Yazma
    yine adimTamamla üzerinden (SSOT), tarihi opts.tarih ile geçirir. */
-function adimTarihDuzenleAc(cid, idx){
-  var wm=el("warnModal"); if(!wm) return;
-  var c=loadData().cycles.find(function(x){return x.id===cid;}); if(!c) return;
-  var s=getProtokol()[idx]; if(!s) return;
-  var detay=c.adimDetay && c.adimDetay["p"+idx];
-  var mevcutTarih=detay?detay.tarih:(_turTarihVal||todayISO());
-  wm.innerHTML='<div class="modal-bg" onclick="if(event.target===this) closeWarnBox();"><div class="modal">'
-    +'<div style="font-weight:700;font-size:17px;margin-bottom:8px;">'+esc(s.txt)+'</div>'
-    +'<label>Tarih</label><input type="date" id="atd_tarih" value="'+mevcutTarih+'">'
-    +'<div class="row" style="margin-top:14px;"><button class="btn" onclick="adimTarihKaydet(\''+cid+'\','+idx+')">Kaydet</button>'
-    +'<button class="btn ghost" onclick="closeWarnBox()">Vazgeç</button></div>'
-    +'</div></div>';
-}
 function adimTarihKaydet(cid, idx){
   var c=loadData().cycles.find(function(x){return x.id===cid;}); if(!c) return;
   var tarih=(el("atd_tarih")&&el("atd_tarih").value)||todayISO();
@@ -12488,12 +12309,6 @@ function renderAudit(){
   h+='</div><button class="btn ghost" style="width:100%;margin-top:10px;" onclick="go(\'list\')">‹ Geri</button>';
   el("app").innerHTML=h;
 }
-function teknisyenTelKaydet(){
-  if(!can("manage")) return noPerm();
-  var v=(el("tek_tel").value||"").trim();
-  var d=loadData(); if(!d.settings) d.settings={};
-  d.settings.teknisyenTel=v; saveData(); toast("Numara kaydedildi"); render();
-}
 /* ============ ARŞİV (yerelde tut, buluttan çıkar) ============ */
 function getArsiv(){ var d=loadData(); if(!Array.isArray(d.arsiv)) d.arsiv=[]; return d.arsiv; }
 function findCycle(id){ var d=loadData(); var c=d.cycles.find(function(x){return x.id===id;}); if(c) return c; return getArsiv().find(function(x){return x.id===id;})||null; }
@@ -13422,28 +13237,6 @@ function renderRaporlar(){
       +'<button class="btn ghost small" onclick="go(\'arsiv\')">📦 Arşiv</button></div>';
   }
   el("app").innerHTML=h;
-}
-function akilliAnalizHTML(aktif){
-  var bul=[];
-  tempAlerts().filter(function(a){return a.lvl>=1;}).forEach(function(a){
-    bul.push({sev:"warn", txt:esc(a.oda)+": "+esc(a.txt)});
-  });
-  aktif.forEach(function(c){
-    var son=sonGunluk(c);
-    if(son && son.amonyak==="Var") bul.push({sev:"warn", txt:esc(c.oda)+": amonyak kokusu bildirildi — havalandırmayı kontrol et."});
-  });
-  var vArr=aktif.map(function(c){ var v=verimOzet(c); return {oda:c.oda, verim:v.verim}; }).filter(function(x){return x.verim!=null;});
-  if(vArr.length>=2){
-    vArr.sort(function(a,b){return a.verim-b.verim;});
-    var dusuk=vArr[0], yuksek=vArr[vArr.length-1];
-    if(yuksek.verim>0 && dusuk.verim/yuksek.verim<0.7){
-      bul.push({sev:"info", txt:esc(dusuk.oda)+" verimi ("+dusuk.verim.toFixed(1)+" kasa/ton) "+esc(yuksek.oda)+"'dan ("+yuksek.verim.toFixed(1)+") belirgin düşük — kıyaslama ekranından kompost/sıcaklık geçmişini karşılaştır."});
-    }
-  }
-  if(!bul.length) return '<div class="muted">Şu an dikkat çeken bir bulgu yok.</div>';
-  return bul.map(function(b){
-    return '<div class="kv" style="border-bottom:1px solid #f0f0ec;"><span style="'+(b.sev==="warn"?'color:var(--red);':'color:var(--muted);')+'">'+(b.sev==="warn"?"⚠️ ":"ℹ️ ")+b.txt+'</span></div>';
-  }).join('');
 }
 function excelTumVerim(){
   toast("Excel hazırlanıyor…");
