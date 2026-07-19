@@ -928,7 +928,7 @@ function hasatTartiTumDonguleriSenkronEt(){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v421";
+var APP_VER = "v422";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -3058,6 +3058,144 @@ function muhendisDegKartHTML(c){
   });
   return h;
 }
+/* ==================== Genel (protokol adımına bağlı olmayan) değerlendirme
+   ==================== Bölüm 6 (Sulama Yönetimi) ve Bölüm 10 (Mantar
+   Kalitesi) için — aynı c.muhendisDegerlendirme deposunu, "p"+idx yerine
+   serbest bir anahtarla ("sulama_kulucka", "mantar_kalite" gibi) kullanır.
+   Aynı 5 seviyeli sistem, aynı tek dokunuşla seçim + isteğe bağlı not deseni. */
+function muhendisDegGenelSec(cid, anahtar, baslik, seviye){
+  if(!can("edit")) return noPerm();
+  var c=loadData().cycles.find(function(x){return x.id===cid;}); if(!c) return;
+  if(!c.muhendisDegerlendirme) c.muhendisDegerlendirme={};
+  var mevcut=c.muhendisDegerlendirme[anahtar]||{};
+  c.muhendisDegerlendirme[anahtar]={seviye:seviye, not:mevcut.not||"", tarih:todayISO(), kim:kimNeZamanEtiketi()};
+  var sv=muhendisSeviyeBul(seviye);
+  gunlukGorevNotEkle(c, baslik+" değerlendirmesi: "+(sv?sv.ikon+" "+sv.ad:seviye)+" — "+kimNeZamanEtiketi());
+  touchCycle(c); saveData(); toast("Değerlendirme kaydedildi: "+(sv?sv.ikon+" "+sv.ad:seviye)); render();
+}
+function muhendisDegGenelNotAc(cid, anahtar){ _muhendisDegNotAcik[cid+"_"+anahtar]=true; render(); }
+function muhendisDegGenelNotVazgec(cid, anahtar){ delete _muhendisDegNotAcik[cid+"_"+anahtar]; render(); }
+function muhendisDegGenelNotKaydet(cid, anahtar){
+  if(!can("edit")) return noPerm();
+  var c=loadData().cycles.find(function(x){return x.id===cid;}); if(!c) return;
+  var metin=(el("mdng_"+cid+"_"+anahtar)&&el("mdng_"+cid+"_"+anahtar).value.trim())||"";
+  if(!c.muhendisDegerlendirme) c.muhendisDegerlendirme={};
+  var mevcut=c.muhendisDegerlendirme[anahtar]||{seviye:"", tarih:todayISO(), kim:kimNeZamanEtiketi()};
+  mevcut.not=metin; mevcut.tarih=mevcut.tarih||todayISO(); mevcut.kim=mevcut.kim||kimNeZamanEtiketi();
+  c.muhendisDegerlendirme[anahtar]=mevcut;
+  touchCycle(c); saveData(); delete _muhendisDegNotAcik[cid+"_"+anahtar];
+  toast(metin?"Not kaydedildi":"Not temizlendi"); render();
+}
+function muhendisDegGenelSeviyeSeciciHTML(cid, anahtar, baslik){
+  return '<div style="display:flex;gap:5px;flex-wrap:wrap;">'
+    + MUHENDIS_DEGERLENDIRME_SEVIYELER.map(function(s){
+        return '<button class="btn ghost small" style="padding:4px 8px;" onclick="muhendisDegGenelSec(\''+cid+'\',\''+anahtar+'\',\''+baslik.replace(/'/g,"\\'")+'\',\''+s.key+'\')">'+s.ikon+' '+s.ad+'</button>';
+      }).join('')
+    + '</div>';
+}
+function muhendisDegGenelKartHTML(cid, anahtar, baslik, c, notYerTutucu){
+  var mevcut=c.muhendisDegerlendirme && c.muhendisDegerlendirme[anahtar];
+  var notAcik=_muhendisDegNotAcik[cid+"_"+anahtar];
+  if(mevcut && mevcut.seviye){
+    var sv=muhendisSeviyeBul(mevcut.seviye);
+    return '<div style="margin-top:8px;padding:8px;background:#f4faf6;border:1px solid #cfe8d8;border-radius:8px;">'
+      + '<div style="font-size:12.5px;display:flex;justify-content:space-between;align-items:center;">'
+      + '<span>'+baslik+': <b>'+(sv?sv.ikon+' '+sv.ad:mevcut.seviye)+'</b></span>'
+      + (can("edit")?('<span style="text-decoration:underline;cursor:pointer;color:#1d4ed8;font-size:11.5px;" onclick="'+(notAcik?'muhendisDegGenelNotVazgec':'muhendisDegGenelNotAc')+'(\''+cid+'\',\''+anahtar+'\')">'+(notAcik?'vazgeç':'düzenle')+'</span>'):'')
+      + '</div>'
+      + (mevcut.not && !notAcik?('<div class="muted" style="font-size:12px;margin-top:3px;">'+esc(mevcut.not)+'</div>'):'')
+      + (notAcik?(
+          '<div style="margin-top:6px;">'
+          + (can("edit")?muhendisDegGenelSeviyeSeciciHTML(cid, anahtar, baslik):'')
+          + '<textarea id="mdng_'+cid+'_'+anahtar+'" rows="2" placeholder="'+esc(notYerTutucu||"Kısa not (isteğe bağlı)")+'" style="width:100%;margin-top:6px;">'+esc(mevcut.not||"")+'</textarea>'
+          + '<button class="btn small" style="margin-top:5px;" onclick="muhendisDegGenelNotKaydet(\''+cid+'\',\''+anahtar+'\')">Kaydet</button>'
+          + '<button class="btn ghost small" style="margin-top:5px;margin-left:5px;" onclick="muhendisDegGenelNotVazgec(\''+cid+'\',\''+anahtar+'\')">Vazgeç</button>'
+          + '</div>'
+        ):'')
+      + '</div>';
+  }
+  if(!can("edit")) return "";
+  return '<div style="margin-top:8px;padding:8px;background:#eef6ff;border:1px solid #b9d7f5;border-radius:8px;">'
+    + '<div style="font-size:12.5px;font-weight:700;color:#1d4ed8;margin-bottom:6px;">'+baslik+'</div>'
+    + muhendisDegGenelSeviyeSeciciHTML(cid, anahtar, baslik)
+    + '</div>';
+}
+/* ==================== Bölüm 6 — Sulama Yönetimi (nitel değerlendirme) ====================
+   Kullanıcı isteği: "protokolde kaç litre su verildi?" yerine "kompostun
+   ihtiyacına göre doğru sulama yapıldı mı?" sorusu — kuluçka dönemi (gelişten
+   toprak serimine kadar) bittiğinde, yani toprak tarihi girildiğinde, BİR
+   KEZ sorulur. Az su otomatik "kötü" sayılmaz — mühendis kompost nemi/misel
+   gelişimi/sonuç iyiyse bunu Normal/İyi/Çok İyi olarak değerlendirebilir. */
+function kulucakDonemiSulamaDegKartHTML(c){
+  if(!c || c.bosaltimTarihi || !c.toprakTarihi) return "";
+  return muhendisDegGenelKartHTML(c.id, "sulama_kulucka", "💧 Kuluçka dönemi sulama yönetimi", c,
+    "örn. 'Protokolden az su verildi ama nem yeterliydi, sarım güçlü.'");
+}
+/* ==================== Bölüm 4 + 5 — Sorun Kaynağı Ayrımı + Kritik Olay Kaydı ====================
+   Kullanıcı isteği: bir sorun oluştuğunda sistem doğrudan kompostu/firmayı
+   suçlamamalı — mühendis kaynağı seçebilsin (isteğe bağlı kısa açıklamayla).
+   c.kritikOlaylar = [{id, tarih, oda, asama, olay, kaynak, kaynakNot, kim}] */
+var KRITIK_OLAY_KAYNAKLARI = [
+  {key:"kompost", ikon:"🟤", ad:"Kompost kaynaklı"},
+  {key:"iklim", ikon:"🔵", ad:"İklim yönetimi kaynaklı"},
+  {key:"sulama", ikon:"💧", ad:"Sulama yönetimi kaynaklı"},
+  {key:"hasat", ikon:"🍄", ad:"Hasat yönetimi kaynaklı"},
+  {key:"muhendis", ikon:"👨‍🌾", ad:"Mühendis / operasyon kaynaklı"},
+  {key:"belirsiz", ikon:"⚪", ad:"Belirsiz"},
+  {key:"diger", ikon:"✍️", ad:"Diğer"}
+];
+function kritikOlayKaynagiBul(key){ return KRITIK_OLAY_KAYNAKLARI.find(function(k){return k.key===key;}) || null; }
+var _kritikOlayFormAcik={};
+function kritikOlayFormAc(cid){ _kritikOlayFormAcik[cid]=true; render(); }
+function kritikOlayFormVazgec(cid){ delete _kritikOlayFormAcik[cid]; render(); }
+function kritikOlayKaydet(cid){
+  if(!can("edit")) return noPerm();
+  var c=loadData().cycles.find(function(x){return x.id===cid;}); if(!c) return;
+  var olayTxt=(el("ko_olay_"+cid)&&el("ko_olay_"+cid).value.trim())||"";
+  if(!olayTxt){ toast("Olay açıklaması yaz"); return; }
+  var kaynakSec=el("ko_kaynak_"+cid); var kaynak=kaynakSec?kaynakSec.value:"belirsiz";
+  var notTxt=(el("ko_not_"+cid)&&el("ko_not_"+cid).value.trim())||"";
+  if(!c.kritikOlaylar) c.kritikOlaylar=[];
+  c.kritikOlaylar.push({id:uid(), tarih:todayISO(), oda:c.oda, asama:stageOf(c).t, olay:olayTxt, kaynak:kaynak, kaynakNot:notTxt, kim:kimNeZamanEtiketi()});
+  c.kritikOlaylar.sort(function(a,b){return cmpDate(a.tarih,b.tarih);});
+  touchCycle(c); saveData(); delete _kritikOlayFormAcik[cid];
+  toast("🚨 Kritik olay kaydedildi"); render();
+}
+function kritikOlayFormHTML(c){
+  if(!can("edit")) return "";
+  if(!_kritikOlayFormAcik[c.id]){
+    return '<div style="margin-top:8px;text-align:center;">'
+      + '<button class="btn ghost small" onclick="kritikOlayFormAc(\''+c.id+'\')">🚨 Kritik Olay Ekle</button>'
+      + '</div>';
+  }
+  return '<div style="margin-top:8px;padding:9px;background:#fff3e0;border:1.5px solid #e8a33d;border-radius:8px;">'
+    + '<div style="font-size:13px;font-weight:700;color:#8a5a1f;margin-bottom:6px;">🚨 Kritik Olay — '+esc(stageOf(c).t)+'</div>'
+    + '<label>Olay</label><textarea id="ko_olay_'+c.id+'" rows="2" placeholder="örn. Kompost sıcaklığı kısa süreli yükseldi." style="width:100%;"></textarea>'
+    + '<label style="margin-top:8px;">Olası kaynak</label>'
+    + '<select id="ko_kaynak_'+c.id+'" style="width:100%;">'
+    + KRITIK_OLAY_KAYNAKLARI.map(function(k){ return '<option value="'+k.key+'">'+k.ikon+' '+k.ad+'</option>'; }).join('')
+    + '</select>'
+    + '<label style="margin-top:8px;">Not <small class="muted">(isteğe bağlı)</small></label>'
+    + '<input type="text" id="ko_not_'+c.id+'" placeholder="Kısa açıklama">'
+    + '<div style="display:flex;gap:6px;margin-top:8px;">'
+    + '<button class="btn small" style="flex:1;" onclick="kritikOlayKaydet(\''+c.id+'\')">Kaydet</button>'
+    + '<button class="btn ghost small" style="flex:1;" onclick="kritikOlayFormVazgec(\''+c.id+'\')">Vazgeç</button>'
+    + '</div></div>';
+}
+function kritikOlaylarListesiHTML(c){
+  if(!c.kritikOlaylar || !c.kritikOlaylar.length) return "";
+  var h='<div class="sec-title">🚨 Kritik Olaylar</div><div class="card" style="padding:10px;">';
+  c.kritikOlaylar.slice().sort(function(a,b){return cmpDate(b.tarih,a.tarih);}).forEach(function(o){
+    var k=kritikOlayKaynagiBul(o.kaynak);
+    h+='<div style="padding:7px 0;border-bottom:1px solid #f0f0ec;">'
+      + '<div style="font-size:12px;color:var(--muted);">'+fmtDate(o.tarih)+' · '+esc(o.asama||"")+'</div>'
+      + '<div style="font-size:13.5px;margin-top:2px;">'+esc(o.olay)+'</div>'
+      + '<div style="font-size:12px;margin-top:2px;">'+(k?(k.ikon+' '+k.ad):'')+(o.kaynakNot?(' — '+esc(o.kaynakNot)):'')+'</div>'
+      + '</div>';
+  });
+  h+='</div>';
+  return h;
+}
 function turSiradakiAdimHTML(c, gosterimTarihi){
   var h="";
   var flas1Kart="";
@@ -4264,19 +4402,33 @@ function hasatEgrisiDetayHTML(a){
     + '<div style="margin-top:8px;padding:9px 10px;background:#eef6ff;border:1px solid #b9d7f5;border-radius:8px;font-size:12.5px;font-style:italic;">'+esc(a.yorum)+'</div>'
     + '<div class="muted" style="font-size:11px;margin-top:6px;">Referans eğri kaynağı: '+esc(a.ref.kaynak)+' — tahmin güveni %'+a.guven+'.</div>';
 }
+/* Bölüm 7 (ÜRETİM DEĞERLENDİRME SİSTEMİ): hasat eğrisi puanı (0-100), mevcut
+   hasatEgriPuanEtiket bantlarıyla (Mükemmel/Çok iyi/İyi/Orta/Zayıf/Sorunlu)
+   TUTARLI şekilde 5 seviyeye (🟢 Çok İyi/🟢 İyi/🟡 Normal/🟠 Kötü/🔴 Çok Kötü)
+   eşlenir — mühendis burada elle puan girmez, sistem otomatik sınıflar. */
+function hasatEgriSeviyeSinifla(puan){
+  if(puan>=90) return muhendisSeviyeBul("cok_iyi");
+  if(puan>=80) return muhendisSeviyeBul("iyi");
+  if(puan>=70) return muhendisSeviyeBul("normal");
+  if(puan>=60) return muhendisSeviyeBul("kotu");
+  return muhendisSeviyeBul("cok_kotu");
+}
 function hasatEgrisiHTML(c){
   var flaslar=[1,2].map(function(f){ return hasatEgrisiAnaliz(c,f); }).filter(Boolean);
   if(!flaslar.length) return "";
   var body='';
   flaslar.forEach(function(a,idx){
     if(idx>0) body+='<hr style="margin:12px 0;border:none;border-top:1px solid var(--line);">';
+    var sv=hasatEgriSeviyeSinifla(a.puan);
     body+='<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;">'
       +'<div style="font-weight:700;">'+a.flas+'. Flaş Hasat Eğrisi</div>'
-      +'<div style="font-size:20px;font-weight:700;color:'+puanRenk(a.puan)+';">'+a.puan+'<span style="font-size:12px;color:var(--muted);">/100 · '+a.etiket+'</span></div>'
-      +'</div>'
+      +'<div style="text-align:right;">'
+      +'<div style="font-size:15px;font-weight:700;">'+(sv?(sv.ikon+' '+sv.ad):'')+'</div>'
+      +'<div style="font-size:12px;color:var(--muted);">'+a.puan+'/100 · '+a.etiket+'</div>'
+      +'</div></div>'
       +hasatEgrisiDetayHTML(a);
   });
-  return sectionCard('📈 Yüzdesel Hasat Eğrisi Analizi', body);
+  return sectionCard('📈 Hasat Eğrisi', body);
 }
 function beklenenTakvim(c){
   /* SSOT: Her aşama için protokol adımını bul ve protokolTarih() ile hesapla,
@@ -4316,6 +4468,7 @@ function beklenenTakvim(c){
     }
     result.push({
       ad: names[rol],
+      rol: rol,
       beklenen: beklenen,
       ger: gerçekler[rol]
     });
@@ -7341,12 +7494,20 @@ function renderDetail(id){
     + '</div></div>';
 
   var tak = beklenenTakvim(c);
+  /* Bölüm 2 (ÜRETİM DEĞERLENDİRME SİSTEMİ): "Beklenen takvim" tablosu artık
+     Mühendis sütununu da gösteriyor — Günlük Tur'da kaydedilen 5 seviyeli
+     değerlendirmeyi (bkz. c.muhendisDegerlendirme) aynı satırda gösterir,
+     kullanıcı Beklenen/Gerçekleşen/Mühendis'i tek bakışta kıyaslayabilsin. */
   var plan = '<div class="sec-title">Beklenen takvim</div><div class="card" style="padding:8px;">'
-    + '<table><thead><tr><th>Aşama</th><th>Beklenen</th><th>Gerçekleşen</th></tr></thead><tbody>';
+    + '<table><thead><tr><th>Aşama</th><th>Beklenen</th><th>Gerçekleşen</th><th>Mühendis</th></tr></thead><tbody>';
   tak.forEach(function(m){
+    var mIdx = m.rol ? protokolRolIdx(m.rol) : -1;
+    var mDeg = (mIdx>=0 && c.muhendisDegerlendirme) ? c.muhendisDegerlendirme["p"+mIdx] : null;
+    var mSv = mDeg && mDeg.seviye ? muhendisSeviyeBul(mDeg.seviye) : null;
     plan += '<tr><td class="note" style="font-weight:500;">'+m.ad+'</td>'
       + '<td class="red">'+fmtDate(m.beklenen)+'</td>'
-      + '<td>'+(m.ger?('✓ '+fmtDate(m.ger)):'<span class="muted">—</span>')+'</td></tr>';
+      + '<td>'+(m.ger?('✓ '+fmtDate(m.ger)):'<span class="muted">—</span>')+'</td>'
+      + '<td>'+(mSv?(mSv.ikon+' '+mSv.ad):'<span class="muted">—</span>')+'</td></tr>';
   });
   plan += '</tbody></table><div class="muted" style="padding:8px 8px 4px;">Kural: gelişten tiftik '+getSet(c).offTiftik+'., toprak '+getSet(c).offToprak+'. gün · topraktan tırmık '+getSet(c).offTirmik+'., hava '+getSet(c).offHava+'., hasat '+getSet(c).offHasat+'. gün</div></div>';
 
@@ -7511,7 +7672,7 @@ function renderDetail(id){
   else if(_odaSekme==="hasat") icerik = hasatKart + hasatTak + hasatEgri;
   else if(_odaSekme==="hastalik") icerik = hastalikCard + foto;
   else if(_odaSekme==="ilac") icerik = ilacKart + tuketim;
-  else if(_odaSekme==="uretim") icerik = puanCard + verim + donem + plan + prot;
+  else if(_odaSekme==="uretim") icerik = odaTamamlamaOzetiHTML(c) + puanCard + verim + donem + plan + prot + kritikOlaylarListesiHTML(c);
   else if(_odaSekme==="notlar") icerik = notHTML + formFoto;
 
   /* Havalandırma hedef kartı (varsa) günlük sekmesinde, uyarı niteliğinde en üstte */
@@ -9837,7 +9998,9 @@ function turOdaKartIcHTML(c, ge, showExtra){
         +'<input type="hidden" class="tur_su" value=""><input type="hidden" class="tur_sulama" value="'+esc(ge.sulama||"")+'">')
     +turSiradakiAdimHTML(c, turGosterimTarihi)
     +muhendisDegKartHTML(c)
+    +kulucakDonemiSulamaDegKartHTML(c)
     +turNotAlaniHTML(c)
+    +kritikOlayFormHTML(c)
     +(showExtra?hasatTakipKart(c):'');
 }
 function renderTur(){
@@ -14826,6 +14989,21 @@ function verimOzet(c){
   var alan=numParse(c.alanM2);
   return {kestane:kes, normal:nor, toplam:toplam, ton:ton, verim:(ton>0?toplam/ton:null), kg:kg, kgTon:(ton>0?kg/ton:null), kgM2:(alan&&alan>0?kg/alan:null), alan:alan};
 }
+/* Bölüm 8 (ÜRETİM DEĞERLENDİRME SİSTEMİ) — Hasat verim oranı otomatik
+   sınıflandırması. Mevcut verim hesaplama yöntemi (verimOzet.kgTon = kg
+   hasat / ton kompost) korunur; kullanıcının verdiği yüzde eşikleri
+   (örn. "%29,4") kgTon/10 ile bire bir örtüşüyor (1 ton = 1000 kg,
+   yüzde = kg/1000*100 = kgTon/10). Mühendis burada hesaplama yapmaz,
+   sistem otomatik sınıflar. */
+function hasatVerimYuzde(c){ var v=verimOzet(c); return v.kgTon!=null ? v.kgTon/10 : null; }
+function hasatVerimSiniflandir(yuzde){
+  if(yuzde==null) return null;
+  if(yuzde<20) return muhendisSeviyeBul("cok_kotu");
+  if(yuzde<24) return muhendisSeviyeBul("kotu");
+  if(yuzde<27) return muhendisSeviyeBul("normal");
+  if(yuzde<29) return muhendisSeviyeBul("iyi");
+  return muhendisSeviyeBul("cok_iyi");
+}
 function verimCardHTML(c){
   var v=verimOzet(c);
   function box(lbl,val,unit){ return '<div style="flex:1;min-width:84px;text-align:center;border:1px solid var(--line);border-radius:10px;padding:8px;"><div class="muted" style="font-size:12px;">'+lbl+'</div><div style="font-size:19px;font-weight:700;">'+val+(unit?'<span style="font-size:11px;"> '+unit+'</span>':'')+'</div></div>'; }
@@ -14834,6 +15012,15 @@ function verimCardHTML(c){
     +box("Toplam",Math.round(v.toplam),"kasa")+box("Kestane",Math.round(v.kestane),"")+box("Normal",Math.round(v.normal),"")+box("Verim",(v.verim!=null?v.verim.toFixed(1):"—"),"kasa/ton")
     +box("Toplam",v.kg.toFixed(0),"kg")+box("Verim",(v.kgTon!=null?v.kgTon.toFixed(0):"—"),"kg/ton")+(v.kgM2!=null?box("Verim",v.kgM2.toFixed(1),"kg/m²"):'')
     +'</div>';
+  var vy=hasatVerimYuzde(c), vsv=hasatVerimSiniflandir(vy);
+  if(vsv){
+    h+='<div class="sec-title" style="margin-top:2px;">🍄 Hasat Analizi</div>'
+      +'<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 10px;background:#f4faf6;border:1px solid #cfe8d8;border-radius:8px;margin-bottom:10px;">'
+      +'<span style="font-size:13.5px;">Hasat verim oranı: <b>%'+vy.toFixed(1).replace('.',',')+'</b></span>'
+      +'<span style="font-weight:700;">'+vsv.ikon+' '+vsv.ad+'</span>'
+      +'</div>'
+      +muhendisDegGenelKartHTML(c.id, "mantar_kalite", "🍄 Mantar kalitesi", c, "örn. 'İri ve homojen.' / 'Çaplar küçük.'");
+  }
   var fo=verimFlasOzet(c);
   var fKeys=Object.keys(fo);
   if(fKeys.length){
@@ -14869,6 +15056,59 @@ function verimCardHTML(c){
     +'<label>Hasat personeli</label><input type="text" id="ha_personel" placeholder="örn. Ramazan, Erkan">'
     +'<button class="btn small" style="margin-top:10px;width:100%;" onclick="addHasat(\''+c.id+'\')">+ Hasat ekle</button></div></div>';
   return h;
+}
+/* Bölüm 14 (ÜRETİM DEĞERLENDİRME SİSTEMİ) — oda boşaltıldığında (üretim
+   tamamlandığında) tüm zinciri (firma → kompost geliş → sarım → toprak →
+   tırmık → hava → 1.flaş → hasat eğrisi → hasat verimi → mantar kalitesi)
+   tek bir özet kartta birleştirir. Sadece MEVCUT verileri okur/gösterir —
+   yeni bir veri modeli oluşturmaz, hiçbir kaydı değiştirmez. */
+function odaTamamlamaOzetiHTML(c){
+  if(!c || !c.bosaltimTarihi) return "";
+  var satirlar=[{et:"🏭 Kompost Firması", deg:esc(c.kompostFirma||"—")}];
+  var tak=beklenenTakvim(c);
+  var seviyeSira={cok_kotu:1, kotu:2, normal:3, iyi:4, cok_iyi:5};
+  var anahtarSirali=["", "cok_kotu", "kotu", "normal", "iyi", "cok_iyi"];
+  var toplananSeviyeler=[];
+  MUHENDIS_DEGERLENDIRME_ROLLER.forEach(function(r){
+    var m=tak.find(function(x){return x.rol===r.rol;});
+    var idx=protokolRolIdx(r.rol);
+    var mDeg=(idx>=0 && c.muhendisDegerlendirme) ? c.muhendisDegerlendirme["p"+idx] : null;
+    var mSv=mDeg && mDeg.seviye ? muhendisSeviyeBul(mDeg.seviye) : null;
+    if(mSv) toplananSeviyeler.push(seviyeSira[mSv.key]);
+    var deg=(m && m.ger ? fmtDate(m.ger) : '—') + (mSv?(' — '+mSv.ikon+' '+mSv.ad):'');
+    satirlar.push({et:r.ad, deg:deg});
+  });
+  var flaslar=[1,2].map(function(f){ return hasatEgrisiAnaliz(c,f); }).filter(Boolean);
+  flaslar.forEach(function(a){
+    var sv=hasatEgriSeviyeSinifla(a.puan);
+    toplananSeviyeler.push(seviyeSira[sv.key]);
+    satirlar.push({et:'📈 '+a.flas+'. Flaş Hasat Eğrisi', deg:sv.ikon+' '+sv.ad});
+  });
+  var vy=hasatVerimYuzde(c), vsv=hasatVerimSiniflandir(vy);
+  if(vsv){ toplananSeviyeler.push(seviyeSira[vsv.key]); satirlar.push({et:'⚖️ Hasat Verimi', deg:'%'+vy.toFixed(1).replace('.',',')+' — '+vsv.ikon+' '+vsv.ad}); }
+  var mk=c.muhendisDegerlendirme && c.muhendisDegerlendirme["mantar_kalite"];
+  var mkSv=mk && mk.seviye ? muhendisSeviyeBul(mk.seviye) : null;
+  if(mkSv){ toplananSeviyeler.push(seviyeSira[mkSv.key]); satirlar.push({et:'🍄 Mantar Kalitesi', deg:mkSv.ikon+' '+mkSv.ad}); }
+  var sk=c.muhendisDegerlendirme && c.muhendisDegerlendirme["sulama_kulucka"];
+  var skSv=sk && sk.seviye ? muhendisSeviyeBul(sk.seviye) : null;
+  if(skSv) satirlar.push({et:'💧 Sulama Yönetimi (kuluçka)', deg:skSv.ikon+' '+skSv.ad});
+  if(c.kritikOlaylar && c.kritikOlaylar.length) satirlar.push({et:'🚨 Kritik Olaylar', deg:c.kritikOlaylar.length+' kayıt'});
+
+  var body='<table><tbody>'
+    +satirlar.map(function(s){ return '<tr><td class="note" style="font-weight:500;">'+s.et+'</td><td style="text-align:right;">'+s.deg+'</td></tr>'; }).join('')
+    +'</tbody></table>';
+  /* Genel sonuç — toplanan tüm seviyelerin (mühendis + hasat eğrisi + verim
+     + kalite) ortalaması, en yakın seviyeye yuvarlanır. Yeterli veri yoksa
+     (hiçbir değerlendirme girilmemişse) gösterilmez — genelleme yapılmaz. */
+  if(toplananSeviyeler.length){
+    var ort=toplananSeviyeler.reduce(function(a,b){return a+b;},0)/toplananSeviyeler.length;
+    var genelSonuc=muhendisSeviyeBul(anahtarSirali[Math.min(5,Math.max(1,Math.round(ort)))]);
+    body='<div style="text-align:center;padding:10px;margin-bottom:10px;background:#f4faf6;border:1px solid #cfe8d8;border-radius:8px;">'
+      +'<div class="muted" style="font-size:12px;">Genel Sonuç ('+toplananSeviyeler.length+' değerlendirmeden)</div>'
+      +'<div style="font-size:20px;font-weight:700;">'+genelSonuc.ikon+' '+genelSonuc.ad+'</div>'
+      +'</div>'+body;
+  }
+  return sectionCard('🔗 Üretim Zinciri Özeti', body);
 }
 function addHasat(id){
   if(!can("edit")) return noPerm();
