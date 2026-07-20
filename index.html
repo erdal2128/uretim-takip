@@ -929,7 +929,7 @@ function hasatTartiTumDonguleriSenkronEt(){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v432";
+var APP_VER = "v433";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -3227,7 +3227,10 @@ function turSiradakiAdimHTML(c, gosterimTarihi){
         if(can("edit") && sdPlanErteleRoller[sdAlanKey]){
           if(_yarinErteleAcik[c.id+"_p"+sd.idx]){
             var sdErTur=erteleTuruBelirle(sdStep);
+            var sdErVarsayilan=_adimSonrakiErteleTarihi(c, sd.idx);
             sdAksiyonHTML='<div style="margin-top:6px;padding:7px;background:#fffaf0;border:1px solid #ecd9b0;border-radius:8px;">'
+              + '<div class="muted" style="font-size:11px;margin-bottom:5px;">Yeni tarih (gerekirse erkene de alabilirsin):</div>'
+              + '<input type="date" id="yet_'+c.id+'_'+sd.idx+'" value="'+sdErVarsayilan+'" style="margin-bottom:6px;width:100%;">'
               + '<div class="muted" style="font-size:11px;margin-bottom:5px;">Erteleme nedeni seç:</div>'
               + erteleNedenSeciciHTML(sdErTur, (function(cid,idx){ return function(nedenAdi){ return "yarinErteleKaydet('"+cid+"',"+idx+",'"+nedenAdi.replace(/'/g,"\\'")+"')"; }; })(c.id,sd.idx), 'sde_'+c.id+'_'+sd.idx, "yarinErteleDigerKaydet('"+c.id+"',"+sd.idx+")")
               + '<button class="btn ghost small" style="width:100%;margin-top:5px;" onclick="yarinErteleVazgec(\''+c.id+'\','+sd.idx+')">Vazgeç</button>'
@@ -3392,16 +3395,45 @@ function yarinErteleKaydet(cid, idx, neden){
   var c=loadData().cycles.find(function(x){return x.id===cid;}); if(!c) return;
   if(!neden){ toast("Erteleme nedeni zorunlu"); return; }
   var P=getProtokol(); var st=P[idx];
-  var yeniTarih=_adimiYarinaTasi(c, idx);
-  var verdict=erteleNedenAIKontrol(c, neden, todayISO());
+  var base=protokolTarih(c, st);
+  var mevcutErt=(c.ertele && c.ertele["p"+idx])||0;
+  var mevcutTarih=base?addDays(base,mevcutErt):null;
+  /* Kullanıcı isteği: "Ertele" butonu eskiden SADECE ileri (sonraki uygun güne)
+     taşıyabiliyordu — mühendis bir adımı (örn. toprak serimi) erkene almak
+     istediğinde bunun karşılığı yoktu, T-2 gibi ona bağlı sulamalar da
+     kaymıyordu (kullanıcı raporu). Panelde artık bir tarih input'u var (bkz.
+     yarinErteleAc panelini üreten kod), kullanıcı değiştirmezse eski davranış
+     (sonraki uygun güne it) aynen sürer; değiştirirse (ileri VEYA geri) o
+     tarih yazılır — planTarihiDegistirAc/planGerekceUygula ile AYNI
+     c.ertele["p"+idx] alanı kullanılır (SSOT), tek bir "gerekçeli ertele" akışından. */
+  var secilen=(el("yet_"+cid+"_"+idx)&&el("yet_"+cid+"_"+idx).value)||"";
+  var yeniTarih;
+  if(secilen && base){
+    yeniTarih=secilen;
+    if(!c.ertele) c.ertele={};
+    c.ertele["p"+idx]=daysBetween(base, yeniTarih);
+  } else {
+    yeniTarih=_adimiYarinaTasi(c, idx);
+  }
+  var ileriMi = mevcutTarih ? (cmpDate(yeniTarih, mevcutTarih) > 0) : true;
   if(!c.erteleSebep) c.erteleSebep={};
   if(!c.erteleAIVerdict) c.erteleAIVerdict={};
-  c.erteleSebep["p"+idx] = (verdict.seviye==="kirmizi") ? "diger" : "biyolojik";
-  c.erteleAIVerdict["p"+idx]=verdict.seviye;
-  if(st) gunlukGorevNotEkle(c, st.txt+" "+fmtDate(yeniTarih)+" tarihine ertelendi (neden: "+neden+") — "+kimNeZamanEtiketi());
+  var verdict=null, ikon="🟢", aciklamaEk="";
+  if(ileriMi){
+    verdict=erteleNedenAIKontrol(c, neden, todayISO());
+    c.erteleSebep["p"+idx] = (verdict.seviye==="kirmizi") ? "diger" : "biyolojik";
+    c.erteleAIVerdict["p"+idx]=verdict.seviye;
+    ikon=verdict.seviye==="yesil"?"🟢":(verdict.seviye==="kirmizi"?"🔴":"🟡");
+    aciklamaEk=" · "+ikon+" "+verdict.aciklama;
+  } else {
+    /* Erkene alma puanı etkilemiyor, AI kontrolü çalıştırılmaz (planGerekceUygula
+       ile aynı kural) — sadece kayıt için gerekçe tutulur. */
+    c.erteleSebep["p"+idx]="biyolojik";
+    c.erteleAIVerdict["p"+idx]="yesil";
+  }
+  if(st) gunlukGorevNotEkle(c, st.txt+" "+fmtDate(yeniTarih)+" tarihine "+(ileriMi?"ertelendi":"erkene alındı")+" (neden: "+neden+") — "+kimNeZamanEtiketi());
   touchCycle(c); saveData(); delete _yarinErteleAcik[cid+"_p"+idx];
-  var ikon=verdict.seviye==="yesil"?"🟢":(verdict.seviye==="kirmizi"?"🔴":"🟡");
-  toast(fmtDate(yeniTarih)+" tarihine ertelendi · "+ikon+" "+verdict.aciklama); render();
+  toast(fmtDate(yeniTarih)+(ileriMi?" tarihine ertelendi":" tarihine erkene alındı")+aciklamaEk); render();
 }
 function yarinErteleDigerKaydet(cid, idx){
   var metin=(el("yed_"+cid+"_"+idx)&&el("yed_"+cid+"_"+idx).value.trim())||"";
@@ -7519,7 +7551,10 @@ function renderDetail(id){
       if(can("edit") && !x.hataVar && !x.ar && !x.done && s.tip!=="uyari"){
         if(_yarinErteleAcik[c.id+"_p"+x.idx]){
           var _erTur=erteleTuruBelirle(s);
+          var _erVarsayilan=_adimSonrakiErteleTarihi(c, x.idx);
           aksiyonHTML='<div style="margin-top:5px;padding:7px;background:#fffaf0;border:1px solid #ecd9b0;border-radius:8px;">'
+            + '<div class="muted" style="font-size:11px;margin-bottom:5px;">Yeni tarih (gerekirse erkene de alabilirsin):</div>'
+            + '<input type="date" id="yet_'+c.id+'_'+x.idx+'" value="'+_erVarsayilan+'" style="margin-bottom:6px;width:100%;">'
             + '<div class="muted" style="font-size:11px;margin-bottom:5px;">Erteleme nedeni seç:</div>'
             + erteleNedenSeciciHTML(_erTur, (function(cid,idx){ return function(nedenAdi){ return "yarinErteleKaydet('"+cid+"',"+idx+",'"+nedenAdi.replace(/'/g,"\\'")+"')"; }; })(c.id,x.idx), 'yed_'+c.id+'_'+x.idx, "yarinErteleDigerKaydet('"+c.id+"',"+x.idx+")")
             + '<button class="btn ghost small" style="width:100%;margin-top:5px;" onclick="yarinErteleVazgec(\''+c.id+'\','+x.idx+')">Vazgeç</button>'
