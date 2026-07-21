@@ -929,7 +929,7 @@ function hasatTartiTumDonguleriSenkronEt(){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v436";
+var APP_VER = "v437";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -2502,6 +2502,47 @@ function sonYapilanProtokolAdimi(c){
   var secilen=adaylar[0];
   return {idx:secilen.idx, tarih:secilen.tarih, txt:adimGosterMetni(c, secilen.idx, secilen.s, secilen.tarih)};
 }
+/* Kullanıcı isteği: "Son yapılan"/"Sonraki" özetinin altında sulamayı da
+   görmek istiyor — üretim adımıyla AYNI satırda değil, küçük bir alt satırda
+   (bkz. turSiradakiAdimHTML). Son yapılan sulama: bugüne kadarki günlük
+   kayıtlar arasından fiilen uygulanmış (iptal edilmemiş) en yeni olan. */
+function sonYapilanSulama(c){
+  if(!c || !c.gunluk) return null;
+  var today=todayISO();
+  var adaylar=c.gunluk.filter(function(g){
+    return g.tarih<=today && g.sulamaDurum!=="iptal" && ((numParse(g.su)>0) || (g.sulama||"").trim());
+  });
+  if(!adaylar.length) return null;
+  adaylar.sort(function(a,b){ return cmpDate(b.tarih,a.tarih); });
+  var g=adaylar[0];
+  var txt=((numParse(g.su)>0?g.su+" lt su":"")+(g.sulama?(" "+g.sulama):"")).trim();
+  if(!txt) return null;
+  return {tarih:g.tarih, txt:txt};
+}
+/* Sıradaki sulama: bugünden (dahil) itibaren en yakın tarihli su/ilaç
+   protokol satırı — protokolOneriIdxleri ile AYNI tarih hesabı (ertele +
+   tekrarBitisRef aralığı), ama gelecek bir tarih arıyor. */
+function sonrakiSulamaAdimi(c){
+  var today=todayISO();
+  var best=null;
+  getProtokol().forEach(function(s,idx){
+    if(s.silindi || (s.tip!=="ilac" && s.tip!=="su")) return;
+    var d;
+    if(s.tekrarBitisRef){
+      var ar=protokolAdimAraligi(c,s); if(!ar) return;
+      d = (ar.baslangic>=today) ? ar.baslangic : ((ar.bitis>=today) ? today : null);
+      if(!d) return;
+    } else {
+      d=protokolTarih(c,s); if(!d) return;
+      var ert=(c.ertele && c.ertele["p"+idx])||0;
+      if(ert) d=addDays(d,ert);
+      if(d<today) return;
+    }
+    if(!best || cmpDate(d,best.tarih)<0) best={tarih:d, s:s, idx:idx};
+  });
+  if(!best) return null;
+  return {tarih:best.tarih, txt:adimGosterMetni(c, best.idx, best.s, best.tarih)};
+}
 /* Günlük Tur'da "Yarın X yapılsın" — mevcut Ertele mekanizmasını TERS yönde kullanır
    (Ertele +gün ekler, bu -gün ekleyerek tarihi öne çeker). Yeni bir veri modeli gerekmez,
    aynı c.ertele alanı okunur; Görevler listesi ve puanlama otomatik olarak günceli görür. */
@@ -3226,9 +3267,20 @@ function turSiradakiAdimHTML(c, gosterimTarihi, ge, showSu){
   try{ sonYapilan=sonYapilanProtokolAdimi(c); }catch(err){ console.error("Son yapılan hesaplanamadı:", err); }
   var sd=null;
   try{ sd=siradakiProtokolAdimi(c); }catch(err){ console.error("Sıradaki adım hesaplanamadı:", err); }
+  /* Kullanıcı isteği: "Son yapılan"/"Sonraki" özetinin altında sulamayı da
+     küçük bir alt satırda görmek istiyor (Seçenek A) — üretim adımıyla
+     karıştırılmadan, ayrı bir bilgi katmanı olarak. */
+  var sonSulama=null;
+  try{ sonSulama=sonYapilanSulama(c); }catch(err){ console.error("Son yapılan sulama hesaplanamadı:", err); }
+  var sonrakiSulama=null;
+  try{ sonrakiSulama=sonrakiSulamaAdimi(c); }catch(err){ console.error("Sıradaki sulama hesaplanamadı:", err); }
   h += '<div style="margin-bottom:8px; font-size:13px; line-height:1.5;">'
-    + (sonYapilan?('<div>✓ <b>Son yapılan:</b> '+esc(sonYapilan.txt)+' <span class="muted">('+fmtDate(sonYapilan.tarih)+')</span></div>'):'')
-    + (sd?('<div>📋 <b>Sonraki:</b> '+esc(sd.txt)+' <span class="muted">(planlanan '+fmtDate(sd.t)+')</span></div>'):'')
+    + (sonYapilan?('<div>✓ <b>Son yapılan:</b> '+esc(sonYapilan.txt)+' <span class="muted">('+fmtDateKisa(sonYapilan.tarih)+')</span></div>'
+        + (sonSulama?('<div class="muted" style="margin-left:22px;font-size:12.5px;">💧 '+esc(sonSulama.txt)+' <span class="muted">('+fmtDateKisa(sonSulama.tarih)+')</span></div>'):'')
+      ):'')
+    + (sd?('<div style="margin-top:4px;">📋 <b>Sonraki:</b> '+esc(sd.txt)+' <span class="muted">(planlanan '+fmtDateKisa(sd.t)+')</span></div>'
+        + (sonrakiSulama?('<div class="muted" style="margin-left:22px;font-size:12.5px;">💧 sıradaki sulama: '+esc(sonrakiSulama.txt)+' <span class="muted">(planlanan '+fmtDateKisa(sonrakiSulama.tarih)+')</span></div>'):'')
+      ):'')
     + '</div>';
   var tab=_turProtokolTab[c.id]||"uretim";
   h += '<div style="display:flex; gap:6px; margin-bottom:8px;">'
@@ -3684,6 +3736,15 @@ function fmtDate(iso){
   var p = iso.split("-");
   if(p.length!==3) return iso;
   return p[2]+"."+p[1]+"."+p[0];
+}
+/* Yıl olmadan kısa tarih (gün.ay) — Günlük Tur'daki "Son yapılan/Sonraki"
+   özetinde kullanıcı isteğiyle yıl gösterilmiyor (tek bir üretim döngüsü
+   içinde yıl belirsizlik yaratmıyor, kısa daha okunaklı). */
+function fmtDateKisa(iso){
+  if(!iso) return "—";
+  var p = iso.split("-");
+  if(p.length!==3) return iso;
+  return p[2]+"."+p[1];
 }
 function todayISO(){
   var d=new Date(); var m=("0"+(d.getMonth()+1)).slice(-2); var dd=("0"+d.getDate()).slice(-2);
