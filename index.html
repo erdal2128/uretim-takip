@@ -929,7 +929,7 @@ function hasatTartiTumDonguleriSenkronEt(){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v437";
+var APP_VER = "v438";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -5193,41 +5193,38 @@ function bugunkuGunluk(c){
 }
 /* Görev (poşet açma, tiftik vb.) tamamlanınca bugünün günlük kaydına otomatik not düşer,
    böylece "Bugün işlem" özetinde görevin de yapıldığı görünür (mevcut sulama notunu SİLMEZ, ekler). */
+/* CLAUDE.md kuralı: Odalar listesi (Bugün/Yarın işlem kolonları) SADECE
+   fiili sulama/protokol işlemini göstermeli — "iptal edildi", "ertelendi",
+   "değiştirildi", "erkene alındı", "erteleme kaldırıldı", "onay/geri al"
+   gibi karar/süreç metinleri, gerekçeler, kim/ne zaman bilgisi ASLA
+   görünmemeli (detaylı geçmiş zaten Günlük Kayıt/Oda Akışı'nda duruyor).
+   Karar-süreci notlarının neredeyse tamamı sonunda kimNeZamanEtiketi()
+   (rol + isim + "GG.AA.YYYY SS:DD" damgası) taşır — bu damga tek başına
+   güvenilir bir ayraç: düz bir "X yapıldı" notunda asla bulunmaz. */
+function odaListesindeGosterilebilirNotMu(x){
+  if(!x) return false;
+  if(/\d{2}\.\d{2}\.\d{4} \d{2}:\d{2}/.test(x)) return false; /* kim/ne zaman damgalı karar notu */
+  if(/^.+ için plan /.test(x)) return false;
+  if(/^Sulama (iptal edildi|değiştirildi)/i.test(x)) return false;
+  if(/ değerlendirmesi: /.test(x)) return false;
+  if(/ertelendi|erkene alındı|erteleme kaldırıldı/i.test(x)) return false;
+  if(/^İptal edildi|^Değiştirildi|^Onay geri alındı|^Yarına planlandı/i.test(x)) return false;
+  return true;
+}
 /* "Bugün işlem" hücresi: SULAMA (mühendisin Tur'dan girdiği su/ilaç) ve İŞLEM NOTU
-   (protokol adımı tamamlandı/ertelendi özeti) iki ayrı satırda gösterilir — aynı
+   (protokol adımı tamamlandı özeti) iki ayrı satırda gösterilir — aynı
    kutuda birbirine karışmasın diye. */
 function bugunIslemHTML(bg, c){
   var satir1 = ((numParse(bg.su)>0)?('<b>'+esc(bg.su)+' lt su</b>'+(bg.sulama?' + ':'')):'')+esc(bg.sulama||"");
-  /* Sulama iptal/değiştir edildiyse su/sulama alanları boş kalır (bkz.
-     sulamaGorevIptalUygula/sulamaGorevDegistirKaydet) — satir1 boş olurdu ve
-     aşağıdaki ham islemNot geçmişi tek satırmış gibi göründüğü için kullanıcı
-     her iptal/değiştir tıklamasında BİRİKEN tüm geçmişi (her biri kendi
-     gerekçesi, kim/ne zamanıyla) bu dar tabloda üst üste görüyordu — kart
-     "asenaa\nSulama iptal edildi (neden: ...) — ... · Sulama iptal edildi
-     (neden: ...) — ... · ..." gibi okunamaz bir duvara dönüşüyordu. Burada
-     GÜNCEL durumu (sulamaDurum alanından, tekilleştirilmiş) tek satır özet
-     olarak gösteriyoruz — tam geçmiş zaten Günlük Kayıt'ta (katlanabilir) ve
-     Oda Akışı/PDF'in Notlar bölümünde duruyor. */
-  if(!satir1 && (bg.sulamaDurum==="iptal" || bg.sulamaDurum==="degistirildi")){
-    var _iptalMi=bg.sulamaDurum==="iptal";
-    satir1='<span style="color:'+(_iptalMi?'#8a5a1f':'#1d6fd8')+';font-weight:700;">'+(_iptalMi?'❌ İptal edildi':'✏️ Değiştirildi')+(bg.sulamaAciklama?(': '+esc(bg.sulamaAciklama)):'')+'</span>';
-  }
-  /* "X için plan Y olarak güncellendi — gerekçe: ..." notları PLANLAMA/idari
-     kayıttır, fiili üretim işlemi DEĞİL — Son İşlemler'de zaten filtreleniyordu
-     ama burada (Bugün İşlem kolonu) filtrelenmiyordu, bu yüzden "Poşet kesimi
-     için plan 14.07 — gerekçe: belirtilmedi" gibi metinler yanlışlıkla "bugün
-     yapılan iş" gibi görünüyordu (KRİTİK BUG, düzeltildi). Aynı gerekçeyle
-     "Sulama iptal edildi"/"Sulama değiştirildi" ham geçmiş satırları da
-     burada filtrelenir — güncel durum artık satir1'de tek satır özetlendiği
-     için tekrar tekrar (her tıklamada bir tane) burada listelenmemeli. */
+  /* Kullanıcı isteği (CLAUDE.md: "Odalar sekmesi sade kalmalı"): bu kolonda
+     SADECE gerçekleşen fiili işlem görünsün — "iptal edildi"/"ertelendi"/
+     "değiştirildi" gibi karar/süreç metinleri, gerekçeler, kim/ne zaman
+     bilgisi ASLA gösterilmesin. Sulama iptal edildiyse gösterilecek bir şey
+     yoktur (satir1 boş kalır, aşağıda "—" gösterilir); değiştirildiyse zaten
+     gerçekte uygulanan değer satir1'de (bg.su/bg.sulama) görünür. */
   var islemNotTemiz = bg.islemNot
     ? (""+bg.islemNot).split(" · ").map(function(x){return x.trim();}).filter(function(x){
-        /* "... değerlendirmesi: 🟢 Çok İyi — ..." satırları — eskiden
-           muhendisDegSec/muhendisDegGenelSec ile buraya da yazılıyordu (bkz.
-           CLAUDE.md: "Odalar sekmesi sade kalmalı"). Kayıt artık buraya
-           yazılmıyor ama DAHA ÖNCE kaydedilmiş eski notlarda hâlâ durabilir —
-           görüntüleme anında filtrelenir, veri silinmez. */
-        return x && !/^.+ için plan /.test(x) && !/^Sulama (iptal edildi|değiştirildi)/.test(x) && !/ değerlendirmesi: /.test(x);
+        return x && odaListesindeGosterilebilirNotMu(x);
       }).join(" · ")
     : "";
   var satir2 = islemNotTemiz ? ('<div style="color:#6b6b66; font-size:12.5px; margin-top:2px;">'+esc(islemNotTemiz)+'</div>') : '';
@@ -6035,18 +6032,16 @@ function yarinPlanlanan(c){
 /* Yarın sütunu HTML'i: onaysız KIRMIZI (protokol öngörüsü), onaylı MAVİ (mühendis teyit etti).
    Mühendis değiştirdiyse ✎ işaretiyle, mühendisin metni gösterilir. */
 function yarinPlanlananHTML(c){
-  var list=yarinPlanlanan(c);
+  /* CLAUDE.md kuralı: bu kolonda da SADECE fiili/planlı işlem görünür —
+     "İptal: ..." / "gerekçe" gibi karar-süreç etiketleri yok. İptal edilen
+     bir sulama için yarın zaten hiçbir şey uygulanmayacağından listeden
+     tamamen çıkarılır (gösterilecek bir işlem yok); değiştirilen bir sulama
+     ise sade biçimde gerçek (değişmiş) içeriğiyle gösterilir. */
+  var list=yarinPlanlanan(c).filter(function(it){ return it.sulamaDurum!=="iptal"; });
   if(!list.length) return "—";
   return list.map(function(it){
-    /* Sulama zaten iptal/değiştirilmişse (Bugünkü Görevler'deki İptal Et/Değiştir
-       kapısından yarın için de karar verilmişse), bunu KIRMIZI "henüz karar
-       verilmedi" gibi göstermeye devam etmek yanlış — kullanıcı "iptal ettim
-       ama hâlâ kırmızı/aynı görünüyor" sanıyordu. Karar verilmiş adımlar artık
-       kendi rengiyle (turuncu/mavi) ve açık etiketiyle gösterilir. */
-    if(it.sulamaDurum==="iptal") return '<span style="color:#8a5a1f;">❌ İptal: '+esc(it.txt)+(it.sulamaAciklama?(' <span class="muted" style="font-size:11px;">('+esc(it.sulamaAciklama)+')</span>'):'')+'</span>';
-    if(it.sulamaDurum==="degistirildi") return '<span style="color:#1d6fd8;font-weight:700;">✏️ '+esc(it.txt)+(it.sulamaAciklama?(' <span class="muted" style="font-size:11px;">('+esc(it.sulamaAciklama)+')</span>'):'')+'</span>';
-    var isaret=it.onayli?(it.degisti?'✎ ':'✓ '):'';
-    return '<span style="color:'+(it.onayli?'#1d4ed8':'#c0291f')+';font-weight:'+(it.onayli?'700':'400')+';"'+(it.degisti?' title="Protokol: '+esc(it.orijinal)+'"':'')+'>'+isaret+esc(it.txt)+'</span>';
+    var isaret=it.onayli?'✓ ':'';
+    return '<span style="color:'+(it.onayli?'#1d4ed8':'#c0291f')+';font-weight:'+(it.onayli?'700':'400')+';">'+isaret+esc(it.txt)+'</span>';
   }).join('<span style="color:#b8b8b0;"> + </span>');
 }
 /* Mühendis onayı (Tur'dan): yarına planlı bir adımı teyit eder / teyidi geri alır.
