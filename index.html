@@ -929,7 +929,7 @@ function hasatTartiTumDonguleriSenkronEt(){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v434";
+var APP_VER = "v435";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -3001,6 +3001,30 @@ function muhendisDegSeviyeSeciciHTML(cid, idx){
       }).join('')
     + '</div>';
 }
+/* Oda Detayı → Beklenen takvim tablosundaki "Mühendis" hücresi — Günlük
+   Tur'daki kart artık bir kez işaretlenince gizlendiği için (kullanıcı
+   isteği: "her zaman göstermesin"), düzeltme/ilk giriş imkânı burada kalır.
+   Aynı SSOT (c.muhendisDegerlendirme["p"+idx], muhendisDegSec/NotKaydet) —
+   yeni bir veri alanı yok, sadece ikinci bir giriş noktası. */
+function muhendisDegHucreHTML(c, idx){
+  var mevcut=c.muhendisDegerlendirme && c.muhendisDegerlendirme["p"+idx];
+  var notAcik=_muhendisDegNotAcik[c.id+"_p"+idx];
+  var sv=mevcut && mevcut.seviye ? muhendisSeviyeBul(mevcut.seviye) : null;
+  var h = sv ? (sv.ikon+' '+sv.ad) : '<span class="muted">—</span>';
+  if(can("edit")){
+    h += ' <span style="text-decoration:underline;cursor:pointer;color:#1d4ed8;font-size:11px;" onclick="'+(notAcik?'muhendisDegNotVazgec':'muhendisDegNotAc')+'(\''+c.id+'\','+idx+')">'+(notAcik?'vazgeç':(sv?'düzenle':'değerlendir'))+'</span>';
+  }
+  if(notAcik && can("edit")){
+    h += '<div style="margin-top:5px;">'
+      + muhendisDegSeviyeSeciciHTML(c.id, idx)
+      + '<textarea id="mdn_'+c.id+'_'+idx+'" rows="2" placeholder="Kısa not (isteğe bağlı)" style="width:100%;margin-top:5px;">'+esc((mevcut&&mevcut.not)||"")+'</textarea>'
+      + '<button class="btn small" style="margin-top:5px;" onclick="muhendisDegNotKaydet(\''+c.id+'\','+idx+')">Kaydet</button>'
+      + '</div>';
+  } else if(mevcut && mevcut.not){
+    h += '<div class="muted" style="font-size:11px;margin-top:2px;">'+esc(mevcut.not)+'</div>';
+  }
+  return h;
+}
 /* Günlük Tur'da bir oda kartına, o odada FİİLEN TAMAMLANMIŞ (henüz
    yapılmamış adımlar için değerlendirme sorulmaz) tiftik/toprak/tırmık/
    hava/1.flaş adımları için değerlendirme kartı/özeti ekler. */
@@ -3029,24 +3053,11 @@ function muhendisDegKartHTML(c){
   [secilen].forEach(function(aday){
     var r=aday.r, idx=aday.idx;
     var mevcut=c.muhendisDegerlendirme && c.muhendisDegerlendirme["p"+idx];
-    var notAcik=_muhendisDegNotAcik[c.id+"_p"+idx];
+    /* Kullanıcı isteği: mühendis bir kez işaretledikten sonra bu kutu Günlük
+       Tur'da bir daha görünmesin (her gün aynı sonucu göstermek gereksiz) —
+       düzeltme gerekirse Oda Detayı'ndan yapılır. */
     if(mevcut && mevcut.seviye){
-      var sv=muhendisSeviyeBul(mevcut.seviye);
-      h+='<div style="margin-top:8px;padding:8px;background:#f4faf6;border:1px solid #cfe8d8;border-radius:8px;">'
-        + '<div style="font-size:12.5px;display:flex;justify-content:space-between;align-items:center;">'
-        + '<span>'+r.ad+': <b>'+(sv?sv.ikon+' '+sv.ad:mevcut.seviye)+'</b></span>'
-        + (can("edit")?('<span style="text-decoration:underline;cursor:pointer;color:#1d4ed8;font-size:11.5px;" onclick="'+(notAcik?'muhendisDegNotVazgec':'muhendisDegNotAc')+'(\''+c.id+'\','+idx+')">'+(notAcik?'vazgeç':'düzenle')+'</span>'):'')
-        + '</div>'
-        + (mevcut.not && !notAcik?('<div class="muted" style="font-size:12px;margin-top:3px;">'+esc(mevcut.not)+'</div>'):'')
-        + (notAcik?(
-            '<div style="margin-top:6px;">'
-            + (can("edit")?muhendisDegSeviyeSeciciHTML(c.id, idx):'')
-            + '<textarea id="mdn_'+c.id+'_'+idx+'" rows="2" placeholder="Kısa gözlem notu (isteğe bağlı) — örn. \'Sarım çok güçlü ve homojen.\'" style="width:100%;margin-top:6px;">'+esc(mevcut.not||"")+'</textarea>'
-            + '<button class="btn small" style="margin-top:5px;" onclick="muhendisDegNotKaydet(\''+c.id+'\','+idx+')">Kaydet</button>'
-            + '<button class="btn ghost small" style="margin-top:5px;margin-left:5px;" onclick="muhendisDegNotVazgec(\''+c.id+'\','+idx+')">Vazgeç</button>'
-            + '</div>'
-          ):'')
-        + '</div>';
+      return;
     } else if(can("edit")){
       h+='<div style="margin-top:8px;padding:8px;background:#eef6ff;border:1px solid #b9d7f5;border-radius:8px;">'
         + '<div style="font-size:12.5px;font-weight:700;color:#1d4ed8;margin-bottom:6px;">'+r.ad+' değerlendirmesi</div>'
@@ -3090,9 +3101,13 @@ function muhendisDegGenelSeviyeSeciciHTML(cid, anahtar, baslik){
       }).join('')
     + '</div>';
 }
-function muhendisDegGenelKartHTML(cid, anahtar, baslik, c, notYerTutucu){
+function muhendisDegGenelKartHTML(cid, anahtar, baslik, c, notYerTutucu, gizleTamamlaninca){
   var mevcut=c.muhendisDegerlendirme && c.muhendisDegerlendirme[anahtar];
   var notAcik=_muhendisDegNotAcik[cid+"_"+anahtar];
+  /* Kullanıcı isteği: Günlük Tur'da bir kez işaretlenince bir daha
+     görünmesin (her gün aynı sonucu göstermek gereksiz) — düzeltme
+     gerekirse Oda Detayı'ndan (gizleTamamlaninca=false çağrısı) yapılır. */
+  if(gizleTamamlaninca && mevcut && mevcut.seviye) return "";
   if(mevcut && mevcut.seviye){
     var sv=muhendisSeviyeBul(mevcut.seviye);
     return '<div style="margin-top:8px;padding:8px;background:#f4faf6;border:1px solid #cfe8d8;border-radius:8px;">'
@@ -3126,7 +3141,7 @@ function muhendisDegGenelKartHTML(cid, anahtar, baslik, c, notYerTutucu){
 function kulucakDonemiSulamaDegKartHTML(c){
   if(!c || c.bosaltimTarihi || !c.toprakTarihi) return "";
   return muhendisDegGenelKartHTML(c.id, "sulama_kulucka", "💧 Kuluçka dönemi sulama yönetimi", c,
-    "örn. 'Protokolden az su verildi ama nem yeterliydi, sarım güçlü.'");
+    "örn. 'Protokolden az su verildi ama nem yeterliydi, sarım güçlü.'", true);
 }
 /* ==================== Bölüm 4 + 5 — Sorun Kaynağı Ayrımı + Kritik Olay Kaydı ====================
    Kullanıcı isteği: bir sorun oluştuğunda sistem doğrudan kompostu/firmayı
@@ -7538,12 +7553,10 @@ function renderDetail(id){
     + '<table><thead><tr><th>Aşama</th><th>Beklenen</th><th>Gerçekleşen</th><th>Mühendis</th></tr></thead><tbody>';
   tak.forEach(function(m){
     var mIdx = m.rol ? protokolRolIdx(m.rol) : -1;
-    var mDeg = (mIdx>=0 && c.muhendisDegerlendirme) ? c.muhendisDegerlendirme["p"+mIdx] : null;
-    var mSv = mDeg && mDeg.seviye ? muhendisSeviyeBul(mDeg.seviye) : null;
     plan += '<tr><td class="note" style="font-weight:500;">'+m.ad+'</td>'
       + '<td class="red">'+fmtDate(m.beklenen)+'</td>'
       + '<td>'+(m.ger?('✓ '+fmtDate(m.ger)):'<span class="muted">—</span>')+'</td>'
-      + '<td>'+(mSv?(mSv.ikon+' '+mSv.ad):'<span class="muted">—</span>')+'</td></tr>';
+      + '<td>'+(mIdx>=0?muhendisDegHucreHTML(c, mIdx):'<span class="muted">—</span>')+'</td></tr>';
   });
   plan += '</tbody></table><div class="muted" style="padding:8px 8px 4px;">Kural: gelişten tiftik '+getSet(c).offTiftik+'., toprak '+getSet(c).offToprak+'. gün · topraktan tırmık '+getSet(c).offTirmik+'., hava '+getSet(c).offHava+'., hasat '+getSet(c).offHasat+'. gün</div></div>';
 
@@ -7711,7 +7724,9 @@ function renderDetail(id){
   else if(_odaSekme==="hasat") icerik = hasatKart + hasatTak + hasatEgri;
   else if(_odaSekme==="hastalik") icerik = hastalikCard + foto;
   else if(_odaSekme==="ilac") icerik = ilacKart + tuketim;
-  else if(_odaSekme==="uretim") icerik = odaTamamlamaOzetiHTML(c) + puanCard + verim + donem + plan + prot + kritikOlaylarListesiHTML(c);
+  else if(_odaSekme==="uretim") icerik = odaTamamlamaOzetiHTML(c) + puanCard + verim + donem + plan
+    + (c.toprakTarihi?('<div class="sec-title">Kuluçka dönemi sulama yönetimi</div><div class="card" style="padding:8px;">'+muhendisDegGenelKartHTML(c.id, "sulama_kulucka", "💧 Kuluçka dönemi sulama yönetimi", c, "örn. 'Protokolden az su verildi ama nem yeterliydi, sarım güçlü.'")+'</div>'):'')
+    + prot + kritikOlaylarListesiHTML(c);
   else if(_odaSekme==="notlar") icerik = notHTML + formFoto;
 
   /* Havalandırma hedef kartı (varsa) günlük sekmesinde, uyarı niteliğinde en üstte */
@@ -9915,33 +9930,6 @@ function exportCycleCSV(id){
 }
 
 /* ---------- Günlük tur (toplu giriş) ---------- */
-/* Turu gezerken hızlı gözlem notu ekleme — oda detayındaki "Mühendis Notları" ile AYNI
-   veriye (c.notlar) yazar, o sekmede de görünür. Tam render() yapmıyoruz — kart üzerindeki
-   henüz kaydedilmemiş diğer alanlar (sıcaklık, sulama vb.) kaybolmasın diye sadece bu
-   alanın kendisini DOM üzerinden güncelliyoruz. */
-function turNotEkle(cid){
-  if(!can("edit")) return noPerm();
-  var c=loadData().cycles.find(function(x){return x.id===cid;}); if(!c) return;
-  var inp=el("tnot_"+cid);
-  var txt=(inp?inp.value:"").trim();
-  if(!txt){ toast("Not yaz"); return; }
-  getMuhendisNotlari(c).push({tarih:todayISO(), metin:txt, by:deviceName()});
-  saveData();
-  if(inp) inp.value="";
-  var sonDiv=el("tnotson_"+cid);
-  if(sonDiv) sonDiv.textContent="Son not ("+fmtDate(todayISO())+"): "+txt;
-  toast("✓ Not eklendi");
-}
-function turNotAlaniHTML(c){
-  var notlar=getMuhendisNotlari(c).slice().sort(function(a,b){ return cmpDate(b.tarih,a.tarih); });
-  var son=notlar[0];
-  return '<div style="margin-top:8px; padding-top:8px; border-top:1px dashed #ddd;">'
-    +'<label>📝 Gözlem notu ekle</label>'
-    +'<div style="display:flex; gap:6px;"><input type="text" id="tnot_'+c.id+'" placeholder="örn. sarım güçlü, kompost kokusu iyi..." style="flex:1;">'
-    +'<button class="btn small" style="white-space:nowrap;" onclick="turNotEkle(\''+c.id+'\')">Ekle</button></div>'
-    +'<div class="muted" id="tnotson_'+c.id+'" style="font-size:12px;margin-top:4px;">'+(son?('Son not ('+fmtDate(son.tarih)+'): '+esc(son.metin)):'Henüz not yok')+'</div>'
-    +'</div>';
-}
 /* Bu odaya özel, bugün için bekleyen görevler (Bugün ekranındaki listeyle
    aynı veri kaynağı — c.odaGorevleri — sadece bu odaya daraltılmış). */
 function odaBugunGorevleriHTML(c){
@@ -10000,7 +9988,6 @@ function turOdaKartIcHTML(c, ge, showExtra){
     +turSiradakiAdimHTML(c, turGosterimTarihi, ge, showSu)
     +muhendisDegKartHTML(c)
     +kulucakDonemiSulamaDegKartHTML(c)
-    +turNotAlaniHTML(c)
     +kritikOlayFormHTML(c)
     +(showExtra?hasatTakipKart(c):'');
 }
