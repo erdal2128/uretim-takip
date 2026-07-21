@@ -3263,13 +3263,14 @@ function turUretimProtokoluIcerikHTML(c, sd, gTarih){
       } else {
       var sdTarih=sd.t; /* siradakiProtokolAdimi zaten ertele'yi t içine katıyor */
       /* Kullanıcı isteği: bu kart artık SADECE 🌱 Üretim Protokolü sekmesine
-         tıklanınca görülüyor (eskiden her ekranda otomatik çıkıyordu) — o
-         yüzden "adım uzaktaysa gizle" kısıtı burada artık gereksiz kalabalık
-         değil, tam tersine "sekmeye bastım ama hiçbir şey görünmüyor/
-         değiştiremiyorum" hatasına yol açıyordu (kullanıcı raporu: toprak
-         serimi birkaç gün uzaktaysa kart hiç çıkmıyor, öne alınamıyordu).
-         Kart artık HER ZAMAN gösterilir, ne kadar uzakta olursa olsun. */
-      {
+         tıklanınca görülüyor (eskiden her ekranda otomatik çıkıyordu) — eski
+         "sadece yarın/bugün/gecikmiş" (sdOffset<=1) kısıtı burada "sekmeye
+         bastım ama hiçbir şey görünmüyor/değiştiremiyorum" hatasına yol
+         açıyordu (toprak serimi birkaç gün uzaktaysa kart hiç çıkmıyordu).
+         Kullanıcı isteği: pencere tamamen kaldırılmasın, 3 güne çıkarılsın —
+         adım 3 gün içindeyse (ya da zaten gecikmişse) kart gösterilir. */
+      var sdOffset=daysBetween(gTarih, sdTarih);
+      if(sdOffset===null || sdOffset<=3){
         var sdPlanErteleRoller={poset:1, tiftik:1, toprak:1, tirmik:1};
         var sdAksiyonHTML="";
         /* Kullanıcı isteği: adım tam yarına planlıysa "✅ Onayla" da burada
