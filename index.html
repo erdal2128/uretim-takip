@@ -929,7 +929,7 @@ function hasatTartiTumDonguleriSenkronEt(){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v439";
+var APP_VER = "v440";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -5228,7 +5228,20 @@ function bugunIslemHTML(bg, c){
       }).join(" · ")
     : "";
   var satir2 = islemNotTemiz ? ('<div style="color:#6b6b66; font-size:12.5px; margin-top:2px;">'+esc(islemNotTemiz)+'</div>') : '';
-  if(satir1 || satir2) return (satir1||'<span class="muted">—</span>') + satir2;
+  /* Kullanıcı isteği: bugün için beklenen ama HENÜZ YAPILMAMIŞ bir üretim
+     adımı (örn. toprak serimi) varsa bu da görünsün — sadece sulama değil,
+     "protokol işlemleri" de bu kolonda gösterilmeli (bkz. CLAUDE.md). Adım
+     zaten yapılmışsa "... yapıldı" notu satir2'de görünür, burada tekrar
+     gösterilmez (siradakiProtokolAdimi zaten sadece TAMAMLANMAMIŞ adımları
+     döndürür). */
+  var satir0="";
+  if(c){
+    try{
+      var sd=siradakiProtokolAdimi(c);
+      if(sd && sd.t<=todayISO()) satir0='<div style="color:#1d4ed8; font-weight:600;">🌱 '+esc(sd.txt)+'</div>';
+    }catch(err){ console.error("Bugünkü üretim adımı hesaplanamadı:", err); }
+  }
+  if(satir0 || satir1 || satir2) return satir0 + (satir1||(satir0?'':'<span class="muted">—</span>')) + satir2;
   /* Gerçek veri (Tur'dan) henüz girilmemişse, bugünün protokol ÖNERİSİNİ (henüz
      uygulanmadı, tahmini) "Yarın işlem" kolonuyla TUTARLI şekilde kırmızı/tahmini
      renkte göster. Böylece "bugün ne verilecek" tabloya bakarak görülebilir —
