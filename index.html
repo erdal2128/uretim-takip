@@ -929,7 +929,7 @@ function hasatTartiTumDonguleriSenkronEt(){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v433";
+var APP_VER = "v434";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -2484,6 +2484,24 @@ function siradakiProtokolAdimi(c){
   }
   return {idx:secilen.idx, t:t, txt:adimGosterMetni(c, secilen.idx, secilen.s, t)};
 }
+/* Günlük Tur'da her zaman görünen "Son yapılan" özeti — siradakiProtokolAdimi
+   ile AYNI filtre (sadece olay tipi adımlar, su/ilaç/uyarı hariç), ama fiilen
+   TAMAMLANMIŞ adımlar arasından gerçek tamamlanma tarihi en yeni olanı seçer. */
+function sonYapilanProtokolAdimi(c){
+  var adaylar=[];
+  getProtokol().forEach(function(s,idx){
+    if(s.silindi) return;
+    if(s.tip==="uyari" || s.tip==="ilac" || s.tip==="su") return;
+    if(!adimGercektenYapildiMi(c, idx, s)) return;
+    var tarih=adimYapilmaTarihi(c, idx, s);
+    if(!tarih) return;
+    adaylar.push({idx:idx, s:s, tarih:tarih});
+  });
+  if(!adaylar.length) return null;
+  adaylar.sort(function(a,b){ return cmpDate(b.tarih, a.tarih); });
+  var secilen=adaylar[0];
+  return {idx:secilen.idx, tarih:secilen.tarih, txt:adimGosterMetni(c, secilen.idx, secilen.s, secilen.tarih)};
+}
 /* Günlük Tur'da "Yarın X yapılsın" — mevcut Ertele mekanizmasını TERS yönde kullanır
    (Ertele +gün ekler, bu -gün ekleyerek tarihi öne çeker). Yeni bir veri modeli gerekmez,
    aynı c.ertele alanı okunur; Görevler listesi ve puanlama otomatik olarak günceli görür. */
@@ -3175,24 +3193,49 @@ function kritikOlaylarListesiHTML(c){
   h+='</div>';
   return h;
 }
-function turSiradakiAdimHTML(c, gosterimTarihi){
+var _turProtokolTab={};
+function turProtokolTabSec(cid, tab){ _turProtokolTab[cid]=tab; render(); }
+/* Kullanıcı isteği: ekran çok karıştı — aynı adım (örn. Tiftik) hem "Sıradaki
+   işlem" kartında hem "Yarın planlanan" kutusunda ayrı buton setleriyle
+   (Ertele/Planla vs Onayla/Geri al/✎/İptal Et) iki kez gösteriliyordu. Artık
+   TEK bir bilgi bloğu ("✓ Son yapılan" + "📋 Sonraki") her iki sekmede de
+   sabit görünür, altındaki karar alanı ise 🌱 Üretim Protokolü / 💧 Sulama
+   Protokolü sekmesine göre değişir. Hiçbir alt fonksiyon (yarinOnayToggle,
+   yarinErteleAc/Kaydet, sulamaGorevIptalAc/Uygula, sulamaKartHTML) DEĞİŞMEDİ —
+   sadece nerede/nasıl birleştirilip gösterildikleri değişti. */
+function turSiradakiAdimHTML(c, gosterimTarihi, ge, showSu){
+  ge = ge || {};
+  var gTarih=gosterimTarihi||todayISO();
+  var h="";
+  var sonYapilan=null;
+  try{ sonYapilan=sonYapilanProtokolAdimi(c); }catch(err){ console.error("Son yapılan hesaplanamadı:", err); }
+  var sd=null;
+  try{ sd=siradakiProtokolAdimi(c); }catch(err){ console.error("Sıradaki adım hesaplanamadı:", err); }
+  h += '<div style="margin-bottom:8px; font-size:13px; line-height:1.5;">'
+    + (sonYapilan?('<div>✓ <b>Son yapılan:</b> '+esc(sonYapilan.txt)+' <span class="muted">('+fmtDate(sonYapilan.tarih)+')</span></div>'):'')
+    + (sd?('<div>📋 <b>Sonraki:</b> '+esc(sd.txt)+' <span class="muted">(planlanan '+fmtDate(sd.t)+')</span></div>'):'')
+    + '</div>';
+  var tab=_turProtokolTab[c.id]||"uretim";
+  h += '<div style="display:flex; gap:6px; margin-bottom:8px;">'
+    + '<button class="btn '+(tab==="uretim"?'':'ghost ')+'small" style="flex:1;" onclick="turProtokolTabSec(\''+c.id+'\',\'uretim\')">🌱 Üretim Protokolü</button>'
+    + '<button class="btn '+(tab==="sulama"?'':'ghost ')+'small" style="flex:1;" onclick="turProtokolTabSec(\''+c.id+'\',\'sulama\')">💧 Sulama Protokolü</button>'
+    + '</div>';
+  h += (tab==="sulama") ? turSulamaProtokoluIcerikHTML(c, ge, showSu, gTarih) : turUretimProtokoluIcerikHTML(c, sd, gTarih);
+  return h;
+}
+/* 🌱 Üretim Protokolü sekmesi — fiziksel adımlar (poşet/tiftik/toprak/tırmık/
+   hava). GENEL SIRADAKİ İŞLEM: eskiden bu bilgi SADECE Odalar > Protokol
+   Özeti'nde görünüyordu, Günlük Tur ekranında hiç yoktu. Aynı SSOT
+   fonksiyonunu (siradakiProtokolAdimi) kullanıyor — Odalar'daki ile birebir
+   aynı sonucu verir. Havaya başladıktan hasat/1.flaş fiilen başlayana kadar
+   bu blok TAMAMEN devre dışı kalır — Tahmini 1. Flaş kartı tek biyolojik
+   hedef olarak yeterlidir. */
+function turUretimProtokoluIcerikHTML(c, sd, gTarih){
   var h="";
   var flas1Kart="";
-  try{ flas1Kart=turFlas1TahminKartHTML(c, gosterimTarihi)||""; }catch(err){ console.error("Tahmini 1. Flaş kartı hesaplanamadı:", err); }
+  try{ flas1Kart=turFlas1TahminKartHTML(c, gTarih)||""; }catch(err){ console.error("Tahmini 1. Flaş kartı hesaplanamadı:", err); }
   h += flas1Kart;
-  /* GENEL SIRADAKİ İŞLEM: eskiden bu bilgi SADECE Odalar > Protokol Özeti'nde
-     görünüyordu, Günlük Tur ekranında hiç yoktu — sadece bir Şartlı Kural
-     tetiklenirse bir kart çıkıyordu (o da koşula bağlıydı, her zaman değil).
-     Kullanıcı tur sırasında "bu odada sırada ne var" bilgisini HER ZAMAN
-     (koşula bağlı olmadan) burada da görmek istedi. Aynı SSOT fonksiyonunu
-     (siradakiProtokolAdimi) kullanıyor — Odalar'daki ile birebir aynı sonucu
-     verir, veri kaynağı ikilenmiyor. Havaya başladıktan hasat/1.flaş fiilen
-     başlayana kadar bu blok TAMAMEN devre dışı kalır — yukarıdaki Tahmini
-     1. Flaş kartı tek biyolojik hedef olarak yeterlidir, ikisi birlikte
-     (biri kilometre taşı, biri tek tek protokol tarihi) çelişkili görünürdü. */
-  var gTarih=gosterimTarihi||todayISO();
   if(!flas1Kart) try{
-    var sd=siradakiProtokolAdimi(c);
     if(sd){
       var sdStep=getProtokol()[sd.idx];
       var sdAlanKey=sdStep?(sdStep.rol||protokolAdimAlanKey(sdStep.txt)):null;
@@ -3203,27 +3246,20 @@ function turSiradakiAdimHTML(c, gosterimTarihi){
            ile aynı pencere). */
         h += turHavaBaslamaKartHTML(c, sd, gTarih);
       } else {
-      var sdErt=(c.ertele&&c.ertele["p"+sd.idx])?c.ertele["p"+sd.idx]:0;
       var sdTarih=sd.t; /* siradakiProtokolAdimi zaten ertele'yi t içine katıyor */
       /* Kullanıcı isteği: adım daha günler uzaktaysa (örn. 7 gün sonra) bu
          kart her gün, her odada gözükerek yer kaplıyordu — henüz hiçbir
          aksiyon gerektirmeyen bir bilgi için gereksiz kalabalık. Sadece
-         iş yaklaşınca (yarın, bugün veya zaten gecikmiş) gösterilir; daha
-         uzak bir tarihse sessizce gizlenir, gün yaklaştıkça kendiliğinden
-         belirir. */
+         iş yaklaşınca (yarın, bugün veya zaten gecikmiş) gösterilir. */
       var sdOffset=daysBetween(gTarih, sdTarih);
       if(sdOffset===null || sdOffset<=1){
-        /* Kullanıcı isteği: Poşet kesimi/Tiftik/Toprak serimi/Tırmık için bu
-           karttan da (Oda Detayı → Üretim Protokolü'ne gitmeden) Planla/Ertele
-           yapılabilsin — bu kararlar her zaman ziraat mühendisine ait, tarih
-           yaklaşmasa da (sdOffset filtresinden bağımsız değil, ama diğer
-           adımlara dokunulmuyor) burada sorulabilmeli. Diğer roller (hava
-           zaten kendi Başlat/Ertele kartına sahip; hasat/flas1/vb.) bilgi
-           amaçlı kalmaya devam eder — aynı yarinErteleAc/Kaydet +
-           planTarihiDegistirAc fonksiyonları (Oda Detayı'ndaki tabloyla aynı
-           SSOT, cid+idx bazlı, sayfadan bağımsız) yeniden kullanılıyor. */
         var sdPlanErteleRoller={poset:1, tiftik:1, toprak:1, tirmik:1};
         var sdAksiyonHTML="";
+        /* Kullanıcı isteği: adım tam yarına planlıysa "✅ Onayla" da burada
+           gösterilsin — eskiden bu AYRI bir kutuda (Yarın planlanan) tekrar
+           gösteriliyordu, aynı adım iki kez çıkıyordu. Artık TEK blokta. */
+        var yMatch=null;
+        try{ yMatch=(yarinPlanlanan(c)||[]).find(function(x){return x.key==="p"+sd.idx;})||null; }catch(err){ console.error("Yarın eşleşmesi bulunamadı:", err); }
         if(can("edit") && sdPlanErteleRoller[sdAlanKey]){
           if(_yarinErteleAcik[c.id+"_p"+sd.idx]){
             var sdErTur=erteleTuruBelirle(sdStep);
@@ -3231,14 +3267,14 @@ function turSiradakiAdimHTML(c, gosterimTarihi){
             sdAksiyonHTML='<div style="margin-top:6px;padding:7px;background:#fffaf0;border:1px solid #ecd9b0;border-radius:8px;">'
               + '<div class="muted" style="font-size:11px;margin-bottom:5px;">Yeni tarih (gerekirse erkene de alabilirsin):</div>'
               + '<input type="date" id="yet_'+c.id+'_'+sd.idx+'" value="'+sdErVarsayilan+'" style="margin-bottom:6px;width:100%;">'
-              + '<div class="muted" style="font-size:11px;margin-bottom:5px;">Erteleme nedeni seç:</div>'
+              + '<div class="muted" style="font-size:11px;margin-bottom:5px;">Değişiklik nedeni seç:</div>'
               + erteleNedenSeciciHTML(sdErTur, (function(cid,idx){ return function(nedenAdi){ return "yarinErteleKaydet('"+cid+"',"+idx+",'"+nedenAdi.replace(/'/g,"\\'")+"')"; }; })(c.id,sd.idx), 'sde_'+c.id+'_'+sd.idx, "yarinErteleDigerKaydet('"+c.id+"',"+sd.idx+")")
               + '<button class="btn ghost small" style="width:100%;margin-top:5px;" onclick="yarinErteleVazgec(\''+c.id+'\','+sd.idx+')">Vazgeç</button>'
               + '</div>';
           } else {
             sdAksiyonHTML='<div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;">'
-              + '<button class="btn ghost small" style="padding:3px 8px;" onclick="yarinErteleAc(\''+c.id+'\','+sd.idx+')">⏰ Ertele</button>'
-              + '<button class="btn ghost small" style="padding:3px 8px;" onclick="planTarihiDegistirAc(\''+c.id+'\','+sd.idx+')">📅 Planla</button>'
+              + (yMatch?('<button class="btn '+(yMatch.onayli?'ghost ':'')+'small" style="padding:3px 10px;" onclick="yarinOnayToggle(\''+c.id+'\',\''+yMatch.key+'\')">'+(yMatch.onayli?'Geri al':'✅ Onayla')+'</button>'):'')
+              + '<button class="btn ghost small" style="padding:3px 8px;" onclick="yarinErteleAc(\''+c.id+'\','+sd.idx+')">⏰ Değiştir</button>'
               + '</div>';
           }
         }
@@ -3266,9 +3302,6 @@ function turSiradakiAdimHTML(c, gosterimTarihi){
       var deger=son?son[k.otoAlan]:null;
       olcumTxt='<div class="muted" style="font-size:11px;margin-top:2px;">Son ölçüm: '+esc(deger||"—")+' ('+(k.otoOp==="<"?"< ":"> ")+k.otoDeger+' eşiği)</div>';
     }
-    /* Kullanıcı isteği: erteleme/planlama işlemleri sadece Oda Detayı →
-       Üretim Protokolü sayfasında yapılabilir — buradaki "Planla" butonu
-       kaldırıldı, sadece bilgilendirme kalır. */
     var hedefStep=getProtokol()[sr.hedefIdx];
     var base=hedefStep?protokolTarih(c,hedefStep):null;
     var ert=(c.ertele&&c.ertele["p"+sr.hedefIdx])?c.ertele["p"+sr.hedefIdx]:0;
@@ -3289,55 +3322,76 @@ function turSiradakiAdimHTML(c, gosterimTarihi){
     }
   });
   h += kontrolGozlemKartlariHTML(c);
-  /* Yarın planlananlar — mühendis onayı. Protokol öngörüsü KIRMIZI gelir;
-     mühendis odada durumu görüp "✓ Onayla" der, ana ekranda MAVİ olur.
-     Onay o güne bağlı: ertesi gün otomatik düşer, her gün taze teyit. */
-  var yList=yarinPlanlanan(c);
+  /* Yarın planlanan — burada SADECE olay tipi kalan öğeler (sd'den farklı bir
+     üretim adımı ya da ad-hoc oda görevi) gösterilir; sd zaten yukarıda tek
+     blokta Onayla/Değiştir ile sunuluyor, su/ilaç satırları ise 💧 Sulama
+     Protokolü sekmesine taşındı (aşağıda turSulamaProtokoluIcerikHTML). */
+  var yList=[];
+  try{
+    yList=(yarinPlanlanan(c)||[]).filter(function(it){
+      if(sd && it.key==="p"+sd.idx) return false;
+      var pIdx = it.key.indexOf("p")===0 ? parseInt(it.key.slice(1),10) : -1;
+      var st = pIdx>=0 ? getProtokol()[pIdx] : null;
+      return !(st && (st.tip==="ilac"||st.tip==="su"));
+    });
+  }catch(err){ console.error("Yarın planlanan hesaplanamadı:", err); }
   if(yList.length){
-    var yarinTarih=addDays(todayISO(),1);
     h += '<div style="margin-top:8px; padding:8px; background:#fffaf0; border:1px solid #ecd9b0; border-radius:8px;">'
-      + '<div style="font-size:12px; font-weight:700; color:#8a5a1f; margin-bottom:4px;">Yarın planlanan (protokol)</div>'
+      + '<div style="font-size:12px; font-weight:700; color:#8a5a1f; margin-bottom:4px;">Yarın planlanan</div>'
       + yList.map(function(it){
-          /* Sulama için yarın adına zaten bir karar (İptal Et/Değiştir) verilmişse,
-             bunu hâlâ "onay bekliyor" (kırmızı + Onayla/Değiştir/İptal Et) gibi
-             göstermeye devam etmek yanlış — kullanıcı "iptal ediyorum ama gitmiyor"
-             diye şaşırıyordu (karar zaten kaydediliyordu, sadece bu kart bunu hiç
-             yansıtmıyordu). Kararı olan bir satır burada SONUÇLANMIŞ gösterilir;
-             fikir değişirse "✎ Yeniden düzenle" ile üzerine yazılabilir. */
-          if(it.sulamaDurum==="iptal" || it.sulamaDurum==="degistirildi"){
-            var resIptal=it.sulamaDurum==="iptal";
-            return '<div style="display:flex; align-items:center; justify-content:space-between; gap:8px; padding:4px 0;">'
-              + '<span style="font-size:14px; color:'+(resIptal?'#8a5a1f':'#1d6fd8')+'; font-weight:700;">'+(resIptal?'❌ İptal edildi: ':'✏️ Değiştirildi: ')+esc(it.txt)+(it.sulamaAciklama?(' <span class="muted" style="font-size:11px;">('+esc(it.sulamaAciklama)+')</span>'):'')+'</span>'
-              + (can("edit")?('<button class="btn ghost small" style="padding:3px 8px;flex-shrink:0;" onclick="sulamaGorevDegistirAc(\''+c.id+'\',\''+addDays(todayISO(),1)+'\')">✎ Yeniden düzenle</button>'):'')
-              + '</div>';
-          }
-          /* Sulama/ilaç adımları için (kullanıcı isteği): "Onayla"/"Değiştir" yeterli
-             değil — bilinçli olarak hiç uygulanmayacaksa "İptal Et" de gerekiyor,
-             tıpkı BUGÜNKÜ sulama görevinde olduğu gibi (aynı sulamaGorevIptalAc
-             kapısı, sadece hedef tarih yarın). "olay" adımları (Poşet kesimi,
-             Tiftik vb.) için "iptal" kavramı anlamsız — sadece onay/ertele kalır. */
-          var pIdxSu = it.key.indexOf("p")===0 ? parseInt(it.key.slice(1),10) : -1;
-          var stSu = pIdxSu>=0 ? getProtokol()[pIdxSu] : null;
-          var iptalBtn = (stSu && (stSu.tip==="ilac"||stSu.tip==="su") && can("edit"))
-            ? ('<button class="btn ghost small" style="padding:3px 8px;color:var(--red);border-color:var(--red);" onclick="sulamaGorevIptalAc(\''+c.id+'\',\''+yarinTarih+'\')">❌ İptal Et</button> ')
-            : '';
-          /* Kullanıcı isteği: erteleme/planlama işlemleri sadece Oda Detayı →
-             Üretim Protokolü sayfasında yapılabilir. Bu kart artık sadece
-             Onayla/Değiştirerek onayla/İptal Et (ad-hoc oda işlerinde Ertele)
-             sunar — protokol adımı Ertele/Planla ve "asıl tarihe dön" buradan
-             kaldırıldı, tek kontrol noktası Üretim Protokolü tablosu. */
           var ertBtnsInline='';
           if(can("edit") && !it.onayli && !it.tekrar && it.key.indexOf("og_")===0){
             var ogId=it.key.slice(3);
-            ertBtnsInline='<button class="btn ghost small" style="padding:3px 8px;" onclick="odaGorevErtele(\''+c.id+'\',\''+ogId+'\')">⏰ Ertele</button>';
+            ertBtnsInline='<button class="btn ghost small" style="padding:3px 8px;" onclick="odaGorevErtele(\''+c.id+'\',\''+ogId+'\')">⏰ Değiştir</button>';
           }
           return '<div style="display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:6px; row-gap:4px; padding:4px 0;">'
             + '<span style="font-size:14px; color:'+(it.onayli?'#1d4ed8':'#c0291f')+'; font-weight:'+(it.onayli?'700':'400')+';">'+(it.onayli?(it.degisti?'✎ ':'✓ '):'')+esc(it.txt)+(it.degisti?' <span class="muted" style="font-size:11px;">(protokol: '+esc(it.orijinal)+')</span>':'')+'</span>'
             + '<span style="flex:none; display:flex; flex-wrap:wrap; gap:6px; justify-content:flex-end;">'
-            + iptalBtn
-            + '<button class="btn '+(it.onayli?'ghost ':'')+'small" style="padding:3px 10px;" onclick="yarinOnayToggle(\''+c.id+'\',\''+it.key+'\')">'+(it.onayli?'Geri al':'✓ Onayla')+'</button>'
+            + '<button class="btn '+(it.onayli?'ghost ':'')+'small" style="padding:3px 10px;" onclick="yarinOnayToggle(\''+c.id+'\',\''+it.key+'\')">'+(it.onayli?'Geri al':'✅ Onayla')+'</button>'
             + '<button class="btn ghost small" style="padding:3px 8px;" title="Değiştirerek onayla" onclick="yarinDegistirKutu(\''+c.id+'\',\''+it.key+'\')">✎</button>'
             + ertBtnsInline
+            + '</span>'
+            + '</div>';
+        }).join('')
+      + '</div>';
+  }
+  return h;
+}
+/* 💧 Sulama Protokolü sekmesi — bugünkü sulama/ilaç kaydı (sulamaKartHTML
+   ailesi, DEĞİŞMEDİ — sadece burada, ayrı bir sekmede gösteriliyor) + yarının
+   sulama/ilaç kararı (aynı 3 aksiyon: Onayla/Değiştir/İptal Et). */
+function turSulamaProtokoluIcerikHTML(c, ge, showSu, tarih){
+  var h = showSu ? sulamaKartHTML(c, ge, tarih) : suKapaliMesajiHTML(c);
+  var yarinTarih=addDays(todayISO(),1);
+  var ySu=[];
+  try{
+    ySu=(yarinPlanlanan(c)||[]).filter(function(it){
+      var pIdx = it.key.indexOf("p")===0 ? parseInt(it.key.slice(1),10) : -1;
+      var st = pIdx>=0 ? getProtokol()[pIdx] : null;
+      return !!(st && (st.tip==="ilac"||st.tip==="su"));
+    });
+  }catch(err){ console.error("Yarının sulama listesi hesaplanamadı:", err); }
+  if(ySu.length){
+    h += '<div style="margin-top:8px; padding:8px; background:#fffaf0; border:1px solid #ecd9b0; border-radius:8px;">'
+      + '<div style="font-size:12px; font-weight:700; color:#8a5a1f; margin-bottom:4px;">Yarın planlanan sulama/ilaç</div>'
+      + ySu.map(function(it){
+          /* Sulama için yarın adına zaten bir karar (İptal Et/Değiştir) verilmişse,
+             bunu hâlâ "onay bekliyor" gibi göstermeye devam etmek yanlış —
+             kullanıcı "iptal ediyorum ama gitmiyor" diye şaşırıyordu. Kararı
+             olan bir satır burada SONUÇLANMIŞ gösterilir. */
+          if(it.sulamaDurum==="iptal" || it.sulamaDurum==="degistirildi"){
+            var resIptal=it.sulamaDurum==="iptal";
+            return '<div style="display:flex; align-items:center; justify-content:space-between; gap:8px; padding:4px 0;">'
+              + '<span style="font-size:14px; color:'+(resIptal?'#8a5a1f':'#1d6fd8')+'; font-weight:700;">'+(resIptal?'❌ İptal edildi: ':'✏️ Değiştirildi: ')+esc(it.txt)+(it.sulamaAciklama?(' <span class="muted" style="font-size:11px;">('+esc(it.sulamaAciklama)+')</span>'):'')+'</span>'
+              + (can("edit")?('<button class="btn ghost small" style="padding:3px 8px;flex-shrink:0;" onclick="sulamaGorevDegistirAc(\''+c.id+'\',\''+yarinTarih+'\')">✎ Yeniden düzenle</button>'):'')
+              + '</div>';
+          }
+          return '<div style="display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:6px; row-gap:4px; padding:4px 0;">'
+            + '<span style="font-size:14px; color:'+(it.onayli?'#1d4ed8':'#c0291f')+'; font-weight:'+(it.onayli?'700':'400')+';">'+(it.onayli?(it.degisti?'✎ ':'✓ '):'')+esc(it.txt)+(it.degisti?' <span class="muted" style="font-size:11px;">(protokol: '+esc(it.orijinal)+')</span>':'')+'</span>'
+            + '<span style="flex:none; display:flex; flex-wrap:wrap; gap:6px; justify-content:flex-end;">'
+            + (can("edit")?('<button class="btn ghost small" style="padding:3px 8px;color:var(--red);border-color:var(--red);" onclick="sulamaGorevIptalAc(\''+c.id+'\',\''+yarinTarih+'\')">❌ İptal Et</button>'):'')
+            + '<button class="btn '+(it.onayli?'ghost ':'')+'small" style="padding:3px 10px;" onclick="yarinOnayToggle(\''+c.id+'\',\''+it.key+'\')">'+(it.onayli?'Geri al':'✅ Onayla')+'</button>'
+            + '<button class="btn ghost small" style="padding:3px 8px;" title="Değiştirerek onayla" onclick="yarinDegistirKutu(\''+c.id+'\',\''+it.key+'\')">✎</button>'
             + '</span>'
             + '</div>';
         }).join('')
@@ -9940,12 +9994,10 @@ function turOdaKartIcHTML(c, ge, showExtra){
     +'<div><label>Klima °C</label><input type="number" step="0.1" inputmode="decimal" class="tur_klima" value="'+esc(ge.klimaC||"")+'"'+oi+'></div></div>'
     +((airStarted(c)||!!(ge.co2alt||ge.co2ust))?('<div class="field-row"><div><label>CO₂ alt</label><input type="number" inputmode="numeric" class="tur_co2a" value="'+esc(ge.co2alt||"")+'"'+oi+'></div>'
     +'<div><label>CO₂ üst</label><input type="number" inputmode="numeric" class="tur_co2u" value="'+esc(ge.co2ust||"")+'"'+oi+'></div></div>'):'')
-    +(showSu?(sulamaKartHTML(c, ge, _turTarihVal||todayISO())
-        + '<input type="hidden" class="tur_su" value="'+esc(ge.su||"")+'">'
-        + '<input type="hidden" class="tur_sulama" value="'+esc(ge.sulama||"")+'">')
-      : suKapaliMesajiHTML(c)
-        +'<input type="hidden" class="tur_su" value=""><input type="hidden" class="tur_sulama" value="'+esc(ge.sulama||"")+'">')
-    +turSiradakiAdimHTML(c, turGosterimTarihi)
+    +(showSu?'<input type="hidden" class="tur_su" value="'+esc(ge.su||"")+'">'
+      :'<input type="hidden" class="tur_su" value="">')
+    +'<input type="hidden" class="tur_sulama" value="'+esc(ge.sulama||"")+'">'
+    +turSiradakiAdimHTML(c, turGosterimTarihi, ge, showSu)
     +muhendisDegKartHTML(c)
     +kulucakDonemiSulamaDegKartHTML(c)
     +turNotAlaniHTML(c)
