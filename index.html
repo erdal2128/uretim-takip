@@ -812,9 +812,24 @@ function hasatTartiSenkronEt(c, _idx){
   if(!c || !c.oda || c.tur==null || c.tur==="") return false;
   if(HASAT_SENKRON_DEVRE_DISI_TUR.indexOf(Number(c.tur))>=0) return false;
   var kayitlar = _idx ? (_idx[c.oda+"__"+String(c.tur)]||[]) : hasatTartiGetir(c.oda, c.tur);
-  if(!kayitlar.length) return false;
   if(!c.hasat) c.hasat=[];
   var degisti=false;
+  /* YETİM SENKRON SATIRLARINI BUDA — Hasat Takip'te bir kayıt silinip
+     _hasatTarti'dan kalkınca (onSnapshot 'removed'), o kaydın c.hasat'taki
+     source:"hasat_tarti_sync" satırı da kaldırılmalı. Aksi halde silinen hasat,
+     raporlarda ve Haftalık Hasat Tahmini'nde (hasatBaslangic çıpası) yaşamaya
+     devam ediyordu — kullanıcı raporu: "odadan gitti ama raporlamada duruyor".
+     kayitlar boş kalsa bile (o oda+tur'un tek kaydı silinmişse) çalışmalı, o
+     yüzden erken return'den ÖNCE budanır. */
+  var gecerliKeys={};
+  kayitlar.forEach(function(k){ gecerliKeys[k.oda+"__"+k.tarih]=true; });
+  for(var hi=c.hasat.length-1; hi>=0; hi--){
+    var oh=c.hasat[hi];
+    if(oh && oh.source==="hasat_tarti_sync" && oh.sourceKey && !gecerliKeys[oh.sourceKey]){
+      c.hasat.splice(hi,1); degisti=true;
+    }
+  }
+  if(!kayitlar.length){ if(degisti) touchCycle(c); return degisti; }
   /* Firma/tonaj SADECE bu oda kaydında hâlâ BOŞSA senkrondan doldurulur —
      elle girilmiş bilgi asla ezilmez. Amaç: Firma Analizi'nin, oda elle
      açılıp firma bilgisi hiç yazılmasa bile (özellikle otomatik oluşan
@@ -929,7 +944,7 @@ function hasatTartiTumDonguleriSenkronEt(){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v442";
+var APP_VER = "v443";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
