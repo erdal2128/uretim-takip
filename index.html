@@ -944,7 +944,7 @@ function hasatTartiTumDonguleriSenkronEt(){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v443";
+var APP_VER = "v444";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -2840,6 +2840,30 @@ function _adimiYarinaTasi(c, idx){
   c.ertele["p"+idx] = base ? daysBetween(base, yeniTarih) : ((c.ertele["p"+idx]||0)+1);
   return yeniTarih;
 }
+/* ZİNCİRLEME (domino) sulama ertelemesi — kullanıcı isteği: bir sulama "Ertele"
+   ile ileri kayınca, ondan SONRAKİ tüm su/ilaç adımları da birer gün kaysın ki
+   ertelenen su bir sonraki günün suyuyla çakışmasın. sinirISO'dan (dahil) itibaren
+   etkin tarihi olan tüm su/ilaç adımlarının c.ertele offset'ine +1 ekler.
+   haricIdxSet: birincil adım(lar) zaten ayrıca taşındığı için çift kaydırmayı
+   önlemek üzere hariç tutulur ({"p"+idx:true}). tekrarlı/aralık (tekrarBitisRef)
+   adımlar ve olay/uyarı adımları etkilenmez. NOT: "İptal Et" bu fonksiyonu ASLA
+   çağırmaz — iptal edilen gün bilinçli atlanır, sonraki sulamalar yerinde kalır. */
+function _sulamaZincirKaydir(c, sinirISO, haricIdxSet){
+  if(!c.ertele) c.ertele={};
+  var P=getProtokol();
+  var etkilenen=[];
+  P.forEach(function(step, idx){
+    if(!step || (step.tip!=="su" && step.tip!=="ilac")) return;
+    if(step.tekrarBitisRef) return;
+    if(haricIdxSet && haricIdxSet["p"+idx]) return;
+    var base=protokolTarih(c, step); if(!base) return;
+    var eff=addDays(base, (c.ertele["p"+idx]||0));
+    if(cmpDate(eff, sinirISO) < 0) return;
+    c.ertele["p"+idx]=(c.ertele["p"+idx]||0)+1;
+    etkilenen.push(idx);
+  });
+  return etkilenen;
+}
 function protokolSartErtele(cid, idx, aciklama){
   if(!can("edit")) return noPerm();
   var c=loadData().cycles.find(function(x){return x.id===cid;}); if(!c) return;
@@ -3553,6 +3577,13 @@ function yarinErteleKaydet(cid, idx, neden){
     c.ertele["p"+idx]=daysBetween(base, yeniTarih);
   } else {
     yeniTarih=_adimiYarinaTasi(c, idx);
+    /* Zincirleme (domino): su/ilaç adımı varsayılan "sonraki güne ertele" ile ileri
+       kayınca, sonraki tüm su/ilaç adımları da birer gün kaysın (kullanıcı isteği).
+       Belirli tarih seçilen / erkene alma dalında ve su/ilaç olmayan adımlarda YOK. */
+    if(st && (st.tip==="su"||st.tip==="ilac") && mevcutTarih){
+      var haricZ={}; haricZ["p"+idx]=true;
+      _sulamaZincirKaydir(c, addDays(mevcutTarih,1), haricZ);
+    }
   }
   var ileriMi = mevcutTarih ? (cmpDate(yeniTarih, mevcutTarih) > 0) : true;
   if(!c.erteleSebep) c.erteleSebep={};
@@ -9586,15 +9617,21 @@ function sulamaGorevErteleUygula(cid, sebep, tarih){
   if(!c.erteleSebep) c.erteleSebep={};
   if(!c.erteleAIVerdict) c.erteleAIVerdict={};
   var yeniTarih=null;
+  var haric={};
   idxler.forEach(function(idx){
     yeniTarih=_adimiYarinaTasi(c, idx);
+    haric["p"+idx]=true;
     c.erteleSebep["p"+idx] = (verdict.seviye==="kirmizi") ? "diger" : "biyolojik";
     c.erteleAIVerdict["p"+idx]=verdict.seviye;
   });
-  gunlukNotTariheEkle(c, tarih, "Sulama "+fmtDate(yeniTarih)+" tarihine ertelendi (neden: "+sebep+") — "+kimNeZamanEtiketi());
+  /* Zincirleme (domino): birincil adımlar D+1'e taşındı; artık D+1 ve sonrasındaki
+     tüm su/ilaç adımlarını da birer gün kaydır ki çakışma olmasın (kullanıcı isteği). */
+  var zincir=_sulamaZincirKaydir(c, addDays(tarih,1), haric);
+  var zincirNot = zincir.length ? " ve sonraki "+zincir.length+" sulama da birer gün kaydı" : "";
+  gunlukNotTariheEkle(c, tarih, "Sulama "+fmtDate(yeniTarih)+" tarihine ertelendi"+zincirNot+" (neden: "+sebep+") — "+kimNeZamanEtiketi());
   touchCycle(c); saveData(); closeWarnBox();
   var ikon=verdict.seviye==="yesil"?"🟢":(verdict.seviye==="kirmizi"?"🔴":"🟡");
-  toast(fmtDate(yeniTarih)+" tarihine ertelendi · "+ikon+" "+verdict.aciklama);
+  toast(fmtDate(yeniTarih)+" tarihine ertelendi"+(zincir.length?" · sonrakiler de kaydı":"")+" · "+ikon+" "+verdict.aciklama);
   render();
 }
 /* ==================== Günlük Tur — sadeleştirilmiş sulama akışı ====================
