@@ -20,24 +20,57 @@ sağlıklıysa yüksek puan alabilir. Amaç, zamanlama/denge kalitesini ölçmek
 HASAT_EGRI_REF_5 = [5.5, 20.0, 35.0, 30.0, 13.0]
 
 
-def resample_ref(n):
-    """5 noktalı ideal eğriyi n güne doğrusal interpolasyonla yeniden örnekler
-    ve toplamı 100 olacak şekilde normalize eder. n çoğu flaşta 5'tir; F2 daha
-    kısa/uzun olabilir diye genelleştirilmiştir."""
-    base = HASAT_EGRI_REF_5
-    m = len(base)
+def _resample_list(values, n):
+    """Herhangi uzunluktaki bir listeyi n noktaya doğrusal interpolasyonla
+    yeniden örnekler (değerleri normalize ETMEZ)."""
+    m = len(values)
     if n <= 1:
-        return [100.0]
+        return [sum(values)] if values else [0.0]
+    if m == 0:
+        return [0.0] * n
+    if m == 1:
+        return [float(values[0])] * n
     out = []
     for i in range(n):
-        x = i / (n - 1)          # 0..1
-        pos = x * (m - 1)        # 0..(m-1)
+        pos = (i / (n - 1)) * (m - 1)   # 0..(m-1)
         lo = int(pos)
         hi = min(lo + 1, m - 1)
         frac = pos - lo
-        out.append(base[lo] * (1 - frac) + base[hi] * frac)
-    s = sum(out) or 1.0
-    return [v / s * 100.0 for v in out]
+        out.append(values[lo] * (1 - frac) + values[hi] * frac)
+    return out
+
+
+def _normalize100(values):
+    s = sum(values) or 1.0
+    return [v / s * 100.0 for v in values]
+
+
+def resample_ref(n):
+    """5 noktalı ideal eğriyi n güne yeniden örnekler, toplamı 100'e normalize eder.
+    n çoğu flaşta 5'tir; F2 daha kısa/uzun olabilir diye genelleştirilmiştir."""
+    if n <= 1:
+        return [100.0]
+    return _normalize100(_resample_list(HASAT_EGRI_REF_5, n))
+
+
+def ogrenilmis_referans(ornekler, n, min_ornek=3):
+    """Geçmiş flaşlardan öğrenilmiş referans eğri. `ornekler` = flaşların kasa
+    listeleri (her biri o flaşın gün-gün kasası). Her örnek yüzdeye çevrilip n
+    güne yeniden örneklenir, ortalaması alınır (toplam 100).
+
+    Döner: (ref_yuzde | None, kullanilan_ornek_sayisi). Örnek sayısı min_ornek'in
+    altındaysa None döner → çağıran tarafın sabit ideale (resample_ref) düşmesi
+    beklenir. Web'deki 'öğrenilen referans' kaskadının (oda→firma→genel) çekirdeği."""
+    egriler = []
+    for kasa in (ornekler or []):
+        k = [float(x or 0) for x in (kasa or [])]
+        if len(k) < 2 or sum(k) <= 0:
+            continue
+        egriler.append(_resample_list(_normalize100(k), n))
+    if len(egriler) < max(1, min_ornek):
+        return None, len(egriler)
+    ort = [sum(e[i] for e in egriler) / len(egriler) for i in range(n)]
+    return _normalize100(ort), len(egriler)
 
 
 def etiket(puan):
