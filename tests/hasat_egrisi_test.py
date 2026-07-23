@@ -101,6 +101,64 @@ def test_ogrenilmis_referans_puanlamada_kullanilir():
     assert r["puan"] >= 90, r["puan"]
 
 
+def test_egri_uyum_birebir_100():
+    ref = he.resample_ref(5)
+    kasa = [r * 3 for r in ref]  # aynı dağılım (ölçek fark etmez)
+    assert abs(he.egri_uyum(kasa, ref) - 100.0) < 0.01
+
+
+def test_egri_uyum_uzak_dusuk():
+    ref = [5, 20, 35, 30, 10]        # orta-zirveli
+    kasa = [80, 5, 5, 5, 5]          # ön-yüklü, çok farklı
+    u = he.egri_uyum(kasa, ref)
+    assert u is not None and u < 60, u
+
+
+def test_egri_uyum_yakin_uzaktan_yuksek():
+    # Referansa yakın eğri, uzaktakinden DAHA yüksek uyum almalı (asıl istenen)
+    ref = [5, 20, 35, 30, 10]
+    yakin = he.egri_uyum([6, 22, 33, 29, 10], ref)
+    uzak = he.egri_uyum([30, 30, 20, 10, 10], ref)
+    assert yakin > uzak, (yakin, uzak)
+
+
+def test_verim_puani_basamaklar():
+    assert he.verim_puani(19) == (0, False)
+    assert he.verim_puani(20) == (10, False)
+    assert he.verim_puani(22.9) == (10, False)
+    assert he.verim_puani(23) == (20, False)
+    assert he.verim_puani(25) == (20, False)
+    assert he.verim_puani(26) == (30, False)
+    assert he.verim_puani(27.9) == (30, False)
+    assert he.verim_puani(28) == (40, False)
+    assert he.verim_puani(32) == (40, False)      # 32'nin ÜSTÜ yıldız
+    assert he.verim_puani(32.1) == (40, True)
+    assert he.verim_puani(None) == (0, False)
+
+
+def test_ikinci_puani():
+    assert he.ikinci_puani(0.0) == 10
+    assert he.ikinci_puani(0.009) == 10
+    assert he.ikinci_puani(0.01) == 0
+    assert he.ikinci_puani(0.05) == 0
+    assert he.ikinci_puani(None) == 0
+
+
+def test_flas_puan_bilesim():
+    ref = he.resample_ref(5)
+    kasa = [r * 2 for r in ref]  # uyum ~100 → eğri 50
+    r = he.flas_puan(kasa, ref, verim=29, ikinci_orani=0.0)
+    assert r["egri_puan"] == 50.0
+    assert r["verim_puan"] == 40
+    assert r["ikinci_puan"] == 10
+    assert r["toplam"] == 100
+    assert r["yildizli"] is False
+    # düşük verim + yüksek ikinci + uzak eğri
+    r2 = he.flas_puan([80, 5, 5, 5, 5], ref, verim=18, ikinci_orani=0.2)
+    assert r2["verim_puan"] == 0 and r2["ikinci_puan"] == 0
+    assert r2["toplam"] < 40
+
+
 def test_etiket_bantlari():
     assert he.etiket(100) == "Mükemmel"
     assert he.etiket(95) == "Çok iyi"
