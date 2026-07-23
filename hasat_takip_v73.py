@@ -4032,6 +4032,11 @@ class App(tk.Tk):
                 oz, verim, ikinci_orani, flaslar = self._egri_flas_veri(oda, tur)
             except Exception:
                 continue
+            # SADECE ✓ Tur Bitti işaretli turlar — yarım kalmış (az hasatlı) bir
+            # tur, eğrisi "temiz" göründüğü için sıralamada yanıltıcı biçimde en
+            # üste çıkıyordu (kullanıcı raporu: "odadan 8 kasa almışız").
+            if not oz.get("tur_bitti"):
+                continue
             uyumlar = []; totaller = []
             for f in (1, 2):
                 kasalar = flaslar[f]
@@ -4061,6 +4066,8 @@ class App(tk.Tk):
         Satıra tıklayınca o oda+tur alttaki detay eğrisine yüklenir."""
         puanlar = self._egri_tum_puanlar()
         if not puanlar:
+            tk.Label(parent, text="📊 Sıralama: ✓ Tur Bitti işaretli tamamlanmış tur bulunmuyor.",
+                     bg=self.C["P"], fg="#7a7263", font=("Segoe UI", 9)).pack(anchor="w", padx=8, pady=(4, 4))
             return
         buyuk = 9e9
         if sira_key == "ikinci":
@@ -4075,7 +4082,7 @@ class App(tk.Tk):
         box = tk.Frame(parent, bg=self.C["P"]); box.pack(fill="x", padx=6, pady=(2, 8))
         tk.Label(box, text="📊 Sıralama — %s (ilk 25)" % lbl, bg=self.C["P"], fg=self.C["G"],
                  font=("Georgia", 11, "bold")).pack(anchor="w", padx=6, pady=(2, 1))
-        tk.Label(box, text="Bir satıra tıkla → o oda+tur eğrisini aşağıda göster.",
+        tk.Label(box, text="Sadece ✓ Tur Bitti işaretli turlar. Bir satıra tıkla → o oda+tur eğrisini aşağıda göster.",
                  bg=self.C["P"], fg="#7a7263", font=("Segoe UI", 8)).pack(anchor="w", padx=6)
         hf = tk.Frame(box, bg="#2f6b3f"); hf.pack(fill="x", padx=6, pady=(3, 0))
         for txt, w in [("#", 3), ("Oda", 6), ("Tur", 4), ("Firma", 14), ("Geliş", 11),
