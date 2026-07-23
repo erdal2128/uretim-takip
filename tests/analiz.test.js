@@ -120,11 +120,13 @@ test("_kritikHatalarTespit: amonyak günüyle protokol işlemi çakışmıyorsa 
 
 // ---------- _puanIklim ----------
 
-test("_puanIklim: ölçüm yokken tam puan (25) döner, ceza/kalem yok", function () {
+// NOT: İklim kategorisi maks'ı kullanıcı isteğiyle 25→20 indi (5 puan Hastalık
+// Faktörleri'ne kaydırıldı). Ceza büyüklükleri AYNI kaldı, sadece tavan düştü.
+test("_puanIklim: ölçüm yokken tam puan (20) döner, ceza/kalem yok", function () {
   setTestData();
   var r = _puanIklim({});
-  assert.equal(r.puan, 25);
-  assert.equal(r.maks, 25);
+  assert.equal(r.puan, 20);
+  assert.equal(r.maks, 20);
   assert.deepEqual(r.kalemler, []);
 });
 
@@ -144,7 +146,7 @@ test("_puanIklim: art arda tehlikeli kompost sıcaklığı puanı düşürür (c
   var kalem = r.kalemler.filter(function (k) { return /tehlikeli kompost/.test(k.aciklama); })[0];
   assert.ok(kalem, r.kalemler.map(function(k){return k.aciklama;}).join(" | "));
   assert.equal(kalem.delta, -11); // 5 gün * 3 * 1.4 = 21, min(11,21) = 11
-  assert.equal(r.puan, 25 - 11);
+  assert.equal(r.puan, 20 - 11);
 });
 
 test("_puanIklim: 7+ gün üst üste ideal kompost sıcaklığı bonus puan verir", function () {
@@ -157,7 +159,7 @@ test("_puanIklim: 7+ gün üst üste ideal kompost sıcaklığı bonus puan veri
   var kalem = r.kalemler.filter(function (k) { return /ideal kompost/.test(k.aciklama); })[0];
   assert.ok(kalem, r.kalemler.map(function(k){return k.aciklama;}).join(" | "));
   assert.equal(kalem.delta, 2);
-  assert.equal(r.puan, 25); // 25 + 2, 25 tavanında kırpılır
+  assert.equal(r.puan, 20); // 20 + 2, 20 tavanında kırpılır
 });
 
 test("_puanIklim: havadan önce oda sıcaklığı ODA_MAX'ı aşarsa puan kırar", function () {
