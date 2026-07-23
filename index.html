@@ -950,7 +950,7 @@ function hasatTartiTumDonguleriSenkronEt(){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v449";
+var APP_VER = "v450";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -14798,13 +14798,13 @@ function tahminiVerim(c){
    _puanIklim/_puanMiselGelisimi (v382), hasatEgrisiAnaliz (v385),
    firmaOrtalamaKgTon/filoOrtalamaKgTon — tekrar hesaplama YAPILMAZ. */
 
-/* 📋 Protokol Uyumu (20) — kompost ortalama kaçıncı günde tiftik/toprak/
+/* 📋 Protokol Uyumu (15) — kompost ortalama kaçıncı günde tiftik/toprak/
    hava/ilk flaşa ulaşıyor. Tek başına erken ya da geç olmak CEZALANDIRILMAZ
    (tutarlı bir erken firma hızlı gelişim demek olabilir) — asıl ölçülen
    TUTARLILIK (sapma): aynı firma bazen çok erken bazen çok geç kalıyorsa
    (öngörülemezlik) puan kırılır. */
 function _firmaProtokolUyumu(cycles){
-  var maks=20, puanPerCheckpoint=5;
+  var maks=15, puanPerCheckpoint=maks/4; /* 4 kilometre taşı; maks 20→15 (kullanıcı isteği: 5 puan 🦠 Hastalık kategorisine kaydı) */
   var checkpoints=[
     {key:'tiftik', ad:'Tiftik', takAd:'Tiftik', gercek:function(c){return c.tiftikTarihi;}},
     {key:'toprak', ad:'Toprak serimi', takAd:'Toprak', gercek:function(c){return c.toprakTarihi;}},
@@ -14835,25 +14835,29 @@ function _firmaProtokolUyumu(cycles){
   puanToplam=Math.max(0,Math.min(maks,Math.round(puanToplam*10)/10));
   return {puan:puanToplam, maks:maks, kalemler:kalemler, bulgular:bulgular};
 }
-/* 🌡️ Kompost Kalitesi (20) — sıcaklık stabilitesi (_puanIklim, 12p) + amonyak
-   süresi (4p) + misel gelişim düzenliliği/homojenliği (_puanMiselGelisimi, 4p). */
+/* 🌡️ Kompost Kalitesi (15) — sıcaklık stabilitesi (_puanIklim, 9p) + amonyak
+   süresi (3p) + misel gelişim düzenliliği/homojenliği (_puanMiselGelisimi, 3p).
+   NOT: maks 20→15 (kullanıcı isteği: 5 puan 🦠 Hastalık kategorisine kaydı).
+   _puanIklim maks'ı 20 (v447), _puanMiselGelisimi maks'ı 20 — oranlamalar
+   bunlara göre (önceden _puanIklim /25 ile bölünüyordu, İklim 25→20 olunca bu
+   sıcaklık bileşenini haksızca düşürüyordu; /20'ye düzeltildi). */
 function _firmaKompostKalitesi(cycles){
-  var maks=20;
+  var maks=15;
   var sicaklikPuanlar=cycles.map(function(c){return _puanIklim(c).puan;});
   var miselPuanlar=cycles.map(function(c){return _puanMiselGelisimi(c).puan;});
   var amonyakGunler=cycles.map(function(c){return (c.gunluk||[]).filter(function(r){return r.amonyak==="Var";}).length;});
-  var ortSicaklikPuan=sicaklikPuanlar.length?(sicaklikPuanlar.reduce(function(a,b){return a+b;},0)/sicaklikPuanlar.length):25;
+  var ortSicaklikPuan=sicaklikPuanlar.length?(sicaklikPuanlar.reduce(function(a,b){return a+b;},0)/sicaklikPuanlar.length):20;
   var ortMiselPuan=miselPuanlar.length?(miselPuanlar.reduce(function(a,b){return a+b;},0)/miselPuanlar.length):20;
   var ortAmonyak=amonyakGunler.length?(amonyakGunler.reduce(function(a,b){return a+b;},0)/amonyakGunler.length):0;
 
-  var sicaklikKismi=(ortSicaklikPuan/25)*12;
-  var miselKismi=(ortMiselPuan/20)*4;
-  var amonyakKismi=4;
+  var sicaklikKismi=(ortSicaklikPuan/20)*9;
+  var miselKismi=(ortMiselPuan/20)*3;
+  var amonyakKismi=3;
   var kalemler=[];
-  if(ortAmonyak>4){ var d=Math.min(4,(ortAmonyak-4)*0.8); amonyakKismi-=d; kalemler.push(_kalem(-Math.round(d*10)/10, "Ortalama amonyak süresi "+ortAmonyak.toFixed(1)+" gün — uzun")); }
+  if(ortAmonyak>4){ var d=Math.min(3,(ortAmonyak-4)*0.6); amonyakKismi-=d; kalemler.push(_kalem(-Math.round(d*10)/10, "Ortalama amonyak süresi "+ortAmonyak.toFixed(1)+" gün — uzun")); }
   else kalemler.push(_kalem(0,"Amonyak süresi ortalama "+ortAmonyak.toFixed(1)+" gün — normal aralıkta"));
-  if(sicaklikKismi<12*0.8) kalemler.push(_kalem(Math.round((sicaklikKismi-12)*10)/10, "Kompost/oda sıcaklığı yönetimi ortalamanın altında (döngü başına ort. iklim puanı "+ortSicaklikPuan.toFixed(0)+"/25)"));
-  if(miselKismi<4*0.8) kalemler.push(_kalem(Math.round((miselKismi-4)*10)/10, "Misel gelişimi düzensizliği görülüyor (döngü başına ort. misel puanı "+ortMiselPuan.toFixed(0)+"/20)"));
+  if(sicaklikKismi<9*0.8) kalemler.push(_kalem(Math.round((sicaklikKismi-9)*10)/10, "Kompost/oda sıcaklığı yönetimi ortalamanın altında (döngü başına ort. iklim puanı "+ortSicaklikPuan.toFixed(0)+"/20)"));
+  if(miselKismi<3*0.8) kalemler.push(_kalem(Math.round((miselKismi-3)*10)/10, "Misel gelişimi düzensizliği görülüyor (döngü başına ort. misel puanı "+ortMiselPuan.toFixed(0)+"/20)"));
 
   var puan=Math.max(0,Math.round((sicaklikKismi+miselKismi+amonyakKismi)*10)/10);
   return {puan:puan, maks:maks, kalemler:kalemler, ortSicaklikPuan:ortSicaklikPuan, ortMiselPuan:ortMiselPuan, ortAmonyak:ortAmonyak};
@@ -14888,10 +14892,11 @@ function _firmaIklimToleransi(cycles){
   puan=Math.max(0,puan);
   return {puan:puan, maks:maks, kalemler:[_kalem(puan-maks, aciklama)]};
 }
-/* 📈 Hasat Eğrisi (20) — v385'teki hasatEgrisiAnaliz() (0-100/flaş) firma
-   genelinde ortalanıp 20 puana ölçeklenir; ayrı bir eğri analizi TEKRARLANMAZ. */
+/* 📈 Hasat Eğrisi (15) — v385'teki hasatEgrisiAnaliz() (0-100/flaş) firma
+   genelinde ortalanıp puana ölçeklenir; ayrı bir eğri analizi TEKRARLANMAZ.
+   NOT: maks 20→15 (kullanıcı isteği: 5 puan 🦠 Hastalık kategorisine kaydı). */
 function _firmaHasatEgrisi(cycles){
-  var maks=20;
+  var maks=15;
   var puanlar=[];
   cycles.forEach(function(c){ [1,2].forEach(function(f){ var a=hasatEgrisiAnaliz(c,f); if(a) puanlar.push(a.puan); }); });
   if(!puanlar.length) return {puan:maks, maks:maks, kalemler:[_kalem(0,"Hasat eğrisi verisi yetersiz — nötr puan verildi")]};
@@ -14972,6 +14977,32 @@ function _firmaUretimKolayligi(cycles){
   puan=Math.max(0,Math.round(puan*10)/10);
   return {puan:puan, maks:maks, kalemler:kalemler, mudahaleOrani:mudahaleOrani, sulamaToleransEtiket:sulamaToleransEtiket};
 }
+/* 🦠 Hastalık (15) — kullanıcı isteği: çoğu hastalık/zararlı (yeşil küf, beyaz
+   alçı, hatta büyük oranda sinek) kompost/firma kaynaklıdır; firma karnesine
+   ayrı bir kategori olarak eklendi. Her odanın hastalık puanı, oda tarafındaki
+   _puanHastalik (20 üzerinden; şiddet tablosu + "4+ farklı tür = 0" kuralı) ile
+   hesaplanıp firma genelinde ortalanır ve 15'e ölçeklenir. Böylece hastalıklı
+   kompost gönderen firma, karnede otomatik olarak puan kaybeder. */
+function _firmaHastalik(cycles){
+  var maks=15;
+  if(!cycles.length) return {puan:maks, maks:maks, kalemler:[_kalem(0,"Yeterli veri yok — nötr puan verildi")]};
+  var puanlar=cycles.map(function(c){return _puanHastalik(c).puan;}); /* her biri 0-20 */
+  var ort=puanlar.reduce(function(a,b){return a+b;},0)/puanlar.length;
+  var puan=Math.max(0,Math.round((ort/20)*maks*10)/10);
+  var hastalikliOda=0, turSayaci={};
+  cycles.forEach(function(c){
+    var turler=(c.hastalikKayitlar||[]).map(function(k){return k.tur;}).filter(function(t,i,arr){return t && arr.indexOf(t)===i;});
+    if(turler.length){ hastalikliOda++; turler.forEach(function(t){ turSayaci[t]=(turSayaci[t]||0)+1; }); }
+  });
+  var kalemler=[];
+  if(!hastalikliOda){
+    kalemler.push(_kalem(0,"Bu firmanın odalarında hastalık/zararlı kaydı yok"));
+  } else {
+    var turListe=Object.keys(turSayaci).sort(function(a,b){return turSayaci[b]-turSayaci[a];});
+    kalemler.push(_kalem(Math.round((puan-maks)*10)/10, hastalikliOda+"/"+cycles.length+" odada hastalık/zararlı görüldü — türler: "+turListe.slice(0,4).join(", ")));
+  }
+  return {puan:puan, maks:maks, kalemler:kalemler, hastalikliOda:hastalikliOda};
+}
 function _firmaYorumUret(kategoriler, protokol, kalite, kolaylik){
   var cumleler=[];
   (protokol.bulgular||[]).forEach(function(b){
@@ -14998,15 +15029,18 @@ function _firmaYorumUret(kategoriler, protokol, kalite, kolaylik){
   if(!cumleler.length) return "Yeterli veri birikince bu firma için daha ayrıntılı bir değerlendirme oluşacaktır.";
   return cumleler.slice(0,5).join(" ");
 }
-/* Ana fonksiyon: firma adına göre 7 kategori + genel puan + yorum + karne.
+/* Ana fonksiyon: firma adına göre 8 kategori + genel puan + yorum + karne.
    Hiç oda yoksa (bu firma hiç kullanılmamış) null döner.
+   8 kategori, toplam 100: 📋 Protokol Uyumu (15) · 🌡️ Kompost Kalitesi (15)
+   · 🦠 Hastalık (15) · 🌦️ İklim Toleransı (10) · 📈 Hasat Eğrisi (15)
+   · ⚖️ Verim (15) · 🧺 Kalite ve Fire (10) · 🎯 Üretim Kolaylığı (5).
 
    Kullanıcı isteği: "Uzman/ersanlar için anlamlı bir kısmi karne çıksın,
    Özdal dahil yap" — önceden TÜM analiz "tamamlanmış (boşaltılmış+hasat
    kaydı olan) döngü" şartına bağlıydı; oda bitmeden hiçbir firma için
-   hiçbir şey görünmüyordu. Ama 7 kategoriden 5'i (Protokol Uyumu, Kompost
-   Kalitesi, Hasat Eğrisi, Kalite ve Fire, Üretim Kolaylığı) kesin/final
-   verim bilgisi GEREKTİRMİYOR — aktif odalardaki BUGÜNE KADARKİ gerçek
+   hiçbir şey görünmüyordu. Ama 8 kategoriden 6'sı (Protokol Uyumu, Kompost
+   Kalitesi, Hastalık, Hasat Eğrisi, Kalite ve Fire, Üretim Kolaylığı) kesin/
+   final verim bilgisi GEREKTİRMİYOR — aktif odalardaki BUGÜNE KADARKİ gerçek
    veriyle de hesaplanabilir. Sadece Verim ve İklim Toleransı, kesin toplam
    verim bilinmeden anlamlı olmadığı için tamamlanmış döngülerle sınırlı
    kaldı (veri yoksa kendi "nötr puan" mantıklarına düşerler). Sonuçta
@@ -15020,6 +15054,7 @@ function firmaPerformans(firma){
 
   var protokol=_firmaProtokolUyumu(tumCycles);
   var kalite=_firmaKompostKalitesi(tumCycles);
+  var hastalik=_firmaHastalik(tumCycles);
   var iklim=_firmaIklimToleransi(tamam);
   var hasategri=_firmaHasatEgrisi(tumCycles);
   var verim=_firmaVerim(firma);
@@ -15029,6 +15064,7 @@ function firmaPerformans(firma){
   var kategoriler=[
     {key:"protokol",   ad:"📋 Protokol Uyumu",   maks:protokol.maks,   puan:protokol.puan,   kalemler:protokol.kalemler},
     {key:"kompost",    ad:"🌡️ Kompost Kalitesi", maks:kalite.maks,     puan:kalite.puan,     kalemler:kalite.kalemler},
+    {key:"hastalik",   ad:"🦠 Hastalık",         maks:hastalik.maks,   puan:hastalik.puan,   kalemler:hastalik.kalemler},
     {key:"iklimtol",   ad:"🌦️ İklim Toleransı",  maks:iklim.maks,      puan:iklim.puan,      kalemler:iklim.kalemler},
     {key:"hasategri",  ad:"📈 Hasat Eğrisi",     maks:hasategri.maks,  puan:hasategri.puan,  kalemler:hasategri.kalemler},
     {key:"verim",      ad:"⚖️ Verim",            maks:verim.maks,      puan:verim.puan,      kalemler:verim.kalemler},
@@ -15077,6 +15113,7 @@ function firmaKarneHTML(p){
   return '<div style="display:flex;gap:8px;flex-wrap:wrap;">'
     +box("🏆","Genel Puan", p.puan, "/100")
     +box("🌡️","Kompost Kalitesi", byKey.kompost.puan, "/"+byKey.kompost.maks)
+    +(byKey.hastalik?box("🦠","Hastalık", byKey.hastalik.puan, "/"+byKey.hastalik.maks):"")
     +box("🍄","Misel Gelişimi", (k.ortMiselPuan!=null?Math.round(k.ortMiselPuan):"—"), "/20")
     +box("📋","Protokol Başarısı", byKey.protokol.puan, "/"+byKey.protokol.maks)
     +box("📈","Hasat Eğrisi", byKey.hasategri.puan, "/"+byKey.hasategri.maks)
