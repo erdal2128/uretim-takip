@@ -4069,18 +4069,26 @@ class App(tk.Tk):
             tk.Label(parent, text="📊 Sıralama: ✓ Tur Bitti işaretli tamamlanmış tur bulunmuyor.",
                      bg=self.C["P"], fg="#7a7263", font=("Segoe UI", 9)).pack(anchor="w", padx=8, pady=(4, 4))
             return
-        buyuk = 9e9
-        if sira_key == "ikinci":
-            puanlar.sort(key=lambda r: (r["ikinci_orani"] if r["ikinci_orani"] is not None else buyuk))
-        elif sira_key == "verim":
-            puanlar.sort(key=lambda r: -(r["verim"] if r["verim"] is not None else -1))
-        elif sira_key == "uyum":
-            puanlar.sort(key=lambda r: -(r["uyum"] if r["uyum"] is not None else -1))
-        else:  # toplam
-            puanlar.sort(key=lambda r: -(r["toplam"] if r["toplam"] is not None else -1))
+        # "İyilik" değeri (yüksek = iyi); İkinci için düşük oran iyi olduğundan negatiflenir.
+        def iyilik(r):
+            if sira_key == "uyum":
+                return r["uyum"]
+            if sira_key == "verim":
+                return r["verim"]
+            if sira_key == "ikinci":
+                return (-r["ikinci_orani"]) if r["ikinci_orani"] is not None else None
+            return r["toplam"]
+        kotu_once = hasattr(self, "_eg_yon") and self._eg_yon.get().startswith("🔼")
+        def sort_key(r):
+            g = iyilik(r)
+            if g is None:
+                return (1, 0.0)          # verisi olmayan her zaman en sonda
+            return (0, g if kotu_once else -g)  # kötü önce = artan; iyi önce = azalan
+        puanlar.sort(key=sort_key)
         lbl = next((l for k, l in EGRI_SIRA if k == sira_key), "")
+        yon_txt = "En kötü önce" if kotu_once else "En iyi önce"
         box = tk.Frame(parent, bg=self.C["P"]); box.pack(fill="x", padx=6, pady=(2, 8))
-        tk.Label(box, text="📊 Sıralama — %s (ilk 25)" % lbl, bg=self.C["P"], fg=self.C["G"],
+        tk.Label(box, text="📊 Sıralama — %s · %s (ilk 25)" % (lbl, yon_txt), bg=self.C["P"], fg=self.C["G"],
                  font=("Georgia", 11, "bold")).pack(anchor="w", padx=6, pady=(2, 1))
         tk.Label(box, text="Sadece ✓ Tur Bitti işaretli turlar. Bir satıra tıkla → o oda+tur eğrisini aşağıda göster.",
                  bg=self.C["P"], fg="#7a7263", font=("Segoe UI", 8)).pack(anchor="w", padx=6)
@@ -4116,6 +4124,37 @@ class App(tk.Tk):
         self._eg_tur.set(str(tur))
         self._analiz_refresh()
 
+    def _egri_kok_neden(self, parent, oda, firma):
+        """Seçili oda+turun düşük/yüksek puanı ODA mı FIRMA mı kaynaklı ayırt
+        etmeye yardımcı bağlam: bu odanın, bu firmanın ve tesisin ortalama
+        toplam puanı (yalnızca ✓ Tur Bitti turlar üzerinden). Böylece 'oda ise
+        odaya, firma ise firmaya' tedbir alınabilir (kullanıcı isteği)."""
+        puanlar = self._egri_tum_puanlar()
+        if not puanlar:
+            return
+        oda_p = [p["toplam"] for p in puanlar if p["oda"] == oda]
+        firma_p = [p["toplam"] for p in puanlar if firma and p.get("firma") == firma]
+        tesis_p = [p["toplam"] for p in puanlar]
+
+        def ort(lst):
+            return (sum(lst) / len(lst)) if lst else None
+        oda_o, firma_o, tesis_o = ort(oda_p), ort(firma_p), ort(tesis_p)
+        parcalar = ["Bu oda ort: %s (%d tur)" % (("%d" % round(oda_o)) if oda_o is not None else "—", len(oda_p))]
+        if firma:
+            parcalar.append("%s ort: %s (%d tur)" % (firma, ("%d" % round(firma_o)) if firma_o is not None else "—", len(firma_p)))
+        parcalar.append("Tesis ort: %s" % (("%d" % round(tesis_o)) if tesis_o is not None else "—"))
+        tk.Label(parent, text="🔎 Kök neden — " + "   ·   ".join(parcalar),
+                 bg=self.C["P"], fg=self.C["I"], font=("Segoe UI", 8, "bold")).pack(anchor="w", padx=10, pady=(0, 1))
+        # Yorum: oda mı firma mı tesis ortalamasının belirgin altında?
+        ipuclari = []
+        if oda_o is not None and tesis_o is not None and oda_o < tesis_o - 10:
+            ipuclari.append("bu ODA genelde tesis ortalamasının altında → oda kaynaklı olabilir (iklim/sulama/oda yorgunluğu)")
+        if firma and firma_o is not None and tesis_o is not None and firma_o < tesis_o - 10:
+            ipuclari.append("bu FIRMA genelde tesis ortalamasının altında → kompost/firma kaynaklı olabilir")
+        if ipuclari:
+            tk.Label(parent, text="→ " + "; ".join(ipuclari), bg=self.C["P"], fg="#c0392b",
+                     font=("Segoe UI", 8), wraplength=560, justify="left").pack(anchor="w", padx=14, pady=(0, 4))
+
     def _egri_render(self, parent):
         """Seçili oda+tur için F1/F2 hasat eğrisi KARTLARINI parent'ın en üstüne
         çizer. Her flaş 100 puanlık ayrı kart: Eğri uyumu (tesis referansına
@@ -4146,6 +4185,7 @@ class App(tk.Tk):
             fmt(oz.get("toplam_kasa", 0)), vtxt, ikinci_orani * 100)
         tk.Label(box, text=kunye, bg=self.C["P"], fg=self.C["I"],
                  font=("Segoe UI", 9, "bold")).pack(anchor="w", padx=10, pady=(0, 6))
+        self._egri_kok_neden(box, oda, oz.get("firma", "") or "")
         refs = self._tesis_referanslari()
         cizildi = False
         for f in (1, 2):
@@ -4499,8 +4539,12 @@ class App(tk.Tk):
             ttk.Label(egs, text="   Sırala:", style="S.TLabel").pack(side="left", padx=(0, 4))
             self._eg_sira = tk.StringVar(value=EGRI_SIRA[0][1])
             ttk.Combobox(egs, textvariable=self._eg_sira, values=[e[1] for e in EGRI_SIRA],
-                         width=22, state="readonly").pack(side="left")
+                         width=24, state="readonly").pack(side="left")
             self._eg_sira.trace_add("write", lambda *a: self._analiz_refresh())
+            self._eg_yon = tk.StringVar(value="🔽 En iyi önce")
+            ttk.Combobox(egs, textvariable=self._eg_yon, values=["🔽 En iyi önce", "🔼 En kötü önce"],
+                         width=14, state="readonly").pack(side="left", padx=(6, 0))
+            self._eg_yon.trace_add("write", lambda *a: self._analiz_refresh())
         self._analiz_inner = self._scroll_frame(self.t_analiz, bg=self.C["P"])
         self._analiz_refresh()
 
