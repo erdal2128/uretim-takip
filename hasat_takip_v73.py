@@ -4029,7 +4029,7 @@ class App(tk.Tk):
         out = []
         for (oda, tur) in self.db.get_tum_oda_turlar():
             try:
-                _oz, verim, ikinci_orani, flaslar = self._egri_flas_veri(oda, tur)
+                oz, verim, ikinci_orani, flaslar = self._egri_flas_veri(oda, tur)
             except Exception:
                 continue
             uyumlar = []; totaller = []
@@ -4047,6 +4047,8 @@ class App(tk.Tk):
                 continue
             out.append({
                 "oda": oda, "tur": tur,
+                "firma": oz.get("firma", "") or "-",
+                "gelis": oz.get("gelis", "") or "-",
                 "uyum": (sum(uyumlar) / len(uyumlar)) if uyumlar else None,
                 "verim": verim, "ikinci_orani": ikinci_orani,
                 "toplam": sum(totaller) / len(totaller),
@@ -4076,20 +4078,23 @@ class App(tk.Tk):
         tk.Label(box, text="Bir satıra tıkla → o oda+tur eğrisini aşağıda göster.",
                  bg=self.C["P"], fg="#7a7263", font=("Segoe UI", 8)).pack(anchor="w", padx=6)
         hf = tk.Frame(box, bg="#2f6b3f"); hf.pack(fill="x", padx=6, pady=(3, 0))
-        for txt, w in [("#", 4), ("Oda", 8), ("Tur", 5), ("Toplam", 9), ("Eğri uyumu", 12), ("Verim", 9), ("İkinci", 9)]:
+        for txt, w in [("#", 3), ("Oda", 6), ("Tur", 4), ("Firma", 14), ("Geliş", 11),
+                       ("Toplam", 8), ("Uyum", 8), ("Verim", 8), ("İkinci", 8)]:
             tk.Label(hf, text=txt, bg="#2f6b3f", fg="white", font=("Segoe UI", 9, "bold"),
                      width=w, anchor="w").pack(side="left", padx=2, pady=3)
         for i, r in enumerate(puanlar[:25]):
             bg = "#fffdf7" if i % 2 == 0 else "#f3efe2"
             row = tk.Frame(box, bg=bg); row.pack(fill="x", padx=6)
             vals = [
-                ("%d" % (i + 1), 4),
-                (r["oda"], 8),
-                (str(r["tur"]), 5),
-                ("%d" % round(r["toplam"]) if r["toplam"] is not None else "—", 9),
-                ("%%%d" % round(r["uyum"]) if r["uyum"] is not None else "—", 12),
-                ((fmt(r["verim"], 1) + "%") if r["verim"] is not None else "—", 9),
-                ("%%%.1f" % (r["ikinci_orani"] * 100) if r["ikinci_orani"] is not None else "—", 9),
+                ("%d" % (i + 1), 3),
+                (r["oda"], 6),
+                (str(r["tur"]), 4),
+                (str(r.get("firma", "-"))[:14], 14),
+                (str(r.get("gelis", "-"))[:11], 11),
+                ("%d" % round(r["toplam"]) if r["toplam"] is not None else "—", 8),
+                ("%%%d" % round(r["uyum"]) if r["uyum"] is not None else "—", 8),
+                ((fmt(r["verim"], 1) + "%") if r["verim"] is not None else "—", 8),
+                ("%%%.1f" % (r["ikinci_orani"] * 100) if r["ikinci_orani"] is not None else "—", 8),
             ]
             for txt, w in vals:
                 lab = tk.Label(row, text=txt, bg=bg, fg=self.C["I"], font=("Segoe UI", 9),
