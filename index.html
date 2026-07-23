@@ -950,7 +950,7 @@ function hasatTartiTumDonguleriSenkronEt(){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v446";
+var APP_VER = "v447";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -3849,8 +3849,8 @@ function addMonths(iso,n){
    kendi kalemlerini (+/-, açıklamalı) ve kritik hataları ayrı tutar; "neden
    88 aldım" sorusuna kategori kategori cevap verilebilir.
    6 kategori, toplam 100 puan:
-     🌡️ İklim Yönetimi (25) · 🍄 Misel Gelişimi (20) · 📋 Protokol Uygunluğu (20)
-     💧 Sulama Yönetimi (15) · 📈 Trend Analizi (10) · ⚠ Risk Faktörleri (10)
+     🌡️ İklim Yönetimi (20) · 🍄 Misel Gelişimi (20) · 📋 Protokol Uygunluğu (15)
+     💧 Sulama Yönetimi (15) · 📈 Hasat Eğrisi (10) · 🦠 Hastalık Faktörleri (20)
    Korunan/genişletilen ilkeler:
    1) Gecikme HAKLI bir biyolojik sebeple (sarım/gelişme zayıf) ertelendiyse
       puan kırılmaz — bu doğru bir karardı.
@@ -3880,9 +3880,13 @@ function _donemAgirlikKatsayisi(stageAd){
    formatla çalışsın diye. */
 function _kalem(delta, aciklama){ return {delta:delta, aciklama:aciklama}; }
 
-/* 🌡️ İklim Yönetimi (25) — kompost/oda sıcaklığı, stabilite, ani değişim. */
+/* 🌡️ İklim Yönetimi (20) — kompost/oda sıcaklığı, stabilite, ani değişim.
+   Kullanıcı isteği: eski 25 puanlık ağırlıktan 5 puan alınıp Hastalık
+   Faktörleri kategorisine kaydırıldı (bkz. _puanHastalik). Ceza büyüklükleri
+   aynı kaldı; sadece tavan 25→20 indi, yani tüm İklim katkısı 5 puan aşağı
+   kaydı (mükemmel oda 100'de kalır, toplam korunur). */
 function _puanIklim(c){
-  var maks=25, kalemler=[], puan=maks, today=todayISO();
+  var maks=20, kalemler=[], puan=maks, today=todayISO();
   var gunler=(c.gunluk||[]).filter(function(r){return r.tarih<=today;}).slice().sort(function(a,b){return cmpDate(a.tarih,b.tarih);});
 
   var tehlikeCeza=0, kritikCeza=0, tehlikeGun=0, kritikGun=0, idealSeri=0, maxIdealSeri=0;
@@ -3957,11 +3961,12 @@ function _puanMiselGelisimi(c){
   return {key:"misel", ad:"🍄 Misel Gelişimi", maks:maks, puan:puan, kalemler:kalemler};
 }
 
-/* 📋 Protokol Uygunluğu (20) — tüm adımlar (kilometre taşları dahil, genel
+/* 📋 Protokol Uygunluğu (15) — tüm adımlar (kilometre taşları dahil, genel
    disiplin açısından) sırasında mı; kaçı gecikmiş, kaçı ciddi atlanmış, erken
-   yapılan var mı. */
+   yapılan var mı. Kullanıcı isteği: eski 20 puanlık ağırlıktan 5 puan alınıp
+   Hastalık Faktörleri kategorisine kaydırıldı (bkz. _puanHastalik). */
 function _puanProtokolUygunlugu(c){
-  var maks=20, kalemler=[], puan=maks, today=todayISO();
+  var maks=15, kalemler=[], puan=maks, today=todayISO();
   var gecikmis=[], atlanmis=[], erken=0, haklı=[];
   getProtokol().forEach(function(s,idx){
     if(s.silindi || s.tip==="uyari" || s.tip==="ilac" || s.tip==="su") return; /* sulama kendi kategorisinde (💧) değerlendirilir */
@@ -4064,43 +4069,60 @@ function _puanHasatEgrisi(c){
   return {key:"hasategrisi", ad:"📈 Hasat Eğrisi", maks:maks, puan:puan, kalemler:kalemler};
 }
 
-/* ⚠ Risk Faktörleri (10) — ŞU AN süregelen riskler. 🌡️ İklim kategorisi
-   GEÇMİŞ maruziyeti kalıcı olarak cezalandırır; burada aynı ihlalin hâlâ
-   DEVAM ediyor olması (düzeltilmemiş, süregelen risk) ayrıca değerlendirilir
-   — farklı bir yönetim sorunudur. Kritik hatalar da burada bir kalemle
-   toplam puana yansır (ayrıca kendi başlığında da gösterilir). */
-function _puanRiskFaktorleri(c, kritikHatalar){
-  var maks=10, kalemler=[], puan=maks;
-  tempAlerts().filter(function(a){return a.cid===c.id;}).forEach(function(a){
-    if(a.lvl===2){ puan-=4; kalemler.push(_kalem(-4,"Şu an tehlikeli sıcaklık: "+a.txt)); }
-    else if(a.lvl===1){ puan-=2; kalemler.push(_kalem(-2,"Şu an kritik sıcaklık: "+a.txt)); }
-  });
-  if(odaHastalikRiskli(c)){
-    var son14=addDays(todayISO(),-14);
-    var son14Kayitlar=(c.hastalikKayitlar||[]).filter(function(k){return k.tarih>=son14;}).sort(function(x,y){return cmpDate(y.tarih,x.tarih);});
-    var turler=son14Kayitlar.map(function(k){return k.tur;}).filter(function(t,i,arr){return t && arr.indexOf(t)===i;});
-    puan-=3; kalemler.push(_kalem(-3,"Son 14 günde "+son14Kayitlar.length+" hastalık/zararlı kaydı"+(turler.length?(" — "+turler.join(", ")):"")));
+/* Hastalık/zararlı şiddet tablosu (kullanıcı isteği, PR ile belirlendi):
+   ağır/bulaşıcı küfler 5, orta 3, hafif 2 puan kırar. Bilinmeyen/serbest
+   metin bir tür girilirse "orta" (3) sayılır. Fonksiyon kendi içinde kapalı
+   (haritayı içinde tutar) — böylece izole birim testinde de kullanılabilir. */
+function hastalikSiddet(tur){
+  var s = {
+    "Yeşil küf (Trichoderma)":5,
+    "Dactylium (Örümcek ağı hastalığı)":5,
+    "Mycogone (Islak kabarcık)":5,
+    "Verticillium":5,
+    "Bakteriyel leke":3,
+    "Diğer mantar hastalığı":3,
+    "Beyaz alçı":2,
+    "Keçeleşme":2,
+    "Sinek (Sciarid/Phorid)":2
+  };
+  return (tur in s) ? s[tur] : 3;
+}
+/* 🦠 Hastalık Faktörleri (20) — kullanıcı isteği: eski "⚠ Risk Faktörleri"
+   (10) kategorisi (hastalık zaten oradaydı) yeniden adlandırıldı ve İklim'den
+   5 + Protokol'den 5 puan eklenerek 20'ye çıkarıldı. Artık SALT hastalık/
+   zararlı değerlendiriyor:
+     • Kapsam: döngü boyunca TÜM kayıtlar (14 gün penceresi değil).
+     • Benzersiz tür sayısı 4 veya daha fazlaysa → KOŞULSUZ 0 (katı kural).
+     • Aksi halde her benzersiz türün şiddet puanı (hastalikSiddet) 20'den
+       düşülür, 0'ın altına inmez.
+   NOT: Eski Risk Faktörleri'ndeki hastalık-DIŞI cezalar (anlık sıcaklık,
+   amonyak, ilaç bekleme, kalıcı kritik hata, riskli erteleme) bu kategoriyle
+   birlikte KALDIRILDI — bunlar hâlâ Oda Analizi'nin Kritik/Dikkat bölümlerinde
+   ve ilgili kartlarda (sıcaklık uyarısı, ilaç geçmişi, AI rozetleri) görünür,
+   sadece artık ayrı bir puan kalemi değildir. */
+function _puanHastalik(c){
+  var maks=20, kalemler=[], puan=maks;
+  var kayitlar=(c && c.hastalikKayitlar)?c.hastalikKayitlar:[];
+  var turler=kayitlar.map(function(k){return k.tur;}).filter(function(t,i,arr){return t && arr.indexOf(t)===i;});
+  if(!turler.length){ return {key:"hastalik", ad:"🦠 Hastalık Faktörleri", maks:maks, puan:maks, kalemler:kalemler}; }
+  if(turler.length>=4){
+    kalemler.push(_kalem(-maks, turler.length+" farklı hastalık/zararlı türü ("+turler.join(", ")+") — 4+ tür kuralıyla puan sıfırlandı"));
+    return {key:"hastalik", ad:"🦠 Hastalık Faktörleri", maks:maks, puan:0, kalemler:kalemler};
   }
-  var son=sonGunluk(c);
-  if(son && son.amonyak==="Var"){ puan-=2; kalemler.push(_kalem(-2,"Amonyak kokusu bildirilmiş")); }
-  ilacGecmisi(c).forEach(function(g){
-    if(g.uyari.some(function(u){return u.indexOf("⚠️")===0;})){ puan-=3; kalemler.push(_kalem(-3, g.ad+": hasat öncesi bekleme ihlali riski")); }
+  turler.forEach(function(t){
+    var w=hastalikSiddet(t);
+    puan-=w; kalemler.push(_kalem(-w, t+" (−"+w+")"));
   });
-  if(kritikHatalar.length){ var d=Math.min(6,kritikHatalar.length*2); puan-=d; kalemler.push(_kalem(-d, kritikHatalar.length+" kalıcı kritik hata (aşağıda detaylı)")); }
-  /* Yapay Zekâ Kontrolü'nün "🔴 riskli" bulduğu protokol adımı ertelemeleri —
-     kullanıcı isteği: "erteleme üretim açısından risk oluşturuyorsa puanı
-     etkileyebilir" — normal gecikme cezasının (Protokol Uygunluğu/Misel
-     Gelişimi) ÜSTÜNE, veriyle çelişen gerekçe seçimi için ayrı bir ceza. */
-  var riskliErtelemeSayisi = c.erteleAIVerdict ? Object.keys(c.erteleAIVerdict).filter(function(k){return c.erteleAIVerdict[k]==="kirmizi";}).length : 0;
-  if(riskliErtelemeSayisi>0){ var d2=Math.min(4,riskliErtelemeSayisi*2); puan-=d2; kalemler.push(_kalem(-d2, riskliErtelemeSayisi+" erteleme kararı seçilen gerekçeyle çelişen verilerle kaydedildi (🔴)")); }
   puan=Math.max(0,Math.min(maks,Math.round(puan)));
-  return {key:"risk", ad:"⚠ Risk Faktörleri", maks:maks, puan:puan, kalemler:kalemler};
+  return {key:"hastalik", ad:"🦠 Hastalık Faktörleri", maks:maks, puan:puan, kalemler:kalemler};
 }
 
 /* Kalıcı/kritik hatalar — normal kategori cezalarından AYRI listelenir
-   (kullanıcı isteği: "bu hatalar ayrı değerlendirilsin"). Risk Faktörleri
-   kategorisi üzerinden toplam puana da yansır, ama kullanıcıya HER ZAMAN
-   kendi başlığı altında, gerekçesiyle gösterilir. */
+   (kullanıcı isteği: "bu hatalar ayrı değerlendirilsin"). Kullanıcıya HER
+   ZAMAN kendi başlığı altında, gerekçesiyle gösterilir. NOT: Eskiden Risk
+   Faktörleri kategorisi üzerinden toplam puana da bir kalemle yansıyordu; o
+   kategori Hastalık Faktörleri'ne dönüştürülünce (kullanıcı isteği) bu puan
+   bağı kalktı — kritik hatalar artık yalnızca kendi başlığında raporlanır. */
 function _kritikHatalarTespit(c){
   var out=[], today=todayISO();
   var seri=0, maxSeri=0;
@@ -4208,7 +4230,7 @@ function odaPerformans(c){
     _puanProtokolUygunlugu(c),
     _puanSulamaYonetimi(c),
     _puanHasatEgrisi(c),
-    _puanRiskFaktorleri(c, kritikHatalar)
+    _puanHastalik(c)
   ];
   var toplamPuan=Math.max(0,Math.min(100,Math.round(kategoriler.reduce(function(s,k){return s+k.puan;},0))));
 
@@ -8090,7 +8112,7 @@ function setKGNem(id,val){
   }
   saveData(); renderDetail(id);
 }
-var HASTALIK_TURLERI = ["Yeşil küf (Trichoderma)","Dactylium (Örümcek ağı hastalığı)","Mycogone (Islak kabarcık)","Verticillium","Bakteriyel leke","Keçeleşme","Diğer mantar hastalığı","Sinek (Sciarid/Phorid)"];
+var HASTALIK_TURLERI = ["Yeşil küf (Trichoderma)","Dactylium (Örümcek ağı hastalığı)","Mycogone (Islak kabarcık)","Verticillium","Bakteriyel leke","Beyaz alçı","Keçeleşme","Diğer mantar hastalığı","Sinek (Sciarid/Phorid)"];
 function hastalikTurRenk(tur){
   if(tur==="Sinek (Sciarid/Phorid)") return "#8e5a1f";
   return "#c0392b";
@@ -13114,7 +13136,7 @@ function odaAnalizVeri(c){
        içinde birden fazla hastalık/zararlı (ör. sinek + beyaz alçı + yeşil küf)
        kaydedilmiş olabilir. Eskiden sadece en son kayıt ([0]) gösteriliyordu,
        diğerleri bu kritik risk satırında görünmüyordu (kullanıcı raporu). Puan
-       Detayı'ndaki kalem (bkz. _puanRiskFaktorleri) zaten tüm türleri
+       Detayı'ndaki kalem (bkz. _puanHastalik) zaten tüm türleri
        listeliyor — burada da aynı çıpayı kullanıyoruz. */
     var son14H=addDays(today,-14);
     var son14HKayitlar=(c.hastalikKayitlar||[]).filter(function(k){return k.tarih>=son14H;}).sort(function(x,y){return cmpDate(y.tarih,x.tarih);});
@@ -13297,6 +13319,13 @@ function uretimMuduruRaporHTML(){
 function odaAnalizHTML(c){
   var v=odaAnalizVeri(c);
   var body='';
+  /* Kullanıcı isteği: Oda Analizi'nin EN ÜSTÜNE kompost firması, geliş tarihi
+     ve kaçıncı tur olduğu bilgisi yazılsın (künye satırı). */
+  var kunye=[];
+  kunye.push('🏭 '+(c.kompostFirma?esc(c.kompostFirma):'Firma —'));
+  kunye.push('📅 Geliş: '+(c.gelisTarihi?fmtDate(c.gelisTarihi):'—'));
+  kunye.push('🔄 '+((c.tur!=null&&c.tur!=='')?(esc(''+c.tur)+'. tur'):'Tur —'));
+  body+='<div style="font-size:13px;font-weight:600;padding:6px 9px;background:var(--green-soft);border-radius:6px;margin-bottom:8px;line-height:1.7;">'+kunye.join(' · ')+'</div>';
   var olc=[];
   if(v.son){
     if(v.son.kompostC) olc.push("kompost "+esc(v.son.kompostC)+"°");
@@ -13309,7 +13338,7 @@ function odaAnalizHTML(c){
     +(v.perf?('<div style="font-size:12.5px;font-style:italic;color:var(--muted);margin-top:4px;">'+esc(v.perf.yorum)+'</div>'):'');
   body+=_analizBlokHTML('Genel Durum','#333','<div style="font-size:13px;">'+gd+'</div>');
   /* Puan Detayı — kullanıcı isteği: "neden 88 aldım" sorusuna kategori
-     kategori (🌡️🍄📋💧📈⚠), kritik hatalar ve tahmin/güven ile tek yerden
+     kategori (🌡️🍄📋💧📈🦠), kritik hatalar ve tahmin/güven ile tek yerden
      cevap verilsin. puanCardHTML ile AYNI ortak render fonksiyonu (SSOT). */
   if(v.perf) body+=_analizBlokHTML('📊 Puan Detayı','#333', _performansDetayHTML(v.perf));
   /* Kullanıcı isteği: bu ana analiz ekranı, yeni Üretim Değerlendirme
