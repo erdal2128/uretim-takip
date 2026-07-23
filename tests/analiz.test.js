@@ -14,7 +14,11 @@ var loadFns = require("./helpers/loadFns").loadFns;
 var SHIM = [
   "function loadData(){ return global.__TEST_DATA; }",
   "var ODA_MAX=21, KOMPOST_IDEAL_MAX=26, KOMPOST_IDEAL_MIN=24, KOMPOST_KRITIK_ALT=21, KOMPOST_KRITIK_UST=28, KOMPOST_TEHLIKELI=30, KOMPOST_TEHLIKE_ALT=18;",
-  "function getProtokol(){ return global.__TEST_PROTOKOL || []; }"
+  "function getProtokol(){ return global.__TEST_PROTOKOL || []; }",
+  // Eski Risk Faktörleri'nden İklim/Protokol'e taşınan cezaların dış bağımlılıkları:
+  "function tempAlerts(){ return global.__TEST_ALERTS || []; }",
+  "function sonGunluk(c){ return global.__TEST_SON || null; }",
+  "function ilacGecmisi(c){ return global.__TEST_ILAC || []; }"
 ].join("\n");
 
 var fns = loadFns(
@@ -32,6 +36,10 @@ var _puanProtokolUygunlugu = fns._puanProtokolUygunlugu;
 
 function setTestData(settings) {
   global.__TEST_DATA = { settings: settings || {} };
+  // Taşınan cezaların dış girdileri her testte temiz başlasın (sızıntı olmasın)
+  global.__TEST_ALERTS = [];
+  global.__TEST_SON = null;
+  global.__TEST_ILAC = [];
 }
 function setTestProtokol(steps) {
   global.__TEST_PROTOKOL = steps;
@@ -235,4 +243,61 @@ test("_puanProtokolUygunlugu: kritikHatalar parametresi verilmezse çökmez", fu
   setTestProtokol([]);
   var r = _puanProtokolUygunlugu({});
   assert.equal(r.puan, 15);
+});
+
+// ---------- Taşınan cezalar: İklim (anlık sıcaklık + amonyak) ----------
+// Kullanıcı isteği: eski Risk Faktörleri'ndeki anlık tehlikeli/kritik sıcaklık
+// ve amonyak cezaları İklim kategorisine bağlandı.
+test("_puanIklim: anlık tehlikeli sıcaklık (lvl2) −4 kırar", function () {
+  setTestData();
+  global.__TEST_ALERTS = [{ cid: "ODA1", lvl: 2, txt: "kompost 31°" }];
+  var r = _puanIklim({ id: "ODA1" });
+  var kalem = r.kalemler.filter(function (k) { return /Şu an tehlikeli/.test(k.aciklama); })[0];
+  assert.ok(kalem);
+  assert.equal(kalem.delta, -4);
+  assert.equal(r.puan, 20 - 4);
+});
+
+test("_puanIklim: anlık kritik sıcaklık (lvl1) −2 kırar", function () {
+  setTestData();
+  global.__TEST_ALERTS = [{ cid: "ODA1", lvl: 1, txt: "oda 23°" }];
+  var r = _puanIklim({ id: "ODA1" });
+  assert.equal(r.puan, 20 - 2);
+});
+
+test("_puanIklim: başka odanın sıcaklık uyarısı bu odayı etkilemez", function () {
+  setTestData();
+  global.__TEST_ALERTS = [{ cid: "BASKA", lvl: 2, txt: "kompost 31°" }];
+  var r = _puanIklim({ id: "ODA1" });
+  assert.equal(r.puan, 20);
+});
+
+test("_puanIklim: amonyak 'Var' −2 kırar", function () {
+  setTestData();
+  global.__TEST_SON = { amonyak: "Var" };
+  var r = _puanIklim({ id: "ODA1" });
+  var kalem = r.kalemler.filter(function (k) { return /Amonyak/.test(k.aciklama); })[0];
+  assert.ok(kalem);
+  assert.equal(kalem.delta, -2);
+  assert.equal(r.puan, 20 - 2);
+});
+
+// ---------- Taşınan cezalar: Protokol (ilaç bekleme + riskli erteleme) ----------
+test("_puanProtokolUygunlugu: ilaç hasat öncesi bekleme ihlali −3 kırar", function () {
+  setTestData();
+  setTestProtokol([]);
+  global.__TEST_ILAC = [{ ad: "İlaç X", uyari: ["⚠️ bekleme dolmamış"] }];
+  var r = _puanProtokolUygunlugu({}, []);
+  var kalem = r.kalemler.filter(function (k) { return /bekleme ihlali/.test(k.aciklama); })[0];
+  assert.ok(kalem);
+  assert.equal(kalem.delta, -3);
+});
+
+test("_puanProtokolUygunlugu: riskli erteleme (2 kırmızı) −min(4,4)=−4 kırar", function () {
+  setTestData();
+  setTestProtokol([]);
+  var r = _puanProtokolUygunlugu({ erteleAIVerdict: { p0: "kirmizi", p1: "kirmizi", p2: "yesil" } }, []);
+  var kalem = r.kalemler.filter(function (k) { return /çelişen verilerle/.test(k.aciklama); })[0];
+  assert.ok(kalem);
+  assert.equal(kalem.delta, -4);
 });

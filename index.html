@@ -950,7 +950,7 @@ function hasatTartiTumDonguleriSenkronEt(){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v448";
+var APP_VER = "v449";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -3923,6 +3923,19 @@ function _puanIklim(c){
   }
   if(aniDegisim>0){ var d=Math.min(3,aniDegisim); puan-=d; kalemler.push(_kalem(-d, aniDegisim+" ani kompost sıcaklığı sıçraması (≥3°)")); }
 
+  /* Anlık tehlikeli/kritik sıcaklık (ŞU AN o odada aktif sıcaklık uyarısı) ve
+     amonyak — kullanıcı isteği: eski "Risk Faktörleri" kategorisi Hastalık
+     Faktörleri'ne dönüşünce bu cezalar puanlamadan çıkmıştı, İklim'e geri
+     bağlandı (sıcaklık ve hava/ortam kalitesi bu kategorinin konusu).
+     Yukarıdaki kalemler GEÇMİŞ maruziyeti cezalandırır; bu ikisi şu anki
+     durumu ekler. */
+  tempAlerts().filter(function(a){return a.cid===c.id;}).forEach(function(a){
+    if(a.lvl===2){ puan-=4; kalemler.push(_kalem(-4,"Şu an tehlikeli sıcaklık: "+a.txt)); }
+    else if(a.lvl===1){ puan-=2; kalemler.push(_kalem(-2,"Şu an kritik sıcaklık: "+a.txt)); }
+  });
+  var _sonAmonyak=sonGunluk(c);
+  if(_sonAmonyak && _sonAmonyak.amonyak==="Var"){ puan-=2; kalemler.push(_kalem(-2,"Amonyak kokusu bildirilmiş")); }
+
   puan=Math.max(0,Math.min(maks,Math.round(puan)));
   return {key:"iklim", ad:"🌡️ İklim Yönetimi", maks:maks, puan:puan, kalemler:kalemler};
 }
@@ -4015,6 +4028,14 @@ function _puanProtokolUygunlugu(c, kritikHatalar){
      Faktörleri'ndeki ile aynı: −min(6, n×2). */
   var kh = kritikHatalar || [];
   if(kh.length){ var dk=Math.min(6,kh.length*2); puan-=dk; kalemler.push(_kalem(-dk, kh.length+" kalıcı kritik hata (aşağıda detaylı)")); }
+  /* İlaç bekleme ihlali (hasat öncesi bekleme süresi dolmadan hasat riski) ve
+     veriyle çelişen riskli erteleme kararları — kullanıcı isteği: eski Risk
+     Faktörleri'nden buraya taşındı (ikisi de protokol/zamanlama disiplini). */
+  ilacGecmisi(c).forEach(function(g){
+    if(g.uyari.some(function(u){return u.indexOf("⚠️")===0;})){ puan-=3; kalemler.push(_kalem(-3, g.ad+": hasat öncesi bekleme ihlali riski")); }
+  });
+  var riskliErtelemeSayisi = c.erteleAIVerdict ? Object.keys(c.erteleAIVerdict).filter(function(k){return c.erteleAIVerdict[k]==="kirmizi";}).length : 0;
+  if(riskliErtelemeSayisi>0){ var dErt=Math.min(4,riskliErtelemeSayisi*2); puan-=dErt; kalemler.push(_kalem(-dErt, riskliErtelemeSayisi+" erteleme kararı seçilen gerekçeyle çelişen verilerle kaydedildi (🔴)")); }
   puan=Math.max(0,Math.min(maks,Math.round(puan)));
   return {key:"protokol", ad:"📋 Protokol Uygunluğu", maks:maks, puan:puan, kalemler:kalemler, gecikmisAdimlar:gecikmis.concat(atlanmis), haklıGecikme:haklı};
 }
@@ -4104,11 +4125,11 @@ function hastalikSiddet(tur){
      • Benzersiz tür sayısı 4 veya daha fazlaysa → KOŞULSUZ 0 (katı kural).
      • Aksi halde her benzersiz türün şiddet puanı (hastalikSiddet) 20'den
        düşülür, 0'ın altına inmez.
-   NOT: Eski Risk Faktörleri'ndeki hastalık-DIŞI cezalar (anlık sıcaklık,
-   amonyak, ilaç bekleme, kalıcı kritik hata, riskli erteleme) bu kategoriyle
-   birlikte KALDIRILDI — bunlar hâlâ Oda Analizi'nin Kritik/Dikkat bölümlerinde
-   ve ilgili kartlarda (sıcaklık uyarısı, ilaç geçmişi, AI rozetleri) görünür,
-   sadece artık ayrı bir puan kalemi değildir. */
+   NOT: Eski Risk Faktörleri'ndeki hastalık-DIŞI cezalar (kullanıcı isteğiyle)
+   kendi doğal kategorilerine TAŞINDI, kaybolmadı: anlık tehlikeli/kritik
+   sıcaklık ve amonyak → İklim (_puanIklim); ilaç bekleme ihlali, riskli
+   erteleme ve kalıcı kritik hatalar → Protokol Uygunluğu
+   (_puanProtokolUygunlugu). */
 function _puanHastalik(c){
   var maks=20, kalemler=[], puan=maks;
   var kayitlar=(c && c.hastalikKayitlar)?c.hastalikKayitlar:[];
