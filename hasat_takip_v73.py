@@ -61,6 +61,15 @@ except Exception:
     hasat_egrisi = None
     HAS_EGRI = False
 
+# Hasat eğrisi sıralama seçenekleri: (anahtar, etiket). "" = kapalı.
+EGRI_SIRA = [
+    ("", "— sıralama kapalı —"),
+    ("toplam", "🏆 Toplam puan"),
+    ("uyum", "🌊 En iyi hasat eğrisi (uyum)"),
+    ("verim", "⚖️ En iyi hasat oranı (verim)"),
+    ("ikinci", "🧺 En temiz (İkinci az)"),
+]
+
 MONTHS = ["Ocak","Şubat","Mart","Nisan","Mayıs","Haziran","Temmuz","Ağustos","Eylül","Ekim","Kasım","Aralık"]
 PLOTS  = ["A-1","A-2","A-3","A-4","A-5","A-6","A-7","E-1",
           "B-1","B-2","B-3","B-4","B-5","B-6","B-7","B-8","B-9","B-10",
@@ -4010,6 +4019,91 @@ class App(tk.Tk):
             flaslar[2 if flas == 2 else 1].append(kasa)
         return oz, oz.get("verim"), ikinci_orani, flaslar
 
+    def _egri_tum_puanlar(self):
+        """Tüm oda+turların hasat eğrisi metrikleri (sıralama için). Her oda+tur:
+        {oda,tur, uyum(F1/F2 ort %|None), verim(%|None), ikinci_orani, toplam(F1/F2
+        ort puan)}. Tek _analiz_refresh içinde bir kez hesaplanır (önbellekli)."""
+        if getattr(self, "_egri_puan_cache", None) is not None:
+            return self._egri_puan_cache
+        refs = self._tesis_referanslari()
+        out = []
+        for (oda, tur) in self.db.get_tum_oda_turlar():
+            try:
+                _oz, verim, ikinci_orani, flaslar = self._egri_flas_veri(oda, tur)
+            except Exception:
+                continue
+            uyumlar = []; totaller = []
+            for f in (1, 2):
+                kasalar = flaslar[f]
+                if len(kasalar) < 2:
+                    continue
+                ref, _n = refs.get(f, (None, 0))
+                ref_yuzde = ref if ref else hasat_egrisi.resample_ref(len(kasalar))
+                p = hasat_egrisi.flas_puan(kasalar, ref_yuzde, verim, ikinci_orani)
+                if p["uyum"] is not None:
+                    uyumlar.append(p["uyum"])
+                totaller.append(p["toplam"])
+            if not totaller:
+                continue
+            out.append({
+                "oda": oda, "tur": tur,
+                "uyum": (sum(uyumlar) / len(uyumlar)) if uyumlar else None,
+                "verim": verim, "ikinci_orani": ikinci_orani,
+                "toplam": sum(totaller) / len(totaller),
+            })
+        self._egri_puan_cache = out
+        return out
+
+    def _egri_siralama_render(self, parent, sira_key):
+        """Tüm oda+turları seçilen kritere göre sıralı bir tablo olarak çizer.
+        Satıra tıklayınca o oda+tur alttaki detay eğrisine yüklenir."""
+        puanlar = self._egri_tum_puanlar()
+        if not puanlar:
+            return
+        buyuk = 9e9
+        if sira_key == "ikinci":
+            puanlar.sort(key=lambda r: (r["ikinci_orani"] if r["ikinci_orani"] is not None else buyuk))
+        elif sira_key == "verim":
+            puanlar.sort(key=lambda r: -(r["verim"] if r["verim"] is not None else -1))
+        elif sira_key == "uyum":
+            puanlar.sort(key=lambda r: -(r["uyum"] if r["uyum"] is not None else -1))
+        else:  # toplam
+            puanlar.sort(key=lambda r: -(r["toplam"] if r["toplam"] is not None else -1))
+        lbl = next((l for k, l in EGRI_SIRA if k == sira_key), "")
+        box = tk.Frame(parent, bg=self.C["P"]); box.pack(fill="x", padx=6, pady=(2, 8))
+        tk.Label(box, text="📊 Sıralama — %s (ilk 25)" % lbl, bg=self.C["P"], fg=self.C["G"],
+                 font=("Georgia", 11, "bold")).pack(anchor="w", padx=6, pady=(2, 1))
+        tk.Label(box, text="Bir satıra tıkla → o oda+tur eğrisini aşağıda göster.",
+                 bg=self.C["P"], fg="#7a7263", font=("Segoe UI", 8)).pack(anchor="w", padx=6)
+        hf = tk.Frame(box, bg="#2f6b3f"); hf.pack(fill="x", padx=6, pady=(3, 0))
+        for txt, w in [("#", 4), ("Oda", 8), ("Tur", 5), ("Toplam", 9), ("Eğri uyumu", 12), ("Verim", 9), ("İkinci", 9)]:
+            tk.Label(hf, text=txt, bg="#2f6b3f", fg="white", font=("Segoe UI", 9, "bold"),
+                     width=w, anchor="w").pack(side="left", padx=2, pady=3)
+        for i, r in enumerate(puanlar[:25]):
+            bg = "#fffdf7" if i % 2 == 0 else "#f3efe2"
+            row = tk.Frame(box, bg=bg); row.pack(fill="x", padx=6)
+            vals = [
+                ("%d" % (i + 1), 4),
+                (r["oda"], 8),
+                (str(r["tur"]), 5),
+                ("%d" % round(r["toplam"]) if r["toplam"] is not None else "—", 9),
+                ("%%%d" % round(r["uyum"]) if r["uyum"] is not None else "—", 12),
+                ((fmt(r["verim"], 1) + "%") if r["verim"] is not None else "—", 9),
+                ("%%%.1f" % (r["ikinci_orani"] * 100) if r["ikinci_orani"] is not None else "—", 9),
+            ]
+            for txt, w in vals:
+                lab = tk.Label(row, text=txt, bg=bg, fg=self.C["I"], font=("Segoe UI", 9),
+                               width=w, anchor="w", cursor="hand2")
+                lab.pack(side="left", padx=2, pady=2)
+                lab.bind("<Button-1>", lambda e, o=r["oda"], t=r["tur"]: self._egri_sec(o, t))
+            row.bind("<Button-1>", lambda e, o=r["oda"], t=r["tur"]: self._egri_sec(o, t))
+
+    def _egri_sec(self, oda, tur):
+        """Sıralama tablosundan bir oda+tur seçilince detay eğrisine yükler."""
+        self._eg_oda.set(oda)
+        self._eg_tur.set(str(tur))
+        self._analiz_refresh()
+
     def _egri_render(self, parent):
         """Seçili oda+tur için F1/F2 hasat eğrisi KARTLARINI parent'ın en üstüne
         çizer. Her flaş 100 puanlık ayrı kart: Eğri uyumu (tesis referansına
@@ -4021,6 +4115,10 @@ class App(tk.Tk):
         box.pack(fill="x", padx=4, pady=(4, 12))
         tk.Label(box, text="🌊 Hasat Eğrisi", bg=self.C["P"], fg=self.C["G"],
                  font=("Georgia", 13, "bold")).pack(anchor="w", padx=10, pady=(8, 2))
+        # Sıralama tablosu (bir kriter seçiliyse en üstte)
+        sira_key = next((k for k, l in EGRI_SIRA if l == self._eg_sira.get()), "") if hasattr(self, "_eg_sira") else ""
+        if sira_key:
+            self._egri_siralama_render(box, sira_key)
         if not oda or not tur_s:
             tk.Label(box, text="Yukarıdan bir oda ve tur seçip 🔄 Göster'e basın.",
                      bg=self.C["P"], fg="#7a7263", font=("Segoe UI", 9)).pack(anchor="w", padx=10, pady=(0, 10))
@@ -4385,6 +4483,12 @@ class App(tk.Tk):
                        command=self._analiz_refresh).pack(side="left")
             ttk.Button(egs, text="📄 PDF",
                        command=self._egri_pdf).pack(side="left", padx=(8, 0))
+            # Sıralama (tüm oda+turları puanlama bileşenine göre sırala)
+            ttk.Label(egs, text="   Sırala:", style="S.TLabel").pack(side="left", padx=(0, 4))
+            self._eg_sira = tk.StringVar(value=EGRI_SIRA[0][1])
+            ttk.Combobox(egs, textvariable=self._eg_sira, values=[e[1] for e in EGRI_SIRA],
+                         width=22, state="readonly").pack(side="left")
+            self._eg_sira.trace_add("write", lambda *a: self._analiz_refresh())
         self._analiz_inner = self._scroll_frame(self.t_analiz, bg=self.C["P"])
         self._analiz_refresh()
 
@@ -4393,7 +4497,8 @@ class App(tk.Tk):
             return
         for w in self._analiz_inner.winfo_children():
             w.destroy()
-        self._egri_ref_cache = None  # tesis referansı bu yenilemede bir kez hesaplansın
+        self._egri_ref_cache = None   # tesis referansı bu yenilemede bir kez hesaplansın
+        self._egri_puan_cache = None  # sıralama puanları bir kez hesaplansın
         try:
             yil = int(self._an_y.get())
             ay = list(MONTHS).index(self._an_m.get()) + 1
