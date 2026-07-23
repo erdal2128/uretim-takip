@@ -950,7 +950,7 @@ function hasatTartiTumDonguleriSenkronEt(){
 
 /* ---------- Depolama (offline, localStorage + bellek yedeği) ---------- */
 var STORE_KEY = "uretim_takip_v1";
-var APP_VER = "v450";
+var APP_VER = "v451";
 var memData = null;
 var _veriOkumaHatasi=false;
 function loadData(){
@@ -14979,29 +14979,30 @@ function _firmaUretimKolayligi(cycles){
 }
 /* 🦠 Hastalık (15) — kullanıcı isteği: çoğu hastalık/zararlı (yeşil küf, beyaz
    alçı, hatta büyük oranda sinek) kompost/firma kaynaklıdır; firma karnesine
-   ayrı bir kategori olarak eklendi. Her odanın hastalık puanı, oda tarafındaki
-   _puanHastalik (20 üzerinden; şiddet tablosu + "4+ farklı tür = 0" kuralı) ile
-   hesaplanıp firma genelinde ortalanır ve 15'e ölçeklenir. Böylece hastalıklı
-   kompost gönderen firma, karnede otomatik olarak puan kaybeder. */
+   ayrı bir kategori olarak eklendi. Ölçü: HASTALIK GÖRÜLME ORANI — firmanın kaç
+   odasında hastalık/zararlı görüldüğü / toplam oda. Puan = 15 × (1 − oran):
+   hiç görülmezse 15, her odada görülürse 0, doğrusal. Şiddet/tür sayısı burada
+   ölçüye girmez (oda tarafındaki _puanHastalik şiddeti zaten değerlendiriyor);
+   firma seviyesinde asıl soru "bu firmanın kompostu ne SIKLIKLA hastalık
+   çıkarıyor" olduğu için sıklık esas alınır. */
 function _firmaHastalik(cycles){
   var maks=15;
-  if(!cycles.length) return {puan:maks, maks:maks, kalemler:[_kalem(0,"Yeterli veri yok — nötr puan verildi")]};
-  var puanlar=cycles.map(function(c){return _puanHastalik(c).puan;}); /* her biri 0-20 */
-  var ort=puanlar.reduce(function(a,b){return a+b;},0)/puanlar.length;
-  var puan=Math.max(0,Math.round((ort/20)*maks*10)/10);
+  if(!cycles.length) return {puan:maks, maks:maks, kalemler:[_kalem(0,"Yeterli veri yok — nötr puan verildi")], hastalikliOda:0, oran:null};
   var hastalikliOda=0, turSayaci={};
   cycles.forEach(function(c){
     var turler=(c.hastalikKayitlar||[]).map(function(k){return k.tur;}).filter(function(t,i,arr){return t && arr.indexOf(t)===i;});
     if(turler.length){ hastalikliOda++; turler.forEach(function(t){ turSayaci[t]=(turSayaci[t]||0)+1; }); }
   });
+  var oran=hastalikliOda/cycles.length; /* 0-1 */
+  var puan=Math.max(0,Math.round(maks*(1-oran)*10)/10);
   var kalemler=[];
   if(!hastalikliOda){
-    kalemler.push(_kalem(0,"Bu firmanın odalarında hastalık/zararlı kaydı yok"));
+    kalemler.push(_kalem(0, cycles.length+" odanın hiçbirinde hastalık/zararlı kaydı yok"));
   } else {
     var turListe=Object.keys(turSayaci).sort(function(a,b){return turSayaci[b]-turSayaci[a];});
-    kalemler.push(_kalem(Math.round((puan-maks)*10)/10, hastalikliOda+"/"+cycles.length+" odada hastalık/zararlı görüldü — türler: "+turListe.slice(0,4).join(", ")));
+    kalemler.push(_kalem(Math.round((puan-maks)*10)/10, "Hastalık görülme oranı %"+Math.round(oran*100)+" ("+hastalikliOda+"/"+cycles.length+" oda) — türler: "+turListe.slice(0,4).join(", ")));
   }
-  return {puan:puan, maks:maks, kalemler:kalemler, hastalikliOda:hastalikliOda};
+  return {puan:puan, maks:maks, kalemler:kalemler, hastalikliOda:hastalikliOda, oran:oran};
 }
 function _firmaYorumUret(kategoriler, protokol, kalite, kolaylik){
   var cumleler=[];
