@@ -1,0 +1,10 @@
+# Python
+__pycache__/
+*.pyc
+
+# Yerel senkron/veritabanı çıktıları (masaüstü Hasat Takip)
+pending_sync.json
+sync_auth.json
+hasat.db
+hasat.db-shm
+hasat.db-wal
