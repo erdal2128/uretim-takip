@@ -21,12 +21,14 @@ var fns = loadFns(
   [
     "numParse", "todayISO", "parseISO", "cmpDate", "daysBetween", "addDays", "getSet",
     "_mhDates", "phaseCls", "stageAtDate", "_donemAgirlikKatsayisi", "havaHedef", "havaHedefSatiri",
-    "_kalem", "protokolAdimAlanKey", "adimYapilmaTarihi", "_kritikHatalarTespit", "_puanIklim"
+    "_kalem", "protokolAdimAlanKey", "adimYapilmaTarihi", "_kritikHatalarTespit", "_puanIklim",
+    "_puanProtokolUygunlugu"
   ],
   SHIM
 );
 var _kritikHatalarTespit = fns._kritikHatalarTespit;
 var _puanIklim = fns._puanIklim;
+var _puanProtokolUygunlugu = fns._puanProtokolUygunlugu;
 
 function setTestData(settings) {
   global.__TEST_DATA = { settings: settings || {} };
@@ -194,4 +196,43 @@ test("_puanIklim: puan hiçbir zaman 0'ın altına inmez", function () {
   }
   var r = _puanIklim({ gunluk: gunluk });
   assert.ok(r.puan >= 0);
+});
+
+// ---------- _puanProtokolUygunlugu: kritik hata cezası ----------
+// Kullanıcı isteği: eski Risk Faktörleri kategorisi Hastalık'a dönüşünce
+// kritik hataların puan bağı kopmuştu; Protokol Uygunluğu'na geri bağlandı
+// (−min(6, n×2)). Boş protokolde adım döngüsü hiç çalışmaz, ceza mantığı
+// izole test edilebilir.
+test("_puanProtokolUygunlugu: kritik hata yokken tam puan (15 tavanı)", function () {
+  setTestData();
+  setTestProtokol([]);
+  var r = _puanProtokolUygunlugu({}, []);
+  assert.equal(r.maks, 15);
+  assert.equal(r.puan, 15); // +3 bonus 15 tavanında kırpılır
+  assert.ok(!r.kalemler.some(function (k) { return /kritik hata/.test(k.aciklama); }));
+});
+
+test("_puanProtokolUygunlugu: 2 kritik hata → −min(6,4)=−4", function () {
+  setTestData();
+  setTestProtokol([]);
+  var r = _puanProtokolUygunlugu({}, ["geç havalandırma", "erken toprak"]);
+  var kalem = r.kalemler.filter(function (k) { return /kritik hata/.test(k.aciklama); })[0];
+  assert.ok(kalem, r.kalemler.map(function (k) { return k.aciklama; }).join(" | "));
+  assert.equal(kalem.delta, -4);
+  assert.equal(r.puan, 15 + 3 - 4); // boş protokol +3 bonus, sonra −4 → 14
+});
+
+test("_puanProtokolUygunlugu: kritik hata cezası 6 ile sınırlı", function () {
+  setTestData();
+  setTestProtokol([]);
+  var r = _puanProtokolUygunlugu({}, ["a", "b", "c", "d", "e"]); // 5*2=10, min(6,10)=6
+  var kalem = r.kalemler.filter(function (k) { return /kritik hata/.test(k.aciklama); })[0];
+  assert.equal(kalem.delta, -6);
+});
+
+test("_puanProtokolUygunlugu: kritikHatalar parametresi verilmezse çökmez", function () {
+  setTestData();
+  setTestProtokol([]);
+  var r = _puanProtokolUygunlugu({});
+  assert.equal(r.puan, 15);
 });
