@@ -1244,6 +1244,20 @@ class DB:
             "WHERE firma IS NOT NULL AND firma!='' ORDER BY firma").fetchall()
         return [r[0] for r in rows]
 
+    def get_tum_oda_turlar(self):
+        """Tesisteki TÜM (oda, tur) kombinasyonları (tarti_detay'dan). Tesis
+        geneli hasat eğrisi referansı için kullanılır."""
+        rows = self.conn.execute(
+            "SELECT DISTINCT oda, tur FROM tarti_detay ORDER BY oda, tur").fetchall()
+        return [(r[0], r[1]) for r in rows]
+
+    def get_tur_ikinci(self, oda, tur):
+        """Bir oda+turun toplam İkinci kalite kasası (tarti_detay)."""
+        r = self.conn.execute(
+            "SELECT COALESCE(SUM(ikinci),0) FROM tarti_detay WHERE oda=? AND tur=?",
+            (oda, tur)).fetchone()
+        return r[0] or 0
+
     def set_tarti_detay(self, oda, tarih, tur, flas, ana90, kestane, duble, dokme, ikinci):
         self.conn.execute(
             "INSERT OR REPLACE INTO tarti_detay VALUES(?,?,?,?,?,?,?,?,?)",
@@ -3958,102 +3972,104 @@ class App(tk.Tk):
         if turlar:
             self._eg_tur.set(str(turlar[-1]))
 
-    def _egri_referans(self, oda, tur, f, n):
-        """Flaş f için öğrenilmiş referans eğri (web'deki kaskad):
-        1) Bu odanın geçmiş turları (değerlendirilen tur hariç), yeterliyse;
-        2) yoksa aynı firmanın tüm turları; 3) o da yoksa None (çağıran sabit
-        ideale düşer). Döner: (ref_yuzde | None, kaynak_metni)."""
-        if not HAS_EGRI:
-            return None, "genel ideal"
-
-        def flas_ornekleri(pairs):
-            ornek = []
-            for (o, t) in pairs:
-                if o == oda and t == tur:
-                    continue  # değerlendirilen turu referansa katma
-                try:
-                    oz = self.db.get_tur_ozeti(o, t, self.kg)
-                except Exception:
-                    continue
-                gunler = sorted(oz.get("gunler", []), key=lambda g: g[0])
+    def _tesis_referanslari(self):
+        """Tesis geneli hasat eğrisi referansları (F1, F2) — TÜM oda+turların o
+        flaştaki gün dağılımlarının ortalaması (kullanıcı isteği: 'tesisimi
+        referans al'). Tek geçişte hesaplanır. Döner: {1:(ref|None,n), 2:(...)}.
+        Yeterli örnek yoksa (n<3) o flaş için ref None → çağıran genel ideale düşer.
+        Tek _analiz_refresh içinde bir kez hesaplanır (self._egri_ref_cache)."""
+        if getattr(self, "_egri_ref_cache", None) is not None:
+            return self._egri_ref_cache
+        ornek = {1: [], 2: []}
+        for (o, t) in self.db.get_tum_oda_turlar():
+            try:
+                oz = self.db.get_tur_ozeti(o, t, self.kg)
+            except Exception:
+                continue
+            gunler = sorted(oz.get("gunler", []), key=lambda g: g[0])
+            for f in (1, 2):
                 kasalar = [k for (_d, k, fl) in gunler if (2 if fl == 2 else 1) == f]
                 if len(kasalar) >= 2:
-                    ornek.append(kasalar)
-            return ornek
+                    ornek[f].append(kasalar)
+        out = {}
+        for f in (1, 2):
+            out[f] = hasat_egrisi.ogrenilmis_referans(ornek[f], 5)  # (ref|None, n)
+        self._egri_ref_cache = out
+        return out
 
-        # 1) Bu odanın geçmişi
-        oda_pairs = [(oda, t) for t in self.db.get_oda_turlari(oda)]
-        ref, nn = hasat_egrisi.ogrenilmis_referans(flas_ornekleri(oda_pairs), n)
-        if ref:
-            return ref, "bu odanın geçmişi (n=%d)" % nn
-        # 2) Firmanın geçmişi
-        try:
-            firma = self.db.get_kompost_detay(oda, tur).get("firma", "") or ""
-        except Exception:
-            firma = ""
-        if firma:
-            ref, nn = hasat_egrisi.ogrenilmis_referans(flas_ornekleri(self.db.get_firma_turlari(firma)), n)
-            if ref:
-                return ref, "%s ort. (n=%d)" % (firma, nn)
-        # 3) Sabit ideal
-        return None, "genel ideal"
+    def _egri_flas_veri(self, oda, tur):
+        """Seçili oda+tur için ortak (verim, ikinci_orani) + flaş kasa dizileri.
+        Döner: (oz, verim, ikinci_orani, {1:[kasa...], 2:[kasa...]})."""
+        oz = self.db.get_tur_ozeti(oda, tur, self.kg)
+        toplam = oz.get("toplam_kasa", 0) or 0
+        ikinci = self.db.get_tur_ikinci(oda, tur)
+        ikinci_orani = (ikinci / (toplam + ikinci)) if (toplam + ikinci) > 0 else 0.0
+        gunler = sorted(oz.get("gunler", []), key=lambda g: g[0])
+        flaslar = {1: [], 2: []}
+        for _tarih, kasa, flas in gunler:
+            flaslar[2 if flas == 2 else 1].append(kasa)
+        return oz, oz.get("verim"), ikinci_orani, flaslar
 
     def _egri_render(self, parent):
-        """Seçili oda+tur için F1/F2 hasat eğrilerini parent'ın en üstüne çizer.
-        Aylık analizden bağımsızdır; _analiz_refresh her yeniden çizimde çağırır."""
+        """Seçili oda+tur için F1/F2 hasat eğrisi KARTLARINI parent'ın en üstüne
+        çizer. Her flaş 100 puanlık ayrı kart: Eğri uyumu (tesis referansına
+        yakınlık) 50 + Verim 40 + İkinci<%1 10. Aylık analizden bağımsızdır."""
         if not HAS_EGRI:
             return
         oda = self._eg_oda.get(); tur_s = self._eg_tur.get()
         box = tk.Frame(parent, bg=self.C["P"], highlightbackground=self.C["L"], highlightthickness=1)
-        box.pack(fill="x", padx=4, pady=(4,12))
+        box.pack(fill="x", padx=4, pady=(4, 12))
         tk.Label(box, text="🌊 Hasat Eğrisi", bg=self.C["P"], fg=self.C["G"],
-                 font=("Georgia",13,"bold")).pack(anchor="w", padx=10, pady=(8,2))
+                 font=("Georgia", 13, "bold")).pack(anchor="w", padx=10, pady=(8, 2))
         if not oda or not tur_s:
             tk.Label(box, text="Yukarıdan bir oda ve tur seçip 🔄 Göster'e basın.",
-                     bg=self.C["P"], fg="#7a7263", font=("Segoe UI",9)).pack(anchor="w", padx=10, pady=(0,10))
+                     bg=self.C["P"], fg="#7a7263", font=("Segoe UI", 9)).pack(anchor="w", padx=10, pady=(0, 10))
             return
         try:
             tur = int(tur_s)
         except ValueError:
             return
-        oz = self.db.get_tur_ozeti(oda, tur, self.kg)
-        kunye = "🏭 %s   ·   📅 Geliş: %s   ·   🔄 %d. tur   ·   Σ %s kasa" % (
-            oz.get("firma", "-") or "-", oz.get("gelis", "") or "-", tur, fmt(oz.get("toplam_kasa", 0)))
+        oz, verim, ikinci_orani, flaslar = self._egri_flas_veri(oda, tur)
+        vtxt = (fmt(verim, 1) + "%") if verim is not None else "—"
+        kunye = "🏭 %s   ·   📅 %s   ·   🔄 %d. tur   ·   Σ %s kasa   ·   Verim %s   ·   İkinci %%%.1f" % (
+            oz.get("firma", "-") or "-", oz.get("gelis", "") or "-", tur,
+            fmt(oz.get("toplam_kasa", 0)), vtxt, ikinci_orani * 100)
         tk.Label(box, text=kunye, bg=self.C["P"], fg=self.C["I"],
                  font=("Segoe UI", 9, "bold")).pack(anchor="w", padx=10, pady=(0, 6))
-        # Günleri flaşlara ayır (tarihe göre sıralı kasa dizileri)
-        gunler = sorted(oz.get("gunler", []), key=lambda g: g[0])  # (tarih, kasa, flas)
-        flaslar = {1: [], 2: []}
-        for _tarih, kasa, flas in gunler:
-            flaslar[2 if flas == 2 else 1].append(kasa)
+        refs = self._tesis_referanslari()
         cizildi = False
         for f in (1, 2):
             kasalar = flaslar[f]
             if len(kasalar) < 2:
                 continue
-            ref, kaynak = self._egri_referans(oda, tur, f, len(kasalar))
-            analiz = hasat_egrisi.hasat_egrisi_analiz(kasalar, ref_yuzde=ref)
-            if not analiz:
-                continue
-            self._ciz_hasat_egrisi(box, kasalar, analiz, "%d. Flaş" % f, kaynak)
+            ref, nn = refs.get(f, (None, 0))
+            if ref:
+                ref_yuzde = ref; kaynak = "tesis ort. (n=%d)" % nn
+            else:
+                ref_yuzde = hasat_egrisi.resample_ref(len(kasalar)); kaynak = "genel ideal (tesis verisi yetersiz)"
+            puan = hasat_egrisi.flas_puan(kasalar, ref_yuzde, verim, ikinci_orani)
+            self._ciz_hasat_egrisi(box, kasalar, ref_yuzde, puan, "%d. Flaş" % f, kaynak)
             cizildi = True
         if not cizildi:
             tk.Label(box, text="Bu oda+tur için eğri çizecek yeterli hasat günü yok (flaş başına en az 2 gün gerekir).",
                      bg=self.C["P"], fg="#7a7263", font=("Segoe UI", 9)).pack(anchor="w", padx=10, pady=(0, 10))
 
-    def _ciz_hasat_egrisi(self, parent, gunluk_kasa, analiz, baslik, kaynak="genel ideal"):
-        """Bir flaşın gerçek eğrisi (düz çizgi) + referans eğri (kesikli) + puan/yorum.
-        _ciz_grafik'in eksen/ölçek desenini yeniden kullanır. `kaynak` = referans
-        eğrinin kaynağı (bu odanın geçmişi / firma ort. / genel ideal)."""
-        puan = analiz["puan"]; et = analiz["etiket"]
-        renk = self.C["G"] if puan >= 80 else ("#c47a1a" if puan >= 60 else "#c0392b")
-        bh = tk.Frame(parent, bg=self.C["P"]); bh.pack(fill="x", padx=10, pady=(8, 0))
+    def _ciz_hasat_egrisi(self, parent, gunluk_kasa, ref_yuzde, puan, baslik, kaynak):
+        """Bir flaşın 100 puanlık kartı: başlık + puan dökümü + gerçek/referans
+        eğri grafiği (tkinter Canvas). `puan` = hasat_egrisi.flas_puan çıktısı."""
+        top = puan["toplam"]
+        renk = self.C["G"] if top >= 80 else ("#c47a1a" if top >= 60 else "#c0392b")
+        yildiz = " ⭐" if puan["yildizli"] else ""
+        bh = tk.Frame(parent, bg=self.C["P"]); bh.pack(fill="x", padx=10, pady=(10, 0))
         tk.Label(bh, text=baslik, bg=self.C["P"], fg=self.C["I"],
                  font=("Segoe UI", 10, "bold")).pack(side="left")
-        tk.Label(bh, text="  %d/100 · %s" % (puan, et), bg=self.C["P"], fg=renk,
-                 font=("Segoe UI", 10, "bold")).pack(side="left")
-        tk.Label(bh, text="  (şekil: %s · zirve %d. gün · referans: %s)" % (analiz["sekil"], analiz["pik_gun"], kaynak),
-                 bg=self.C["P"], fg="#7a7263", font=("Segoe UI", 8)).pack(side="left")
+        tk.Label(bh, text="  TOPLAM %d/100%s" % (top, yildiz), bg=self.C["P"], fg=renk,
+                 font=("Segoe UI", 11, "bold")).pack(side="left")
+        uyum_txt = ("%%%.0f" % puan["uyum"]) if puan["uyum"] is not None else "—"
+        dokum = "Eğri uyumu %s → %s/50   ·   Verim → %d/40   ·   İkinci → %d/10   ·   referans: %s" % (
+            uyum_txt, fmt(puan["egri_puan"], 1), puan["verim_puan"], puan["ikinci_puan"], kaynak)
+        tk.Label(parent, text=dokum, bg=self.C["P"], fg="#7a7263",
+                 font=("Segoe UI", 8)).pack(anchor="w", padx=12, pady=(1, 2))
 
         W, H = 560, 200
         pad_l, pad_r, pad_b, pad_t = 44, 12, 26, 16
@@ -4062,7 +4078,7 @@ class App(tk.Tk):
         cv.pack(anchor="w", padx=10, pady=(2, 2))
         n = len(gunluk_kasa)
         toplam = sum(gunluk_kasa) or 1
-        ideal = [r * toplam / 100.0 for r in analiz["ref_yuzde"]]
+        ideal = [r * toplam / 100.0 for r in hasat_egrisi._resample_list(list(ref_yuzde), n)]
         max_k = max(max(gunluk_kasa), max(ideal)) or 1
         plot_w = W - pad_l - pad_r
         plot_h = H - pad_b - pad_t
@@ -4078,7 +4094,7 @@ class App(tk.Tk):
             cv.create_line(pad_l, yy, W - pad_r, yy, fill="#e8e3d8")
             cv.create_text(pad_l - 5, yy, text=fmt(max_k * frac, 0), anchor="e",
                            font=("Segoe UI", 7), fill="#7a7263")
-        # İdeal eğri (kesikli kırmızı)
+        # Referans eğri (kesikli kırmızı)
         ipts = []
         for i, v in enumerate(ideal):
             ipts += [X(i), Y(v)]
@@ -4090,7 +4106,6 @@ class App(tk.Tk):
             rpts += [X(i), Y(v)]
         if len(rpts) >= 4:
             cv.create_line(*rpts, fill=self.C["G"], width=2)
-        # Nokta + değer + gün etiketi
         for i, v in enumerate(gunluk_kasa):
             x, y = X(i), Y(v)
             cv.create_oval(x - 3, y - 3, x + 3, y + 3, fill=self.C["G"], outline="")
@@ -4099,16 +4114,11 @@ class App(tk.Tk):
                            font=("Segoe UI", 7), fill="#7a7263")
         cv.create_text(pad_l, pad_t - 3, text="kasa", anchor="w",
                        font=("Segoe UI", 7, "italic"), fill="#9a8a7a")
-        # Lejant
         lg = tk.Frame(parent, bg=self.C["P"]); lg.pack(anchor="w", padx=10)
         tk.Label(lg, text="—— Gerçek", bg=self.C["P"], fg=self.C["G"],
                  font=("Segoe UI", 7, "bold")).pack(side="left", padx=(0, 10))
-        tk.Label(lg, text="---- Referans", bg=self.C["P"], fg="#c0392b",
+        tk.Label(lg, text="---- Tesis referansı", bg=self.C["P"], fg="#c0392b",
                  font=("Segoe UI", 7)).pack(side="left")
-        # Yorumlar
-        for yrm in analiz["yorumlar"]:
-            tk.Label(parent, text="• " + yrm, bg=self.C["P"], fg=self.C["I"], font=("Segoe UI", 8),
-                     wraplength=540, justify="left").pack(anchor="w", padx=16, pady=(1, 0))
 
     def _egri_pdf(self):
         """Seçili oda+tur hasat eğrisini PDF'e aktarır — F1/F2 için vektörel eğri
@@ -4124,20 +4134,21 @@ class App(tk.Tk):
             return
         if not self._pdf_hazirla():
             return
-        oz = self.db.get_tur_ozeti(oda, tur, self.kg)
-        gunler = sorted(oz.get("gunler", []), key=lambda g: g[0])
-        flaslar = {1: [], 2: []}
-        for _tarih, kasa, flas in gunler:
-            flaslar[2 if flas == 2 else 1].append(kasa)
+        self._egri_ref_cache = None  # PDF için tesis referansını taze hesapla
+        oz, verim, ikinci_orani, flaslar = self._egri_flas_veri(oda, tur)
+        refs = self._tesis_referanslari()
         veri = []
         for f in (1, 2):
             kasalar = flaslar[f]
             if len(kasalar) < 2:
                 continue
-            ref, kaynak = self._egri_referans(oda, tur, f, len(kasalar))
-            analiz = hasat_egrisi.hasat_egrisi_analiz(kasalar, ref_yuzde=ref)
-            if analiz:
-                veri.append((f, kasalar, analiz, kaynak))
+            ref, nn = refs.get(f, (None, 0))
+            if ref:
+                ref_yuzde = ref; kaynak = "tesis ort. (n=%d)" % nn
+            else:
+                ref_yuzde = hasat_egrisi.resample_ref(len(kasalar)); kaynak = "genel ideal"
+            puan = hasat_egrisi.flas_puan(kasalar, ref_yuzde, verim, ikinci_orani)
+            veri.append((f, kasalar, ref_yuzde, puan, kaynak))
         if not veri:
             messagebox.showinfo("Bilgi", "Bu oda+tur için eğri çizecek yeterli hasat günü yok."); return
 
@@ -4171,11 +4182,11 @@ class App(tk.Tk):
             "not": ParagraphStyle("not", fontName=FI, fontSize=8, textColor=GRI, spaceBefore=10, leading=11),
         }
 
-        def drawing(kasalar, analiz):
+        def drawing(kasalar, ref_yuzde):
             W, H = 460, 150
             pl, pr, pt, pb = 34, 10, 12, 22
             n = len(kasalar); toplam = sum(kasalar) or 1
-            ideal = [r * toplam / 100.0 for r in analiz["ref_yuzde"]]
+            ideal = [r * toplam / 100.0 for r in hasat_egrisi._resample_list(list(ref_yuzde), n)]
             mx = max(max(kasalar), max(ideal)) or 1
             pw = W - pl - pr; ph = H - pt - pb
             def X(i): return pl + (pw * (i / (n - 1)) if n > 1 else pw / 2)
@@ -4199,21 +4210,22 @@ class App(tk.Tk):
 
         story = [Paragraph("DİRİCAN MANTAR", st["h1"]),
                  Paragraph("Hasat Eğrisi — %s · %d. Tur" % (oda, tur), st["alt"])]
-        kunye = "Firma: %s   ·   Geliş: %s   ·   Toplam: %s kasa" % (
-            oz.get("firma", "-") or "-", oz.get("gelis", "") or "-", fmt(oz.get("toplam_kasa", 0)))
+        vtxt = (fmt(verim, 1) + "%") if verim is not None else "—"
+        kunye = "Firma: %s   ·   Geliş: %s   ·   Toplam: %s kasa   ·   Verim: %s   ·   İkinci: %%%.1f" % (
+            oz.get("firma", "-") or "-", oz.get("gelis", "") or "-", fmt(oz.get("toplam_kasa", 0)), vtxt, ikinci_orani * 100)
         story.append(Paragraph(kunye, st["yorum"]))
-        for f, kasalar, analiz, kaynak in veri:
-            story.append(Paragraph("%d. Flaş — %d/100 (%s)" % (f, analiz["puan"], analiz["etiket"]), st["h2"]))
-            story.append(Paragraph("Şekil: %s · zirve %d. gün · referans: %s" % (
-                analiz["sekil"], analiz["pik_gun"], kaynak), st["not"]))
-            story.append(drawing(kasalar, analiz))
-            story.append(Paragraph("<b>—— Gerçek</b>   <font color='#c0392b'>---- Referans</font>", st["not"]))
-            for yrm in analiz["yorumlar"]:
-                story.append(Paragraph("• " + yrm, st["yorum"]))
+        for f, kasalar, ref_yuzde, puan, kaynak in veri:
+            yildiz = " *" if puan["yildizli"] else ""
+            story.append(Paragraph("%d. Flaş — TOPLAM %d/100%s" % (f, puan["toplam"], yildiz), st["h2"]))
+            uyum_txt = ("%%%.0f" % puan["uyum"]) if puan["uyum"] is not None else "—"
+            story.append(Paragraph("Eğri uyumu %s → %s/50 · Verim → %d/40 · İkinci → %d/10 · referans: %s" % (
+                uyum_txt, fmt(puan["egri_puan"], 1), puan["verim_puan"], puan["ikinci_puan"], kaynak), st["not"]))
+            story.append(drawing(kasalar, ref_yuzde))
+            story.append(Paragraph("<b>—— Gerçek</b>   <font color='#c0392b'>---- Tesis referansı</font>", st["not"]))
             story.append(Spacer(1, 0.2 * cm))
-        story.append(Paragraph("Not: Puan, flaşın gün-gün kasa dağılımının referans eğriye göre "
-            "zamanlama/denge kalitesini ölçer; toplam verimden bağımsızdır. Referans, yeterli geçmiş "
-            "varsa bu odanın/firmanın kendi ortalamasıdır, yoksa genel ideal eğridir.", st["not"]))
+        story.append(Paragraph("Puanlama: Eğri uyumu (gerçek dağılımın TESİS ortalama eğrisine yakınlığı) 50 + "
+            "Verim (kg/ton %: &lt;20→0, 20-23→10, 23-26→20, 26-28→30, 28+→40, 32+→yıldız) 40 + "
+            "İkinci oranı %1'in altındaysa 10. Toplam 100.", st["not"]))
 
         doc = SimpleDocTemplate(yol, pagesize=A4, topMargin=1.5 * cm, bottomMargin=1.5 * cm,
                                 leftMargin=2 * cm, rightMargin=2 * cm)
@@ -4381,6 +4393,7 @@ class App(tk.Tk):
             return
         for w in self._analiz_inner.winfo_children():
             w.destroy()
+        self._egri_ref_cache = None  # tesis referansı bu yenilemede bir kez hesaplansın
         try:
             yil = int(self._an_y.get())
             ay = list(MONTHS).index(self._an_m.get()) + 1
@@ -4596,10 +4609,10 @@ class App(tk.Tk):
             if fe:
                 tk.Label(inner, text="🌊 Firma Hasat Eğrisi Karşılaştırması",
                          bg=self.C["P"], fg=self.C["G"], font=("Georgia",12,"bold")).pack(anchor="w", padx=8, pady=(16,4))
-                tk.Label(inner, text="Hangi firmanın kompostu daha dengeli flaş veriyor — ort. eğri kalite puanı (tüm turlar, F1+F2)",
+                tk.Label(inner, text="Hangi firmanın kompostu tesis ortalama eğrisine daha yakın (dengeli/öngörülebilir flaş) — tüm turlar, F1+F2",
                          bg=self.C["P"], fg="#7a7263", font=("Segoe UI",8)).pack(anchor="w", padx=10)
                 hf = tk.Frame(inner, bg="#2f6b3f"); hf.pack(fill="x", padx=8, pady=(4,0))
-                for txt, w in [("Firma",18),("Ort. Eğri Puanı",16),("Örneklem",10),("Tipik Şekil",14)]:
+                for txt, w in [("Firma",20),("Tesis Uyumu",16),("Örneklem",12)]:
                     tk.Label(hf, text=txt, bg="#2f6b3f", fg="white", font=("Segoe UI",9,"bold"),
                              width=w, anchor="w").pack(side="left", padx=2, pady=4)
                 for i, r in enumerate(fe):
@@ -4607,13 +4620,11 @@ class App(tk.Tk):
                     renk = self.C["G"] if r["ort"] >= 80 else ("#c47a1a" if r["ort"] >= 60 else "#c0392b")
                     row = tk.Frame(inner, bg=bg); row.pack(fill="x", padx=8)
                     tk.Label(row, text=r["firma"], bg=bg, fg=self.C["I"], font=("Segoe UI",9,"bold"),
-                             width=18, anchor="w").pack(side="left", padx=2, pady=3)
-                    tk.Label(row, text="%d/100" % round(r["ort"]), bg=bg, fg=renk, font=("Segoe UI",9,"bold"),
+                             width=20, anchor="w").pack(side="left", padx=2, pady=3)
+                    tk.Label(row, text="%%%d" % round(r["ort"]), bg=bg, fg=renk, font=("Segoe UI",9,"bold"),
                              width=16, anchor="w").pack(side="left", padx=2)
                     tk.Label(row, text="%d flaş" % r["n"], bg=bg, fg=self.C["I"], font=("Segoe UI",9),
-                             width=10, anchor="w").pack(side="left", padx=2)
-                    tk.Label(row, text=r["tipik"], bg=bg, fg=self.C["I"], font=("Segoe UI",9),
-                             width=14, anchor="w").pack(side="left", padx=2)
+                             width=12, anchor="w").pack(side="left", padx=2)
 
         tk.Label(inner, text="Not: Toplam üretim ve işgücü (adam-gün) aylık ölçülür. Oda verimi ise "
                  "TUR bazlıdır — bir oda ay içinde tur değiştirebileceği için aylık oda kıyası yapılmaz. "
@@ -4622,13 +4633,15 @@ class App(tk.Tk):
                  wraplength=620, justify="left").pack(anchor="w", padx=10, pady=(14,8))
 
     def _firma_egri_karsilastir(self):
-        """Her firmanın tüm turlarındaki F1+F2 hasat eğrisi kalite puanlarını
-        ortalar; puana göre sıralı liste döner. [{firma, ort, n, tipik}]."""
+        """Her firmanın tüm turlarındaki F1+F2 eğrilerinin TESİS referansına
+        ortalama uyumu (%). Yüksek = firma kompostu tesis normaline daha yakın,
+        daha dengeli/öngörülebilir flaş veriyor. Uyuma göre sıralı. [{firma,ort,n}]."""
         if not HAS_EGRI:
             return []
+        refs = self._tesis_referanslari()
         out = []
         for firma in self.db.get_tum_firmalar():
-            puanlar = []; sekiller = {}
+            uyumlar = []
             for (o, t) in self.db.get_firma_turlari(firma):
                 try:
                     oz = self.db.get_tur_ozeti(o, t, self.kg)
@@ -4639,15 +4652,13 @@ class App(tk.Tk):
                     kasalar = [k for (_d, k, fl) in gunler if (2 if fl == 2 else 1) == f]
                     if len(kasalar) < 2:
                         continue
-                    a = hasat_egrisi.hasat_egrisi_analiz(kasalar)
-                    if not a:
-                        continue
-                    puanlar.append(a["puan"])
-                    sekiller[a["sekil"]] = sekiller.get(a["sekil"], 0) + 1
-            if puanlar:
-                tipik = max(sekiller.items(), key=lambda x: x[1])[0] if sekiller else "-"
-                out.append({"firma": firma, "ort": sum(puanlar) / len(puanlar),
-                            "n": len(puanlar), "tipik": tipik})
+                    ref, _n = refs.get(f, (None, 0))
+                    ref_yuzde = ref if ref else hasat_egrisi.resample_ref(len(kasalar))
+                    u = hasat_egrisi.egri_uyum(kasalar, ref_yuzde)
+                    if u is not None:
+                        uyumlar.append(u)
+            if uyumlar:
+                out.append({"firma": firma, "ort": sum(uyumlar) / len(uyumlar), "n": len(uyumlar)})
         out.sort(key=lambda x: -x["ort"])
         return out
 

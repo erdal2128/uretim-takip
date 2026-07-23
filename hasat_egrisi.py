@@ -73,6 +73,68 @@ def ogrenilmis_referans(ornekler, n, min_ornek=3):
     return _normalize100(ort), len(egriler)
 
 
+def egri_uyum(gunluk_kasa, ref_yuzde):
+    """Bir flaşın gerçek gün dağılımı ile referans eğri arasındaki YAKINLIK
+    yüzdesi (0-100). 100 = birebir aynı, 0 = tamamen farklı. Ölçü: toplam
+    değişim uzaklığı (TVD) = 0.5 × Σ|gerçek% − referans%|; uyum = 100 − TVD.
+    Kullanıcı isteği: 'tesise göre grafiğe ne kadar yakınsa o kadar iyi'.
+    Referans farklı gün sayısındaysa gerçek eğrinin gün sayısına örneklenir.
+    Değerlendirilemiyorsa (veri yok / referans yok) None döner."""
+    k = [float(x or 0) for x in (gunluk_kasa or [])]
+    if len(k) < 2 or sum(k) <= 0 or not ref_yuzde:
+        return None
+    a = _normalize100(k)
+    r = _normalize100(_resample_list(list(ref_yuzde), len(a)))
+    tvd = 0.5 * sum(abs(a[i] - r[i]) for i in range(len(a)))
+    return max(0.0, 100.0 - tvd)
+
+
+# Verim (kg/ton yüzdesi) puan basamakları — kullanıcı isteği.
+VERIM_BASAMAK = [(20, 0), (23, 10), (26, 20), (28, 30)]  # üst sınır (hariç), puan
+VERIM_YILDIZ = 32  # bu değerin ÜSTÜ yıldızlı 40 puan
+
+
+def verim_puani(verim):
+    """Verim yüzdesine göre (40 üzerinden) puan + yıldız bayrağı.
+    <20→0 · 20-23→10 · 23-26→20 · 26-28→30 · 28+→40 · 32+→⭐40.
+    verim None (tonaj girilmemiş) ise (0, False)."""
+    if verim is None:
+        return 0, False
+    v = float(verim)
+    for ust, puan in VERIM_BASAMAK:
+        if v < ust:
+            return puan, False
+    return 40, (v > VERIM_YILDIZ)
+
+
+def ikinci_puani(ikinci_orani):
+    """İkinci kalite oranı %1'in altındaysa +10, değilse 0 (kullanıcı isteği:
+    'ikinci oranı %1'den çok azsa 10 puan'). ikinci_orani None ise 0."""
+    if ikinci_orani is None:
+        return 0
+    return 10 if ikinci_orani < 0.01 else 0
+
+
+def flas_puan(gunluk_kasa, ref_yuzde, verim, ikinci_orani):
+    """Bir flaşın 100 üzerinden bileşik puanı (kullanıcı isteği):
+      • Eğri uyumu (tesis referansına yakınlık)  → 50
+      • Verim basamağı                            → 40
+      • İkinci oranı < %1                          → 10
+    Döner: {toplam, yildizli, uyum, egri_puan, verim_puan, ikinci_puan}."""
+    uyum = egri_uyum(gunluk_kasa, ref_yuzde)          # 0-100 | None
+    egri = round((uyum or 0.0) / 100.0 * 50.0, 1)
+    vp, yildiz = verim_puani(verim)
+    ip = ikinci_puani(ikinci_orani)
+    return {
+        "toplam": int(round(egri + vp + ip)),
+        "yildizli": yildiz,
+        "uyum": uyum,
+        "egri_puan": egri,
+        "verim_puan": vp,
+        "ikinci_puan": ip,
+    }
+
+
 def etiket(puan):
     """Puanı okunaklı banda çevirir (web hasatEgriPuanEtiket ile aynı eşikler)."""
     if puan >= 100:
