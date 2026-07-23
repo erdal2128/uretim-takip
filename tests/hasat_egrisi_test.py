@@ -71,6 +71,36 @@ def test_resample_ref_toplam_100():
         assert abs(s - 100.0) < 0.01, (n, s)
 
 
+def test_ogrenilmis_referans_yeterli_ornek():
+    # 4 benzer flaş → öğrenilmiş referans döner, toplam ~100, 5 gün
+    ornekler = [[5, 20, 35, 30, 13], [6, 18, 34, 29, 14], [4, 22, 36, 28, 12], [5, 21, 35, 30, 13]]
+    ref, n = he.ogrenilmis_referans(ornekler, 5)
+    assert ref is not None and n == 4
+    assert abs(sum(ref) - 100.0) < 0.01
+    assert len(ref) == 5
+
+
+def test_ogrenilmis_referans_yetersiz_none():
+    ref, n = he.ogrenilmis_referans([[5, 20, 35, 30, 13], [6, 18, 34, 29, 14]], 5)  # 2 < 3
+    assert ref is None and n == 2
+
+
+def test_ogrenilmis_referans_farkli_gun_sayisi_hizalanir():
+    # 3 gün + 5 gün + 4 gün örnekler ortak n=5'e hizalanmalı
+    ref, n = he.ogrenilmis_referans([[10, 60, 30], [5, 20, 35, 30, 10], [10, 40, 35, 15]], 5)
+    assert ref is not None and n == 3 and len(ref) == 5
+    assert abs(sum(ref) - 100.0) < 0.01
+
+
+def test_ogrenilmis_referans_puanlamada_kullanilir():
+    # Öğrenilmiş referans, analize verildiğinde ceza eşiği ona göre işler
+    ref, _ = he.ogrenilmis_referans([[40, 30, 15, 10, 5]] * 3, 5)  # ön-yüklü "normal" firma
+    r = he.hasat_egrisi_analiz([40, 30, 15, 10, 5], ref_yuzde=ref)
+    # firma normali ön-yüklüyse, ön-yüklü bir eğri artık "erken" cezası almamalı
+    assert not any("erken" in y.lower() for y in r["yorumlar"]), r["yorumlar"]
+    assert r["puan"] >= 90, r["puan"]
+
+
 def test_etiket_bantlari():
     assert he.etiket(100) == "Mükemmel"
     assert he.etiket(95) == "Çok iyi"
