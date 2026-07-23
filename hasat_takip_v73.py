@@ -52,6 +52,14 @@ try:
 except Exception:
     firestore_sync = None
     HAS_SYNC = False
+try:
+    # Hasat eğrisi (flaş dağılımı) kalite analizi — bkz. hasat_egrisi.py.
+    # Modül bulunamazsa Hasat Eğrisi bölümü sessizce gizlenir, program çalışır.
+    import hasat_egrisi
+    HAS_EGRI = True
+except Exception:
+    hasat_egrisi = None
+    HAS_EGRI = False
 
 MONTHS = ["Ocak","Şubat","Mart","Nisan","Mayıs","Haziran","Temmuz","Ağustos","Eylül","Ekim","Kasım","Aralık"]
 PLOTS  = ["A-1","A-2","A-3","A-4","A-5","A-6","A-7","E-1",
@@ -3920,6 +3928,131 @@ class App(tk.Tk):
                        font=("Segoe UI",7,"italic"), fill="#9a8a7a")
 
     # ══════════════════════════════════════════════════════════════════════
+    # HASAT EĞRİSİ (flaş dağılımı kalite analizi — bkz. hasat_egrisi.py)
+    # ══════════════════════════════════════════════════════════════════════
+    def _egri_tur_doldur(self):
+        """Seçili odanın tur numaralarını Tur combobox'ına doldurur (en son tur varsayılan)."""
+        if not HAS_EGRI:
+            return
+        oda = self._eg_oda.get()
+        if not oda:
+            self._eg_tur_cb.config(values=[]); self._eg_tur.set(""); return
+        turlar = self.db.get_oda_turlari(oda)
+        self._eg_tur_cb.config(values=[str(t) for t in turlar])
+        if turlar:
+            self._eg_tur.set(str(turlar[-1]))
+
+    def _egri_render(self, parent):
+        """Seçili oda+tur için F1/F2 hasat eğrilerini parent'ın en üstüne çizer.
+        Aylık analizden bağımsızdır; _analiz_refresh her yeniden çizimde çağırır."""
+        if not HAS_EGRI:
+            return
+        oda = self._eg_oda.get(); tur_s = self._eg_tur.get()
+        box = tk.Frame(parent, bg=self.C["P"], highlightbackground=self.C["L"], highlightthickness=1)
+        box.pack(fill="x", padx=4, pady=(4,12))
+        tk.Label(box, text="🌊 Hasat Eğrisi", bg=self.C["P"], fg=self.C["G"],
+                 font=("Georgia",13,"bold")).pack(anchor="w", padx=10, pady=(8,2))
+        if not oda or not tur_s:
+            tk.Label(box, text="Yukarıdan bir oda ve tur seçip 🔄 Göster'e basın.",
+                     bg=self.C["P"], fg="#7a7263", font=("Segoe UI",9)).pack(anchor="w", padx=10, pady=(0,10))
+            return
+        try:
+            tur = int(tur_s)
+        except ValueError:
+            return
+        oz = self.db.get_tur_ozeti(oda, tur, self.kg)
+        kunye = "🏭 %s   ·   📅 Geliş: %s   ·   🔄 %d. tur   ·   Σ %s kasa" % (
+            oz.get("firma", "-") or "-", oz.get("gelis", "") or "-", tur, fmt(oz.get("toplam_kasa", 0)))
+        tk.Label(box, text=kunye, bg=self.C["P"], fg=self.C["I"],
+                 font=("Segoe UI", 9, "bold")).pack(anchor="w", padx=10, pady=(0, 6))
+        # Günleri flaşlara ayır (tarihe göre sıralı kasa dizileri)
+        gunler = sorted(oz.get("gunler", []), key=lambda g: g[0])  # (tarih, kasa, flas)
+        flaslar = {1: [], 2: []}
+        for _tarih, kasa, flas in gunler:
+            flaslar[2 if flas == 2 else 1].append(kasa)
+        cizildi = False
+        for f in (1, 2):
+            kasalar = flaslar[f]
+            if len(kasalar) < 2:
+                continue
+            analiz = hasat_egrisi.hasat_egrisi_analiz(kasalar)
+            if not analiz:
+                continue
+            self._ciz_hasat_egrisi(box, kasalar, analiz, "%d. Flaş" % f)
+            cizildi = True
+        if not cizildi:
+            tk.Label(box, text="Bu oda+tur için eğri çizecek yeterli hasat günü yok (flaş başına en az 2 gün gerekir).",
+                     bg=self.C["P"], fg="#7a7263", font=("Segoe UI", 9)).pack(anchor="w", padx=10, pady=(0, 10))
+
+    def _ciz_hasat_egrisi(self, parent, gunluk_kasa, analiz, baslik):
+        """Bir flaşın gerçek eğrisi (düz çizgi) + ideal referans (kesikli) + puan/yorum.
+        _ciz_grafik'in eksen/ölçek desenini yeniden kullanır."""
+        puan = analiz["puan"]; et = analiz["etiket"]
+        renk = self.C["G"] if puan >= 80 else ("#c47a1a" if puan >= 60 else "#c0392b")
+        bh = tk.Frame(parent, bg=self.C["P"]); bh.pack(fill="x", padx=10, pady=(8, 0))
+        tk.Label(bh, text=baslik, bg=self.C["P"], fg=self.C["I"],
+                 font=("Segoe UI", 10, "bold")).pack(side="left")
+        tk.Label(bh, text="  %d/100 · %s" % (puan, et), bg=self.C["P"], fg=renk,
+                 font=("Segoe UI", 10, "bold")).pack(side="left")
+        tk.Label(bh, text="  (şekil: %s · zirve %d. gün)" % (analiz["sekil"], analiz["pik_gun"]),
+                 bg=self.C["P"], fg="#7a7263", font=("Segoe UI", 8)).pack(side="left")
+
+        W, H = 560, 200
+        pad_l, pad_r, pad_b, pad_t = 44, 12, 26, 16
+        cv = tk.Canvas(parent, width=W, height=H, bg=self.C["P"], highlightthickness=1,
+                       highlightbackground=self.C["L"])
+        cv.pack(anchor="w", padx=10, pady=(2, 2))
+        n = len(gunluk_kasa)
+        toplam = sum(gunluk_kasa) or 1
+        ideal = [r * toplam / 100.0 for r in analiz["ref_yuzde"]]
+        max_k = max(max(gunluk_kasa), max(ideal)) or 1
+        plot_w = W - pad_l - pad_r
+        plot_h = H - pad_b - pad_t
+
+        def X(i):
+            return pad_l + (plot_w * (i / (n - 1)) if n > 1 else plot_w / 2)
+
+        def Y(v):
+            return pad_t + plot_h * (1 - v / max_k)
+
+        for frac in (0, 0.5, 1.0):
+            yy = pad_t + plot_h * (1 - frac)
+            cv.create_line(pad_l, yy, W - pad_r, yy, fill="#e8e3d8")
+            cv.create_text(pad_l - 5, yy, text=fmt(max_k * frac, 0), anchor="e",
+                           font=("Segoe UI", 7), fill="#7a7263")
+        # İdeal eğri (kesikli kırmızı)
+        ipts = []
+        for i, v in enumerate(ideal):
+            ipts += [X(i), Y(v)]
+        if len(ipts) >= 4:
+            cv.create_line(*ipts, fill="#c0392b", width=1, dash=(4, 3))
+        # Gerçek eğri (düz yeşil)
+        rpts = []
+        for i, v in enumerate(gunluk_kasa):
+            rpts += [X(i), Y(v)]
+        if len(rpts) >= 4:
+            cv.create_line(*rpts, fill=self.C["G"], width=2)
+        # Nokta + değer + gün etiketi
+        for i, v in enumerate(gunluk_kasa):
+            x, y = X(i), Y(v)
+            cv.create_oval(x - 3, y - 3, x + 3, y + 3, fill=self.C["G"], outline="")
+            cv.create_text(x, y - 9, text=fmt(v, 0), font=("Segoe UI", 7, "bold"), fill=self.C["G"])
+            cv.create_text(x, pad_t + plot_h + 11, text="%d.g" % (i + 1),
+                           font=("Segoe UI", 7), fill="#7a7263")
+        cv.create_text(pad_l, pad_t - 3, text="kasa", anchor="w",
+                       font=("Segoe UI", 7, "italic"), fill="#9a8a7a")
+        # Lejant
+        lg = tk.Frame(parent, bg=self.C["P"]); lg.pack(anchor="w", padx=10)
+        tk.Label(lg, text="—— Gerçek", bg=self.C["P"], fg=self.C["G"],
+                 font=("Segoe UI", 7, "bold")).pack(side="left", padx=(0, 10))
+        tk.Label(lg, text="---- İdeal", bg=self.C["P"], fg="#c0392b",
+                 font=("Segoe UI", 7)).pack(side="left")
+        # Yorumlar
+        for yrm in analiz["yorumlar"]:
+            tk.Label(parent, text="• " + yrm, bg=self.C["P"], fg=self.C["I"], font=("Segoe UI", 8),
+                     wraplength=540, justify="left").pack(anchor="w", padx=16, pady=(1, 0))
+
+    # ══════════════════════════════════════════════════════════════════════
     # YILLIK ÖZET
     # ══════════════════════════════════════════════════════════════════════
     def _build_yillik(self):
@@ -4052,6 +4185,24 @@ class App(tk.Tk):
                    command=self._analiz_pdf).pack(side="left", padx=(8,0))
         self._an_y.trace_add("write", lambda *a: self._analiz_refresh())
         self._an_m.trace_add("write", lambda *a: self._analiz_refresh())
+        # ── HASAT EĞRİSİ (Oda + Tur) seçicileri ──
+        # Seçiciler sabit başlıkta durur; sonuç, aşağıdaki analiz kaydırma
+        # alanının EN ÜSTÜNE çizilir (_egri_render) — ay değişse de korunur,
+        # tek scrollbar. hasat_egrisi.py yoksa bu bölüm hiç görünmez.
+        if HAS_EGRI:
+            egs = ttk.Frame(self.t_analiz); egs.pack(fill="x", padx=12, pady=(2,4))
+            ttk.Label(egs, text="🌊 Hasat Eğrisi →  Oda:", style="S.TLabel").pack(side="left", padx=(0,4))
+            self._eg_oda = tk.StringVar()
+            ttk.Combobox(egs, textvariable=self._eg_oda, values=list(self.plots),
+                         width=8, state="readonly").pack(side="left", padx=(0,10))
+            ttk.Label(egs, text="Tur:", style="S.TLabel").pack(side="left", padx=(0,4))
+            self._eg_tur = tk.StringVar()
+            self._eg_tur_cb = ttk.Combobox(egs, textvariable=self._eg_tur, values=[],
+                                           width=6, state="readonly")
+            self._eg_tur_cb.pack(side="left", padx=(0,10))
+            self._eg_oda.trace_add("write", lambda *a: self._egri_tur_doldur())
+            ttk.Button(egs, text="🔄 Göster", style="Gr.TButton",
+                       command=self._analiz_refresh).pack(side="left")
         self._analiz_inner = self._scroll_frame(self.t_analiz, bg=self.C["P"])
         self._analiz_refresh()
 
@@ -4072,6 +4223,9 @@ class App(tk.Tk):
         d12 = self.db.get_donem_metrik(yil-1, ay, self.kg)    # geçen yıl aynı ay
 
         inner = self._analiz_inner
+        # Hasat Eğrisi bölümü aylık veriden bağımsız — en üste çizilir.
+        if HAS_EGRI:
+            self._egri_render(inner)
         if d0["toplam_kasa"] == 0:
             tk.Label(inner, text=f"{MONTHS[ay-1]} {yil} için veri yok.",
                      bg=self.C["P"], fg="#7a7263", font=("Segoe UI",11)).pack(pady=40)
