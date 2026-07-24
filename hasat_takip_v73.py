@@ -1277,6 +1277,34 @@ class DB:
             "SELECT DISTINCT oda, tur FROM tarti_detay ORDER BY oda, tur").fetchall()
         return [(r[0], r[1]) for r in rows]
 
+    def get_tamamlanan_oda_turlar(self):
+        """SADECE ✓ Tur Bitti (kompost_detay.tur_bitti=1) işaretli (oda, tur)
+        kombinasyonları. Hasat eğrisi tesis referansı ve sıralaması yalnızca
+        TAMAMLANMIŞ turları kullanır: hâlâ hasatta olan bir tur (henüz yarım,
+        eğrisi eksik) hem referansı bozar hem de her Analiz yenilemesinde
+        gereksiz yere yeniden taranıp arayüzü dondururdu (kullanıcı isteği:
+        'devam eden turu değerlendirmeye alma, biten turları hafızaya al')."""
+        rows = self.conn.execute(
+            "SELECT DISTINCT t.oda, t.tur FROM tarti_detay t "
+            "JOIN kompost_detay k ON k.oda=t.oda AND k.tur=t.tur "
+            "WHERE k.tur_bitti=1 ORDER BY t.oda, t.tur").fetchall()
+        return [(r[0], r[1]) for r in rows]
+
+    def egri_veri_imzasi(self):
+        """TAMAMLANMIŞ turların hasat eğrisi verisinin UCUZ (tek sorgu) imzası.
+        Tesis referansı / sıralama önbelleği bununla geçersiz kılınır: imza
+        değişmedikçe (yıl/ay/sıralama seçimi değişse bile) ağır hesap yeniden
+        yapılmaz. İmza; tamamlanmış tur sayısı, tartı toplamları ve tur/flaş
+        atamaları değişince değişir — yani yeni bir tur bitince ya da biten bir
+        turun tartısı düzenlenince önbellek kendiliğinden tazelenir."""
+        r = self.conn.execute(
+            "SELECT COUNT(*), "
+            "COALESCE(SUM(t.ana90+t.kestane+t.duble+t.dokme+t.ikinci),0), "
+            "COALESCE(SUM(t.tur),0), COALESCE(SUM(t.flas),0) "
+            "FROM tarti_detay t JOIN kompost_detay k "
+            "ON k.oda=t.oda AND k.tur=t.tur WHERE k.tur_bitti=1").fetchone()
+        return "%s|%s|%s|%s" % (r[0], r[1], r[2], r[3])
+
     def get_tur_ikinci(self, oda, tur):
         """Bir oda+turun toplam İkinci kalite kasası (tarti_detay)."""
         r = self.conn.execute(
@@ -4007,7 +4035,9 @@ class App(tk.Tk):
         if getattr(self, "_egri_ref_cache", None) is not None:
             return self._egri_ref_cache
         ornek = {1: [], 2: []}
-        for (o, t) in self.db.get_tum_oda_turlar():
+        # SADECE tamamlanmış (✓ Tur Bitti) turlar — devam eden tur (ör. hasatta
+        # olan 17.) referansı bozmasın ve gereksiz taranmasın (kullanıcı isteği).
+        for (o, t) in self.db.get_tamamlanan_oda_turlar():
             try:
                 oz = self.db.get_tur_ozeti(o, t, self.kg)
             except Exception:
@@ -4044,15 +4074,14 @@ class App(tk.Tk):
             return self._egri_puan_cache
         refs = self._tesis_referanslari()
         out = []
-        for (oda, tur) in self.db.get_tum_oda_turlar():
+        # SADECE ✓ Tur Bitti işaretli turlar — yarım kalmış (az hasatlı) bir tur,
+        # eğrisi "temiz" göründüğü için sıralamada yanıltıcı biçimde en üste
+        # çıkıyordu (kullanıcı raporu: "odadan 8 kasa almışız"). Ayrıca devam eden
+        # turu hiç taramamak Analiz yenilemesini de hafifletir (kullanıcı isteği).
+        for (oda, tur) in self.db.get_tamamlanan_oda_turlar():
             try:
                 oz, verim, ikinci_orani, flaslar = self._egri_flas_veri(oda, tur)
             except Exception:
-                continue
-            # SADECE ✓ Tur Bitti işaretli turlar — yarım kalmış (az hasatlı) bir
-            # tur, eğrisi "temiz" göründüğü için sıralamada yanıltıcı biçimde en
-            # üste çıkıyordu (kullanıcı raporu: "odadan 8 kasa almışız").
-            if not oz.get("tur_bitti"):
                 continue
             uyumlar = []; totaller = []
             for f in (1, 2):
@@ -4527,7 +4556,7 @@ class App(tk.Tk):
         ttk.Combobox(sec, textvariable=self._an_m, values=list(MONTHS), width=12,
                      state="readonly").pack(side="left", padx=(0,10))
         ttk.Button(sec, text="🔄 Analiz Et", style="Gr.TButton",
-                   command=self._analiz_refresh).pack(side="left")
+                   command=self._analiz_yenile_zorla).pack(side="left")
         ttk.Button(sec, text="📄 PDF Çıktısı",
                    command=self._analiz_pdf).pack(side="left", padx=(8,0))
         self._an_y.trace_add("write", lambda *a: self._analiz_refresh())
@@ -4549,7 +4578,7 @@ class App(tk.Tk):
             self._eg_tur_cb.pack(side="left", padx=(0,10))
             self._eg_oda.trace_add("write", lambda *a: self._egri_tur_doldur())
             ttk.Button(egs, text="🔄 Göster", style="Gr.TButton",
-                       command=self._analiz_refresh).pack(side="left")
+                       command=self._analiz_yenile_zorla).pack(side="left")
             ttk.Button(egs, text="📄 PDF",
                        command=self._egri_pdf).pack(side="left", padx=(8, 0))
             # Sıralama (tüm oda+turları puanlama bileşenine göre sırala)
@@ -4565,13 +4594,39 @@ class App(tk.Tk):
         self._analiz_inner = self._scroll_frame(self.t_analiz, bg=self.C["P"])
         self._analiz_refresh()
 
+    def _analiz_yenile_zorla(self):
+        """🔄 butonları: veri imzasından bağımsız olarak hasat eğrisi önbelleğini
+        atıp Analizi baştan hesaplar. Tartı üzerinden GİTMEYEN nadir bir
+        düzenlemeden sonra da güncel sonuç görmek için elle tam tazeleme yolu."""
+        self._egri_cache_imza = None
+        self._analiz_refresh()
+
     def _analiz_refresh(self):
         if not hasattr(self, "_analiz_inner"):
             return
         for w in self._analiz_inner.winfo_children():
             w.destroy()
-        self._egri_ref_cache = None   # tesis referansı bu yenilemede bir kez hesaplansın
-        self._egri_puan_cache = None  # sıralama puanları bir kez hesaplansın
+        # Tesis referansı + sıralama puanları yıl/ay/sıralama seçiminden BAĞIMSIZ;
+        # yalnızca tamamlanmış tur verisi değişince yeniden hesaplanmalı. Her
+        # yenilemede sıfırdan hesaplamak (combobox'lar her değiştiğinde tüm
+        # tamamlanmış oda+turları yeniden taramak) Analiz sekmesini donduruyordu.
+        # Veri imzası değişmedikçe (yeni biten tur / tartı düzenlemesi yoksa)
+        # önbellek KORUNUR → ay/sıralama değişince ağır hesap tekrarlanmaz, anında
+        # yeniden çizilir. 🔄 butonları imzayı sıfırlayıp zorla tazeler.
+        if HAS_EGRI:
+            try:
+                imza = self.db.egri_veri_imzasi()
+            except Exception:
+                imza = None
+            if imza is None or getattr(self, "_egri_cache_imza", None) != imza:
+                self._egri_ref_cache = None    # tesis referansı yeniden hesaplansın
+                self._egri_puan_cache = None   # sıralama puanları yeniden hesaplansın
+                self._firma_egri_cache = None  # firma-eğri karşılaştırması yeniden hesaplansın
+                self._egri_cache_imza = imza
+        else:
+            self._egri_ref_cache = None
+            self._egri_puan_cache = None
+            self._firma_egri_cache = None
         try:
             yil = int(self._an_y.get())
             ay = list(MONTHS).index(self._an_m.get()) + 1
@@ -4816,11 +4871,19 @@ class App(tk.Tk):
         daha dengeli/öngörülebilir flaş veriyor. Uyuma göre sıralı. [{firma,ort,n}]."""
         if not HAS_EGRI:
             return []
+        if getattr(self, "_firma_egri_cache", None) is not None:
+            return self._firma_egri_cache
         refs = self._tesis_referanslari()
+        # SADECE tamamlanmış turlar — devam eden tur (yarım eğri) tesis referansına
+        # kıyaslanınca yanıltıcı olur; ayrıca her yenilemede taranması donmaya
+        # katkı veriyordu (tesis referansı/sıralama ile aynı önbellek imzası).
+        tamam = set(self.db.get_tamamlanan_oda_turlar())
         out = []
         for firma in self.db.get_tum_firmalar():
             uyumlar = []
             for (o, t) in self.db.get_firma_turlari(firma):
+                if (o, t) not in tamam:
+                    continue
                 try:
                     oz = self.db.get_tur_ozeti(o, t, self.kg)
                 except Exception:
@@ -4838,6 +4901,7 @@ class App(tk.Tk):
             if uyumlar:
                 out.append({"firma": firma, "ort": sum(uyumlar) / len(uyumlar), "n": len(uyumlar)})
         out.sort(key=lambda x: -x["ort"])
+        self._firma_egri_cache = out
         return out
 
     def _analiz_pdf(self):
