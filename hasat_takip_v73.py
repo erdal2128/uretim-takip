@@ -1305,6 +1305,22 @@ class DB:
             "ON k.oda=t.oda AND k.tur=t.tur WHERE k.tur_bitti=1").fetchone()
         return "%s|%s|%s|%s" % (r[0], r[1], r[2], r[3])
 
+    def veri_imzasi_tum(self):
+        """TÜM hasat verisinin (devam eden turlar dahil) ucuz tek-sorgu imzası.
+        egri_veri_imzasi yalnızca TAMAMLANMIŞ turları izler; kompost analizi ve
+        aylık metrikler ise devam eden turları da içerdiğinden bu daha geniş
+        imzayla önbelleğe alınır. Böylece Analiz sekmesinde SADECE sıralama/ay
+        seçimi değişince (veri aynı) tesis geneli taramalar yeniden yapılmaz
+        (kullanıcı raporu: 'oda sıralamada donma')."""
+        r = self.conn.execute(
+            "SELECT COUNT(*), "
+            "COALESCE(SUM(ana90+kestane+duble+dokme+ikinci),0), "
+            "COALESCE(SUM(tur),0), COALESCE(SUM(flas),0) FROM tarti_detay").fetchone()
+        # hasat tablosu tarti_detay'sız günler de taşıyabilir — onları da yakala.
+        h = self.conn.execute(
+            "SELECT COUNT(*), COALESCE(SUM(kasa),0) FROM hasat").fetchone()
+        return "%s|%s|%s|%s|%s|%s" % (r[0], r[1], r[2], r[3], h[0], h[1])
+
     def get_tur_ikinci(self, oda, tur):
         """Bir oda+turun toplam İkinci kalite kasası (tarti_detay)."""
         r = self.conn.execute(
@@ -4599,6 +4615,7 @@ class App(tk.Tk):
         atıp Analizi baştan hesaplar. Tartı üzerinden GİTMEYEN nadir bir
         düzenlemeden sonra da güncel sonuç görmek için elle tam tazeleme yolu."""
         self._egri_cache_imza = None
+        self._analiz_data_imza = None
         self._analiz_refresh()
 
     def _analiz_refresh(self):
@@ -4627,16 +4644,35 @@ class App(tk.Tk):
             self._egri_ref_cache = None
             self._egri_puan_cache = None
             self._firma_egri_cache = None
+        # Tesis geneli kompost analizi (get_kompost_analiz — TÜM oda+turları tarar,
+        # ay/sıralamadan bağımsız) ve aylık metrikler her yenilemede yeniden
+        # hesaplanıyordu; sıralama değiştikçe bu tesis-çapında tarama arayüzü
+        # donduruyordu (kullanıcı raporu: 'oda sıralamada donma'). Tüm-veri imzası
+        # değişmedikçe önbellek KORUNUR → sıralama/ay değişince tarama tekrarlanmaz.
+        try:
+            timza = self.db.veri_imzasi_tum()
+        except Exception:
+            timza = None
+        if timza is None or getattr(self, "_analiz_data_imza", None) != timza:
+            self._kompost_analiz_cache = None
+            self._donem_cache = {}
+            self._analiz_data_imza = timza
         try:
             yil = int(self._an_y.get())
             ay = list(MONTHS).index(self._an_m.get()) + 1
         except (ValueError, IndexError):
             return
-        # Üç dönem: bu ay, geçen ay, geçen yıl aynı ay
-        d0 = self.db.get_donem_metrik(yil, ay, self.kg)
+        # Üç dönem: bu ay, geçen ay, geçen yıl aynı ay. (yıl,ay) + tüm-veri imzası
+        # sabitken önbellekten okunur — sıralama değişince yeniden hesaplanmaz.
+        def _donem(y, a):
+            key = (y, a)
+            if key not in self._donem_cache:
+                self._donem_cache[key] = self.db.get_donem_metrik(y, a, self.kg)
+            return self._donem_cache[key]
+        d0 = _donem(yil, ay)
         py, pa = (yil-1, 12) if ay == 1 else (yil, ay-1)
-        d1 = self.db.get_donem_metrik(py, pa, self.kg)        # geçen ay
-        d12 = self.db.get_donem_metrik(yil-1, ay, self.kg)    # geçen yıl aynı ay
+        d1 = _donem(py, pa)         # geçen ay
+        d12 = _donem(yil-1, ay)     # geçen yıl aynı ay
 
         inner = self._analiz_inner
         # Hasat Eğrisi bölümü aylık veriden bağımsız — en üste çizilir.
@@ -4711,7 +4747,11 @@ class App(tk.Tk):
                      font=("Segoe UI",9), wraplength=620, justify="left").pack(anchor="w", padx=10, pady=6)
 
         # ══════════ KOMPOST FİRMASI + TUR ANALİZİ (tüm zamanlar) ══════════
-        ka = self.db.get_kompost_analiz(self.kg)
+        # Tesis geneli tarama — tüm-veri imzası sabitken önbellekten okunur
+        # (sıralama/ay değişince yeniden taranmaz; asıl 'oda sıralamada donma').
+        if getattr(self, "_kompost_analiz_cache", None) is None:
+            self._kompost_analiz_cache = self.db.get_kompost_analiz(self.kg)
+        ka = self._kompost_analiz_cache
 
         # 1. FİRMA VERİM KARŞILAŞTIRMASI
         if ka["firma_verim"]:
