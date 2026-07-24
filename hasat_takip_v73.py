@@ -409,17 +409,31 @@ class DB:
                    firma, tonaj, gelis, alan, verim, ilk_hasat_gun, gunler}
         """
         import datetime as _dt
-        gunler_ham = self.get_oda_gunleri(oda, tur=tur)  # [(tarih, birinci_kasa), ...]
+        # TEK SORGU (performans): günleri get_oda_gunleri, ardından her gün için
+        # ayrıca get_tarti_detay ile TEK TEK çekmek klasik bir N+1 sorgu deseniydi
+        # (oda başına: 1 + günSayısı + günSayısı sorgu). get_tur_ozeti tesis
+        # genelindeki TÜM oda+turlar için tekrar tekrar (Analiz/Hasat Eğrisi
+        # sıralaması, firma raporu) çağrıldığından, veri büyüdükçe arayüzü
+        # gözle görülür biçimde DONDURUYORDU. hasat + tarti_detay tek LEFT JOIN'de
+        # birleştirilerek oda+tur başına tek sorguya indirildi. Tartı detayı
+        # OLMAYAN günler get_tarti_detay'ın varsayılanıyla BİREBİR aynı sayılır
+        # (tur=1, flaş=1, kestane/duble/dökme=0) — COALESCE'lar bunu korur.
+        rows = self.conn.execute(
+            "SELECT h.tarih, h.kasa, COALESCE(td.flas,1), "
+            "COALESCE(td.kestane,0), COALESCE(td.duble,0), COALESCE(td.dokme,0) "
+            "FROM hasat h LEFT JOIN tarti_detay td "
+            "ON td.oda=h.parsel AND td.tarih=h.tarih "
+            "WHERE h.parsel=? AND COALESCE(td.tur,1)=? ORDER BY h.tarih",
+            (oda, tur)).fetchall()
         toplam = 0.0
         flas_kasa = {1: 0.0, 2: 0.0}
         ilk_hasat = None
         gunler = []
-        for tarih, birinci in gunler_ham:
-            td = self.get_tarti_detay(oda, tarih)
+        for tarih, birinci, flas, kestane, duble, dokme in rows:
             # Form ile aynı: satir_toplam = BİRİNCİ + Kestane + Duble + Dökme
-            satir = (birinci or 0) + (td["kestane"] or 0) + (td["duble"] or 0) + (td["dokme"] or 0)
+            satir = (birinci or 0) + (kestane or 0) + (duble or 0) + (dokme or 0)
             toplam += satir
-            f = 2 if td["flas"] == 2 else 1
+            f = 2 if flas == 2 else 1
             flas_kasa[f] += satir
             gunler.append((tarih, satir, f))
             if ilk_hasat is None or tarih < ilk_hasat:
@@ -471,17 +485,20 @@ class DB:
         NOT: kasa>0 filtresi YOK — çünkü Ana Tartı(ana90) sıfır olsa bile o gün
         sadece Kestane/Duble/Dökme girilmiş olabilir (ensure_hasat_row bu günleri
         0 ile de olsa hasat tablosuna yazar). Filtre olsaydı bu günler kaybolurdu."""
+        if tur is None:
+            rows = self.conn.execute(
+                "SELECT tarih, kasa FROM hasat WHERE parsel=? ORDER BY tarih",
+                (oda,)).fetchall()
+            return [(t, k) for t, k in rows]
+        # tur filtresi: her gün için ayrı get_tarti_detay çağırmak (N+1 sorgu)
+        # yerine tek LEFT JOIN. Tartı detayı olmayan günler get_tarti_detay
+        # varsayılanı (tur=1) sayılır — COALESCE(td.tur,1) bunu birebir korur.
         rows = self.conn.execute(
-            "SELECT tarih, kasa FROM hasat WHERE parsel=? ORDER BY tarih",
-            (oda,)).fetchall()
-        sonuc = []
-        for t, k in rows:
-            if tur is not None:
-                td = self.get_tarti_detay(oda, t)
-                if td["tur"] != tur:
-                    continue
-            sonuc.append((t, k))
-        return sonuc
+            "SELECT h.tarih, h.kasa FROM hasat h "
+            "LEFT JOIN tarti_detay td ON td.oda=h.parsel AND td.tarih=h.tarih "
+            "WHERE h.parsel=? AND COALESCE(td.tur,1)=? ORDER BY h.tarih",
+            (oda, tur)).fetchall()
+        return [(t, k) for t, k in rows]
 
     def otomatik_tur_flas(self, oda, son_tur, bosluk_gun=30, flas1_gun=5):
         """Boşluklara göre dönemleri ayırıp tur/flaş atar.
